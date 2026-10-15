@@ -146,6 +146,85 @@ void main() {
     expect(workspace.notes, hasLength(1));
   });
 
+  test('reserved title punctuation stays findable with valid Markdown and wiki destinations', () async {
+    final note = await workspace.captureText(title: '原标题', text: '保留编程语言名称。');
+    final inbound = File('${vault.path}/索引.md');
+    await inbound.writeAsString('[[原标题#正文|阅读]]\n[引用](原标题.md#正文)');
+    final renamed = await workspace.renameNote(note.id, title: 'C#学习');
+    final markup = await inbound.readAsString();
+    final destination = RegExp(r'\]\(([^)]+)\)').firstMatch(markup)!.group(1)!;
+    final uri = vault.uri.resolve(destination);
+    expect(
+      await File.fromUri(uri.replace(fragment: '')).exists(),
+      isTrue,
+      reason: 'The maintained Markdown path must resolve to the renamed note.',
+    );
+    expect(Uri.decodeComponent(uri.fragment), '正文');
+    expect(renamed.title, 'C＃学习');
+    expect(markup, startsWith('[[C＃学习#正文|阅读]]\n'));
+    expect(workspace.search('C#').single.id, note.id);
+    final duplicate = await workspace.captureText(
+      title: 'C#学习',
+      text: '另一条同名原文。',
+    );
+    expect(duplicate.title, 'C＃学习 (2)');
+    final semantic = await workspace.captureText(
+      title: 'C#学习',
+      semanticTitleCandidates: ['概念|C^进阶:100%[示例]'],
+      text: '候选同样采用可链接标题。',
+    );
+    expect(semantic.title, '概念｜C＾进阶：100％［示例］');
+    expect(await File(semantic.notePath).exists(), isTrue);
+    expect(await File(renamed.sourcePath).readAsString(), '保留编程语言名称。');
+  });
+
+  test('rename preserves literal code and escaped links while updating adjacent real links', () async {
+    final note = await workspace.captureText(title: '原标题', text: '不应改写代码示例。');
+    final inbound = File('${vault.path}/代码示例.md');
+    await inbound.writeAsString(r'''``[[原标题]] and `literal` text``
+文字 ``跨行 [[原标题]]
+和 `literal` 行`` [[原标题]]
+\[[原标题]] \[文字](原标题.md)
+\\[[原标题]]
+\`[[原标题]]\`
+`code \` [[原标题]]
+
+````markdown
+[[原标题]]
+```
+[[原标题]]
+````
+~~~md
+[文字](原标题.md)
+~~~
+    [[原标题]]
+[[原标题]] [正文](%E5%8E%9F%E6%A0%87%E9%A2%98.md#正文)
+未闭合 ` [[原标题]]
+''');
+    final renamed = await workspace.renameNote(note.id, title: '新标题');
+    expect(await inbound.readAsString(), r'''``[[原标题]] and `literal` text``
+文字 ``跨行 [[原标题]]
+和 `literal` 行`` [[新标题]]
+\[[原标题]] \[文字](原标题.md)
+\\[[新标题]]
+\`[[新标题]]\`
+`code \` [[新标题]]
+
+````markdown
+[[原标题]]
+```
+[[原标题]]
+````
+~~~md
+[文字](原标题.md)
+~~~
+    [[原标题]]
+[[新标题]] [正文](%E6%96%B0%E6%A0%87%E9%A2%98.md#正文)
+未闭合 ` [[新标题]]
+''');
+    expect(await File(renamed.sourcePath).readAsString(), '不应改写代码示例。');
+  });
+
   test(
     'duplicate file names reserve directories, case variants and symlinks',
     () async {
