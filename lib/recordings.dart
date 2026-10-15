@@ -375,6 +375,12 @@ class WorkspaceRecordings {
     playback = const PlaybackState();
   }
 
+  bool get needsClosing =>
+      state.isActive ||
+      _stopping ||
+      _backgroundRefresh != null ||
+      playback.recordingId != null;
+
   Future<void> close() async {
     _timer?.cancel();
     await _backgroundRefresh;
