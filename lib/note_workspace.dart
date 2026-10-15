@@ -483,10 +483,7 @@ class NoteWorkspace {
     return notes.firstWhere((note) => note.id == id);
   }
 
-  Future<void> close() async {
-    await _mutations;
-    _database.close();
-  }
+  Future<void> close() async => _database.close();
 
   WorkspaceNote _noteFromRow(Row row) => WorkspaceNote(
     id: row['id'] as String,
