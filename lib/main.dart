@@ -90,6 +90,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   final _platform = WorkspacePlatform();
   final _title = TextEditingController();
   final _text = TextEditingController();
+  final _search = TextEditingController();
+  final _editTitle = TextEditingController();
+  String? _editingNoteId;
   NoteWorkspace? _workspace;
   String? _selectedId;
   String? _error;
@@ -108,6 +111,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   void dispose() {
     _title.dispose();
     _text.dispose();
+    _search.dispose();
+    _editTitle.dispose();
     // The injected workspace belongs to its caller (including behavioral tests).
     if (_workspace != widget.initialWorkspace) _workspace?.close();
     super.dispose();
@@ -150,6 +155,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     final old = _workspace;
     _workspace = workspace;
     _selectedId = null;
+    _editingNoteId = null;
+    _search.clear();
     _composing = true;
     if (old != widget.initialWorkspace) await old?.close();
   }
@@ -191,6 +198,32 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   Future<void> _openInObsidian(WorkspaceNote note) async {
     try {
       await _platform.openInObsidian(note.notePath);
+    } catch (error) {
+      if (mounted) setState(() => _error = _errorMessage(error));
+    }
+  }
+
+  Future<void> _rename(WorkspaceNote note) async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final renamed = await _workspace!.renameNote(
+        note.id,
+        title: _editTitle.text,
+      );
+      if (mounted) setState(() => _editTitle.text = renamed.title);
+    } catch (error) {
+      if (mounted) setState(() => _error = _errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _openSource(WorkspaceNote note) async {
+    try {
+      await _platform.openInObsidian(note.sourcePath);
     } catch (error) {
       if (mounted) setState(() => _error = _errorMessage(error));
     }
@@ -363,7 +396,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     if (MediaQuery.sizeOf(context).width < 720) {
       showModalBottomSheet<void>(
         context: context,
-        builder: (context) => _noteList(),
+        builder: (context) => StatefulBuilder(
+          builder: (context, refresh) =>
+              _noteList(refresh: () => refresh(() {})),
+        ),
       );
     } else {
       setState(() {
@@ -373,8 +409,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     }
   }
 
-  Widget _noteList() {
-    final notes = _workspace!.notes;
+  Widget _noteList({VoidCallback? refresh}) {
+    final notes = _workspace!.search(_search.text);
     return Container(
       decoration: const BoxDecoration(
         color: slate,
@@ -387,8 +423,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
             padding: const EdgeInsets.all(24),
             child: Row(
               children: [
-                const Text(
-                  '最近记录',
+                Text(
+                  _search.text.trim().isEmpty ? '最近记录' : '搜索结果',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                 ),
                 const Spacer(),
@@ -399,13 +435,40 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: TextField(
+              controller: _search,
+              decoration: InputDecoration(
+                labelText: '搜索笔记',
+                hintText: '标题或原文关键词',
+                suffixIcon: _search.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清除搜索',
+                        icon: const Icon(Icons.close, size: 16),
+                        onPressed: () {
+                          _search.clear();
+                          setState(() {});
+                          refresh?.call();
+                        },
+                      ),
+              ),
+              onChanged: (_) {
+                setState(() {});
+                refresh?.call();
+              },
+            ),
+          ),
           const Divider(height: 1),
           Expanded(
             child: notes.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.all(24),
+                ? Padding(
+                    padding: const EdgeInsets.all(24),
                     child: Text(
-                      '还没有记录。\n收集的文字会出现在这里。',
+                      _search.text.trim().isEmpty
+                          ? '还没有记录。\n收集的文字会出现在这里。'
+                          : '没有匹配的记录。',
                       style: TextStyle(color: ash, height: 1.7),
                     ),
                   )
@@ -442,11 +505,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  note.title,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
+                                Container(
+                                  padding: note.titleCollision
+                                      ? const EdgeInsets.all(8)
+                                      : EdgeInsets.zero,
+                                  decoration: BoxDecoration(
+                                    border: note.titleCollision
+                                        ? Border.all(color: oxide, width: 2)
+                                        : null,
+                                  ),
+                                  child: Text(
+                                    note.title,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(height: 8),
@@ -554,6 +627,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       (item) => item.id == _selectedId,
       orElse: () => notes.first,
     );
+    if (_editingNoteId != note.id) {
+      _editingNoteId = note.id;
+      _editTitle.text = note.title;
+    }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
       child: Align(
@@ -565,11 +642,39 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
             children: [
               const Text('普通笔记', style: TextStyle(color: ash, fontSize: 12)),
               const SizedBox(height: 8),
-              SelectableText(
-                note.title,
+              TextField(
+                controller: _editTitle,
+                enabled: !_saving && note.status == NoteStatus.localSaved,
+                decoration: InputDecoration(
+                  labelText: '标题',
+                  enabledBorder: note.titleCollision
+                      ? const OutlineInputBorder(
+                          borderRadius: BorderRadius.zero,
+                          borderSide: BorderSide(color: oxide, width: 2),
+                        )
+                      : null,
+                  focusedBorder: note.titleCollision
+                      ? const OutlineInputBorder(
+                          borderRadius: BorderRadius.zero,
+                          borderSide: BorderSide(color: oxide, width: 2),
+                        )
+                      : null,
+                ),
                 style: const TextStyle(
-                  fontSize: 32,
+                  fontSize: 28,
                   fontWeight: FontWeight.w800,
+                ),
+                onSubmitted: (_) {
+                  if (!_saving) _rename(note);
+                },
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _saving || note.status != NoteStatus.localSaved
+                      ? null
+                      : () => _rename(note),
+                  child: const Text('保存标题'),
                 ),
               ),
               const SizedBox(height: 16),
@@ -579,6 +684,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                     child: Text(
                       note.status == NoteStatus.localSaved
                           ? '本机已保存'
+                          : note.status == NoteStatus.renamePending ||
+                                note.status == NoteStatus.renameFailed
+                          ? '原笔记已保留，标题与链接更新待重试'
                           : '原文已保留，笔记库写入失败',
                       style: TextStyle(
                         color: note.status == NoteStatus.localSaved
@@ -674,6 +782,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         ),
       ),
       actions: [
+        TextButton(
+          onPressed: () => _openSource(note),
+          child: const Text('打开来源文件'),
+        ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('关闭'),

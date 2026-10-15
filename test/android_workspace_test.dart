@@ -33,6 +33,12 @@ void main() {
               return null;
             case 'vaultReadText':
               return documents[arguments!['relativePath']! as String];
+            case 'vaultExists':
+              return documents.containsKey(arguments!['relativePath']);
+            case 'vaultListNotePaths':
+              return documents.keys
+                  .where((path) => path.toLowerCase().endsWith('.md'))
+                  .toList();
             default:
               throw PlatformException(
                 code: 'unsupported',
