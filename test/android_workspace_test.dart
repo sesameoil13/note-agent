@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
+import 'package:note_agent/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 import 'package:note_agent/workspace_platform.dart';
@@ -89,4 +91,113 @@ void main() {
     expect(workspace.vaultStorage.identity, tree);
     expect(restored.deviceInfo, contains('Android 16'));
   });
+  testWidgets(
+    'Android permission failure and cancelled reauthorization retain the draft and retry one capture',
+    (tester) async {
+      final temporary = (await tester.runAsync(
+        () => Directory.systemTemp.createTemp('note-agent-phone-'),
+      ))!;
+      addTearDown(() => temporary.delete(recursive: true));
+      tester.view.physicalSize = const Size(412, 892);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const tree =
+          'content://com.android.externalstorage.documents/tree/primary%3ATestVault';
+      var granted = false;
+      var cancelPicker = false;
+      final documents = <String, String>{};
+      final location = <String, String>{
+        'localDirectory': temporary.path,
+        'vaultUri': tree,
+        'vaultName': 'TestVault',
+        'deviceInfo': 'Xiaomi · Android 16 · API 36',
+      };
+      const channel = MethodChannel('dev.noteagent/workspace');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            switch (call.method) {
+              case 'restoreLocation':
+                return {'localDirectory': temporary.path};
+              case 'chooseLocation':
+                return cancelPicker ? null : location;
+              case 'vaultPublishText':
+                if (!granted) {
+                  throw PlatformException(
+                    code: 'directory_access',
+                    message: '笔记库授权已失效，请重新选择同一目录。',
+                  );
+                }
+                final args = call.arguments as Map;
+                documents[args['relativePath'] as String] =
+                    args['text'] as String;
+                return null;
+              default:
+                throw PlatformException(
+                  code: 'unsupported',
+                  message: call.method,
+                );
+            }
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      await tester.pumpWidget(const NoteAgentApp());
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.text('选择测试笔记库'));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextField, '正文'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.enterText(find.widgetWithText(TextField, '标题'), '手机原文');
+      await tester.enterText(
+        find.widgetWithText(TextField, '正文'),
+        '拒绝授权后仍保留中文。',
+      );
+      await tester.ensureVisible(find.text('保存文字'));
+      await tester.runAsync(() async {
+        await tester.tap(find.text('保存文字'));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('拒绝授权后仍保留中文。'), findsOneWidget);
+      expect(find.textContaining('授权已失效'), findsOneWidget);
+      expect(find.text('本机已保存'), findsNothing);
+      cancelPicker = true;
+      await tester.tap(find.text('选择笔记库'));
+      await tester.pumpAndSettle();
+      expect(find.text('拒绝授权后仍保留中文。'), findsOneWidget);
+      cancelPicker = false;
+      granted = true;
+      await tester.tap(find.text('选择笔记库'));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('保存文字'));
+      await tester.runAsync(() async {
+        await tester.tap(find.text('保存文字'));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+      expect(find.text('本机已保存'), findsOneWidget);
+      expect(
+        documents.keys.where((name) => name.endsWith('.txt')),
+        hasLength(1),
+      );
+      await tester.pumpWidget(const SizedBox());
+      final workspace = (await tester.runAsync(
+        () => NoteWorkspace.open(
+          localDirectory: temporary,
+          vaultStorage: AndroidVaultStorage(tree, 'TestVault'),
+        ),
+      ))!;
+      expect(workspace.notes, hasLength(1));
+      expect(workspace.notes.single.text, '拒绝授权后仍保留中文。');
+      await workspace.close();
+    },
+  );
 }
