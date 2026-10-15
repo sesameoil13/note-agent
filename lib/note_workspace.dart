@@ -21,6 +21,7 @@ class WorkspaceNote {
     required this.notePath,
     required this.sourcePath,
     required this.status,
+    this.titleCollision = false,
     this.error,
   });
 
@@ -32,6 +33,8 @@ class WorkspaceNote {
   final String notePath;
   final String sourcePath;
   final NoteStatus status;
+  /// Numbering was needed after the supplied semantic alternatives conflicted.
+  final bool titleCollision;
   final String? error;
 }
 
@@ -53,6 +56,7 @@ class NoteWorkspace {
   final DateTime Function() _clock;
   final String Function() _createId;
   final NoteFilePublisher _filePublisher;
+  Future<void> _mutations = Future.value();
 
   static Future<NoteWorkspace> open({
     required Directory localDirectory,
@@ -82,6 +86,9 @@ class NoteWorkspace {
       status TEXT NOT NULL,
       error TEXT
     )''');
+    if (!database.select('PRAGMA table_info(notes)').any((row) => row['name'] == 'title_collision')) {
+      database.execute('ALTER TABLE notes ADD COLUMN title_collision INTEGER NOT NULL DEFAULT 0');
+    }
     final workspace = NoteWorkspace._(
       database,
       Directory(await vaultDirectory.resolveSymbolicLinks()),
@@ -106,18 +113,24 @@ class NoteWorkspace {
         .map(_noteFromRow),
   );
 
+  /// Find durable originals without requiring an exported note or a network.
+  /// An empty query returns recent records in the same order as [notes].
+  List<WorkspaceNote> search(String query) {
+    final keyword = query.trim().toLowerCase();
+    return List.unmodifiable(notes.where((note) =>
+        keyword.isEmpty ||
+        note.title.toLowerCase().contains(keyword) ||
+        note.text.toLowerCase().contains(keyword)));
+  }
+
   Future<WorkspaceNote> captureText({
     required String title,
     required String text,
-  }) async {
+    List<String> semanticTitleCandidates = const [],
+  }) => _mutate(() async {
     if (text.trim().isEmpty) throw ArgumentError('请输入要保存的文字。');
-    final safeTitle = title.trim().replaceAll(
-      RegExp(r'[/\\:*?"<>|\x00-\x1f]'),
-      ' ',
-    );
-    if (safeTitle.isEmpty || safeTitle == '.' || safeTitle == '..') {
-      throw ArgumentError('请输入可用的笔记标题。');
-    }
+    final naming = await _chooseTitle(title, semanticTitleCandidates);
+    final safeTitle = naming.title;
     final id = _createId();
     final now = _clock();
     final note = WorkspaceNote(
@@ -134,11 +147,12 @@ class NoteWorkspace {
         '$id.txt',
       ),
       status: NoteStatus.exportPending,
+      titleCollision: naming.collision,
     );
     _database.execute(
       '''INSERT INTO notes
-      (id, vault, title, body, created_at, modified_at, note_path, source_path, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+      (id, vault, title, body, created_at, modified_at, note_path, source_path, status, title_collision)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
       [
         id,
         vaultDirectory.path,
@@ -149,9 +163,59 @@ class NoteWorkspace {
         note.notePath,
         note.sourcePath,
         NoteStatus.exportPending.name,
+        naming.collision ? 1 : 0,
       ],
     );
     return retryNoteExport(id);
+  });
+
+  /// Candidates are semantic alternatives supplied by the organizing service.
+  /// This workspace performs no AI calls and invents no semantic alternatives.
+  Future<({String title, bool collision})> _chooseTitle(
+    String title, List<String> alternatives, {String? excludingId}
+  ) async {
+    final preferred = _safeTitle(title);
+    final occupied = <String>{
+      for (final note in notes)
+        if (note.id != excludingId) note.title.toLowerCase(),
+    };
+    await for (final entity in vaultDirectory.list(followLinks: false)) {
+      if (p.extension(entity.path).toLowerCase() == '.md') {
+        occupied.add(p.basenameWithoutExtension(entity.path).toLowerCase());
+      }
+    }
+    if (excludingId != null) {
+      final current = notes.firstWhere((note) => note.id == excludingId);
+      occupied.remove(current.title.toLowerCase());
+    }
+    for (final candidate in [preferred, ...alternatives.map(_safeTitle)]) {
+      if (!occupied.contains(candidate.toLowerCase())) {
+        return (title: candidate, collision: false);
+      }
+    }
+    var number = 2;
+    while (occupied.contains('$preferred（$number）'.toLowerCase())) {
+      number++;
+    }
+    return (title: '$preferred（$number）', collision: true);
+  }
+
+  String _safeTitle(String title) {
+    var safe = title.trim().replaceAll(RegExp(r'[/\\:*?"<>|\x00-\x1f]'), ' ')
+        .replaceAll(RegExp(r'[. ]+$'), '');
+    if (safe.isEmpty || safe == '.' || safe == '..') {
+      throw ArgumentError('请输入可用的笔记标题。');
+    }
+    if (RegExp(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)', caseSensitive: false).hasMatch(safe)) {
+      safe = '$safe 笔记';
+    }
+    return safe;
+  }
+
+  Future<T> _mutate<T>(Future<T> Function() action) {
+    final result = _mutations.then((_) => action());
+    _mutations = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
   }
 
   /// Retries publication of an existing durable capture without collecting again.
@@ -222,6 +286,7 @@ class NoteWorkspace {
     notePath: row['note_path'] as String,
     sourcePath: row['source_path'] as String,
     status: NoteStatus.values.byName(row['status'] as String),
+    titleCollision: row['title_collision'] == 1,
     error: row['error'] as String?,
   );
 
