@@ -102,7 +102,7 @@ class _AttachmentSourcesState extends State<AttachmentSources> {
               const SizedBox(height: 16),
               const Text('可先在音频或文档工具中制作有效的压缩副本，再在这里选择。原件会继续保留；请核对副本是否完整。'),
               const SizedBox(height: 16),
-              if (!item.vaultCopyPublished)
+              if (item.hasLocalOnlyOriginal && !item.vaultCopyPublished)
                 OutlinedButton(
                   onPressed: () {
                     Navigator.pop(dialogContext);

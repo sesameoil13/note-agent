@@ -42,7 +42,12 @@ class WorkspaceAttachment {
   final String? copyPath;
   final bool vaultCopyPublished;
   final bool originalPublished;
-  bool get hasLocalOnlyOriginal => !originalPublished;
+
+  /// A refused oversized original was never submitted to vault publication.
+  /// A failed publication of an eligible file may already have committed.
+  bool get hasLocalOnlyOriginal =>
+      originalByteLength > ObsidianSyncStandard.maximumFileBytes &&
+      !originalPublished;
 }
 
 /// Internal source durability and publication, used only through NoteWorkspace.
@@ -136,8 +141,10 @@ class WorkspaceAttachments {
 
   Future<WorkspaceAttachment> retainLocally(String id) async {
     final attachment = attachments.firstWhere((item) => item.id == id);
-    if (attachment.vaultCopyPublished) {
-      throw ArgumentError('此来源已写入笔记库；保留本机不会撤回已写入的文件。');
+    if (attachment.vaultCopyPublished ||
+        attachment.originalByteLength <=
+            ObsidianSyncStandard.maximumFileBytes) {
+      throw ArgumentError('此来源已有笔记库写入尝试；仅保留本机不会撤回可能已写入的文件，请先核对或重试。');
     }
     database.execute('UPDATE attachments SET status = ? WHERE id = ?', [
       AttachmentStatus.retainedLocal.name,
@@ -149,8 +156,10 @@ class WorkspaceAttachments {
 
   Future<WorkspaceAttachment> chooseCopy(String id, File copy) async {
     final attachment = attachments.firstWhere((item) => item.id == id);
-    if (attachment.originalPublished) {
-      throw ArgumentError('原件副本已写入笔记库；选择精简副本不会撤回已发布的文件。');
+    if (attachment.originalPublished ||
+        attachment.originalByteLength <=
+            ObsidianSyncStandard.maximumFileBytes) {
+      throw ArgumentError('此操作用于超过 5 MB 且仅本机保留的原件；不会撤回可能已写入的文件。');
     }
     final length = await copy.length();
     if (length > ObsidianSyncStandard.maximumFileBytes ||

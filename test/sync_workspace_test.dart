@@ -386,6 +386,41 @@ void main() {
       hasLength(1),
     );
   });
+  test('a failed binary acknowledgement cannot claim the original stayed outside the vault', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-source-uncertain-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final vault = await Directory('${temporary.path}/vault').create();
+    final storage = _AfterCommitFailureStorage(
+      Directory(await vault.resolveSymbolicLinks()),
+    );
+    var sequence = 0;
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${temporary.path}/local'),
+      vaultStorage: storage,
+      createId: () => 'uncertain-${sequence++}',
+    );
+    addTearDown(workspace.close);
+    final note = await workspace.captureText(
+      title: '核对附件',
+      text: '失败可能发生在文件写入之后。',
+    );
+    final original = await File('${temporary.path}/资料.pdf')
+        .writeAsBytes([6, 12, 18]);
+    final attachment = await workspace.attachFile(
+      noteId: note.id,
+      original: original,
+    );
+    expect(attachment.status, AttachmentStatus.exportFailed);
+    expect(await File(attachment.sourcePath).readAsBytes(), [6, 12, 18]);
+    expect(attachment.hasLocalOnlyOriginal, isFalse);
+    await expectLater(
+      workspace.retainAttachmentLocally(attachment.id),
+      throwsArgumentError,
+    );
+    expect(workspace.notes.single.syncStatus, NoteSyncStatus.unverified);
+  });
 }
 
 class _InterruptedSourceStorage extends DirectoryVaultStorage {
@@ -433,5 +468,21 @@ class _RefusingSourceLinkStorage extends DirectoryVaultStorage {
     String operationId,
   ) async {
     throw const FileSystemException('Simulated source-link permission failure');
+  }
+}
+
+class _AfterCommitFailureStorage extends DirectoryVaultStorage {
+  _AfterCommitFailureStorage(super.directory);
+
+  @override
+  Future<void> publishFile(
+    String relativePath,
+    File original,
+    String operationId,
+  ) async {
+    await super.publishFile(relativePath, original, operationId);
+    throw const FileSystemException(
+      'Simulated readback failure after binary publication',
+    );
   }
 }
