@@ -12,6 +12,7 @@ Use Flutter 3.47.7 (Dart 3.13.5) or a compatible newer stable SDK. A native macO
 flutter pub get
 flutter test
 flutter analyze
+flutter test integration_test/native_clipboard_test.dart -d macos
 flutter run -d macos
 ```
 
@@ -26,4 +27,4 @@ Select a newly created **test vault** through the app's system directory picker.
 
 The SQLite index and credentials are not written into note properties. The app uses security-scoped bookmarks to restore the selected directory authorization on macOS.
 
-See [T01 validation](docs/development/t01-validation.md) for verified behavior and the open native acceptance gate. Later tickets add AI, other capture formats, title disambiguation/editing, platform ports, reminders, and sync. The current local save status makes no synchronization claim.
+See [T01 validation](docs/development/t01-validation.md) for the completed T01 basic acceptance evidence and the broader setup/platform checks that remain unverified. Later tickets add AI, other capture formats, title disambiguation/editing, platform ports, reminders, and sync. The current local save status makes no synchronization claim.
