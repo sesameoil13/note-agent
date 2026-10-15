@@ -3,6 +3,7 @@ import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
   private var workspaceChannel: FlutterMethodChannel?
+  private var nativeAudio: NativeAudio?
   private var scopedVaultURL: URL?
   private let bookmarkKey = "noteAgent.vaultBookmark"
 
@@ -14,6 +15,7 @@ class MainFlutterWindow: NSWindow {
     minSize = NSSize(width: 640, height: 640)
     title = "笔记工作区"
     RegisterGeneratedPlugins(registry: controller)
+    nativeAudio = NativeAudio(messenger: controller.engine.binaryMessenger)
 
     let channel = FlutterMethodChannel(
       name: "dev.noteagent/workspace",
