@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import 'note_files.dart';
+import 'attachments.dart';
+export 'attachments.dart' hide WorkspaceAttachments;
 import 'vault_storage.dart';
 import 'sync_policy.dart';
 import 'recordings.dart';
@@ -35,6 +37,7 @@ class WorkspaceNote {
     required this.sourcePath,
     required this.status,
     this.error,
+    this.attachments = const [],
   });
 
   final String id;
@@ -47,9 +50,15 @@ class WorkspaceNote {
   final NoteStatus status;
   final String? error;
 
-  NoteSyncStatus get syncStatus => status == NoteStatus.localSaved
-      ? NoteSyncStatus.unverified
-      : NoteSyncStatus.notPublished;
+  final List<WorkspaceAttachment> attachments;
+
+  NoteSyncStatus get syncStatus {
+    if (attachments.any((item) => item.status != AttachmentStatus.localSaved)) {
+      return NoteSyncStatus.attachmentBlocked;
+    }
+    return status == NoteStatus.localSaved
+        ? NoteSyncStatus.unverified : NoteSyncStatus.notPublished;
+  }
 }
 
 /// The public business boundary shared by the app and behavioral tests.
@@ -65,6 +74,13 @@ class NoteWorkspace {
   );
 
   late final WorkspaceRecordings _recordings;
+  late final WorkspaceAttachments _attachments;
+
+  List<WorkspaceAttachment> get attachments => _attachments.attachments;
+
+  Future<WorkspaceAttachment> attachFile({required String noteId, required File original}) =>
+      _attachments.attach(noteId, original);
+
   final Database _database;
   final VaultStorage vaultStorage;
 
@@ -141,6 +157,7 @@ class NoteWorkspace {
       clock ?? DateTime.now,
       createId ?? _randomId,
     );
+    workspace._attachments = WorkspaceAttachments(database, localDirectory, vaultStorage, workspace._createId);
     workspace._recordings = WorkspaceRecordings(
       database,
       localDirectory,
@@ -270,6 +287,7 @@ class NoteWorkspace {
     sourcePath: row['source_path'] as String,
     status: NoteStatus.values.byName(row['status'] as String),
     error: row['error'] as String?,
+    attachments: List.unmodifiable(_attachments.attachments.where((item) => item.noteId == row['id'])),
   );
 
   String _markdown(WorkspaceNote note) =>

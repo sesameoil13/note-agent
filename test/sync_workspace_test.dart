@@ -44,4 +44,37 @@ void main() {
     expect(storage.accountStorageBytes, 1000000000);
   });
 
+  test('oversized attachment keeps its complete original privately after restart', () async {
+    final temporary = await Directory.systemTemp.createTemp('note-agent-oversize-');
+    addTearDown(() => temporary.delete(recursive: true));
+    final vault = await Directory('${temporary.path}/vault').create();
+    final local = Directory('${temporary.path}/local');
+    final original = File('${temporary.path}/采访.m4a');
+    final bytes = List<int>.generate(5000001, (index) => index % 251);
+    await original.writeAsBytes(bytes);
+    var sequence = 0;
+    var workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+      createId: () => 'oversize-${sequence++}',
+    );
+    final note = await workspace.captureText(title: '采访来源', text: '保留完整采访。');
+    final attachment = await workspace.attachFile(noteId: note.id, original: original);
+    expect(attachment.status, AttachmentStatus.exceedsFileLimit);
+    expect(attachment.originalByteLength, 5000001);
+    expect(await File(attachment.originalPath).readAsBytes(), bytes);
+    expect(attachment.originalPath.startsWith(local.path), isTrue);
+    expect(await File(attachment.sourcePath).exists(), isFalse);
+    expect(workspace.notes.single.syncStatus, NoteSyncStatus.attachmentBlocked);
+    await original.delete();
+    await workspace.close();
+    workspace = await NoteWorkspace.open(localDirectory: local, vaultDirectory: vault);
+    addTearDown(workspace.close);
+    expect(workspace.attachments.single.status, AttachmentStatus.exceedsFileLimit);
+    expect(await File(workspace.attachments.single.originalPath).readAsBytes(), bytes);
+    final markdown = await File(note.notePath).readAsString();
+    expect(RegExp(r'^## ', multiLine: true).allMatches(markdown), hasLength(3));
+    expect(markdown, contains('采访.m4a（仅本机保留，超过 Standard 单文件 5 MB）'));
+  });
+
 }
