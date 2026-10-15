@@ -1,6 +1,6 @@
 # Note Agent
 
-A local-first personal note workspace for Obsidian. This repository currently implements the T01 text collection slice from [specification #1](https://github.com/sesameoil13/note-agent/issues/1). The full product specification is still in progress.
+A local-first personal note workspace for Obsidian. The T01 macOS text collection slice from [specification #1](https://github.com/sesameoil13/note-agent/issues/1) has passed basic native acceptance. Windows runner source is present; Windows build and Windows 11 runtime acceptance are pending. The full product specification is still in progress.
 
 The Flutter interface collects text, lists recent records, and opens a detail view with 正文 → 关联 → 来源. It saves the original text and stable identity to a local SQLite database before publishing a Markdown note and an original `.txt` source into the selected test vault. Notes contain no YAML properties or generated summary. Collection and modification times appear immediately after the source link.
 
@@ -26,5 +26,7 @@ Select a newly created **test vault** through the app's system directory picker.
 - A write failure preserves the local original and exposes a retry action. An existing destination with different content remains untouched.
 
 The SQLite index and credentials are not written into note properties. The app uses security-scoped bookmarks to restore the selected directory authorization on macOS.
+
+On Windows, private state lives in `%LOCALAPPDATA%\dev.noteagent\workspace`, and only the selected folder path is remembered in `HKCU\Software\NoteAgent`. The Windows publisher uses a same-volume move without replacing an existing destination. See [T03 validation](docs/development/t03-validation.md) for the native acceptance gate and Windows commands. The Windows GitHub Actions workflow is manual-only and must be cost-authorized before dispatch.
 
 See [T01 validation](docs/development/t01-validation.md) for the completed T01 basic acceptance evidence and the broader setup/platform checks that remain unverified. Later tickets add AI, other capture formats, title disambiguation/editing, platform ports, reminders, and sync. The current local save status makes no synchronization claim.

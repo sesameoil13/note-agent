@@ -14,10 +14,9 @@ abstract interface class NoteFilePublisher {
 
 /// Publishes complete files without replacing a pre-existing destination.
 ///
-/// POSIX hard-link creation is atomic and exclusive. Staging is on the vault's
-/// own filesystem, so a process interruption leaves either no destination or a
-/// complete one. Retrying can safely rewrite our staging file. Other platforms
-/// provide their own atomic, no-replacement publisher through this boundary.
+/// POSIX hard-link creation and Windows same-volume moves are exclusive. Staging
+/// is on the vault's own filesystem, so publication never falls back to copying
+/// partial contents into the destination. Retrying can safely rewrite staging.
 class AtomicNoteFilePublisher implements NoteFilePublisher {
   static final _link = DynamicLibrary.process()
       .lookupFunction<
@@ -25,13 +24,25 @@ class AtomicNoteFilePublisher implements NoteFilePublisher {
         int Function(Pointer<Utf8>, Pointer<Utf8>)
       >('link');
 
+  static final _windowsLibrary = DynamicLibrary.open('kernel32.dll');
+  static final _moveFile = _windowsLibrary
+      .lookupFunction<
+        Int32 Function(Pointer<Utf16>, Pointer<Utf16>, Uint32),
+        int Function(Pointer<Utf16>, Pointer<Utf16>, int)
+      >('MoveFileExW');
+  static final _lastError = _windowsLibrary
+      .lookupFunction<Uint32 Function(), int Function()>('GetLastError');
+
   @override
   Future<void> publish({
     required File destination,
     required File staging,
     required String text,
   }) async {
-    if (!Platform.isMacOS && !Platform.isLinux && !Platform.isAndroid) {
+    if (!Platform.isMacOS &&
+        !Platform.isLinux &&
+        !Platform.isAndroid &&
+        !Platform.isWindows) {
       throw const FileSystemException('此平台的原子笔记写入尚未接入。');
     }
     final targetType = await FileSystemEntity.type(
@@ -50,6 +61,26 @@ class AtomicNoteFilePublisher implements NoteFilePublisher {
       throw FileSystemException('暂存文件不可使用符号链接。', staging.path);
     }
     await staging.writeAsString(text, flush: true);
+    if (Platform.isWindows) {
+      // Neither REPLACE_EXISTING nor COPY_ALLOWED is set: an existing target
+      // survives races, and different volumes fail rather than expose a copy.
+      final (result, error) = using((arena) {
+        final result = _moveFile(
+          _windowsPath(staging).toNativeUtf16(allocator: arena),
+          _windowsPath(destination).toNativeUtf16(allocator: arena),
+          0x8, // MOVEFILE_WRITE_THROUGH
+        );
+        return (result, result == 0 ? _lastError() : 0);
+      });
+      if (result == 0) {
+        throw FileSystemException(
+          '无法发布完整笔记，请检查目录权限或已有同名文件。',
+          destination.path,
+          OSError('Windows 文件写入失败', error),
+        );
+      }
+      return;
+    }
     final result = using(
       (arena) => _link(
         staging.path.toNativeUtf8(allocator: arena),
@@ -59,5 +90,12 @@ class AtomicNoteFilePublisher implements NoteFilePublisher {
     if (result != 0) {
       throw FileSystemException('无法发布完整笔记，请检查目录权限或已有同名文件。', destination.path);
     }
+  }
+
+  String _windowsPath(File file) {
+    final path = file.absolute.path;
+    if (path.startsWith(r'\\?\')) return path;
+    if (path.startsWith(r'\\')) return r'\\?\UNC\' + path.substring(2);
+    return r'\\?\' + path;
   }
 }
