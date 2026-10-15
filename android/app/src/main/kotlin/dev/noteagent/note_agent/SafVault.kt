@@ -4,6 +4,8 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
+import android.webkit.MimeTypeMap
+import java.util.Locale
 import java.io.IOException
 import java.security.MessageDigest
 
@@ -89,7 +91,13 @@ internal class SafVault(private val resolver: ContentResolver, private val tree:
         val parent = directory(listOf(".note-agent-staging", operation, key), true)!!
         val name = safe(path).last()
         val existing = child(parent, name)
-        val uri = existing?.uri ?: DocumentsContract.createDocument(resolver, parent, "text/plain", name)
+        // A forced text/plain MIME can turn "note.md" into "note.md.txt" in
+        // ExternalStorageProvider. Match Android's extension map; an unknown
+        // extension uses octet-stream so the exact requested name is preserved.
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+            name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        ) ?: ContentResolver.MIME_TYPE_DEFAULT
+        val uri = existing?.uri ?: DocumentsContract.createDocument(resolver, parent, mime, name)
             ?: throw IOException("无法准备完整笔记。")
         check(entry(uri).name == name) { "文档提供方更改了文件名，未写入笔记。" }
         resolver.openOutputStream(uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { it.write(text) }
