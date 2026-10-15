@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -268,6 +269,123 @@ void main() {
     expect('[资料.pdf]'.allMatches(markdown), hasLength(1));
     expect(markdown, contains('正文保持完整。'));
   });
+  test('closing waits for accepted attachment publication and preserves it on restart', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-attachment-close-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final vault = await Directory('${temporary.path}/vault').create();
+    final local = Directory('${temporary.path}/local');
+    final storage = _GatedAttachmentStorage(
+      Directory(await vault.resolveSymbolicLinks()),
+    );
+    var sequence = 0;
+    var workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultStorage: storage,
+      createId: () => 'close-${sequence++}',
+    );
+    final note = await workspace.captureText(
+      title: '退出时保留来源',
+      text: '已接收的来源必须完成。',
+    );
+    final original = await File('${temporary.path}/资料.pdf')
+        .writeAsBytes([5, 10, 15]);
+    final attaching = workspace.attachFile(noteId: note.id, original: original);
+    await storage.started.future;
+    var closed = false;
+    final closing = workspace.close().then((_) => closed = true);
+    await Future<void>.delayed(Duration.zero);
+    expect(closed, isFalse);
+    storage.release.complete();
+    await attaching;
+    await closing;
+    workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
+    addTearDown(workspace.close);
+    expect(workspace.attachments.single.status, AttachmentStatus.localSaved);
+    expect(await File(workspace.attachments.single.sourcePath).readAsBytes(), [
+      5,
+      10,
+      15,
+    ]);
+    expect(await File(note.notePath).readAsString(), contains('[资料.pdf]'));
+  });
+  test('a published vault copy with a failed source link is never called local only', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-source-link-error-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final vault = await Directory('${temporary.path}/vault').create();
+    final storage = _RefusingSourceLinkStorage(
+      Directory(await vault.resolveSymbolicLinks()),
+    );
+    var sequence = 0;
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${temporary.path}/local'),
+      vaultStorage: storage,
+      createId: () => 'link-${sequence++}',
+    );
+    addTearDown(workspace.close);
+    final note = await workspace.captureText(
+      title: '来源链接待修复',
+      text: '附件副本的写入与链接写入是不同结果。',
+    );
+    final original = await File('${temporary.path}/资料.pdf')
+        .writeAsBytes([4, 8, 12]);
+    final attachment = await workspace.attachFile(
+      noteId: note.id,
+      original: original,
+    );
+    expect(attachment.status, AttachmentStatus.exportFailed);
+    expect(await File(attachment.sourcePath).readAsBytes(), [4, 8, 12]);
+    expect(attachment.hasLocalOnlyOriginal, isFalse);
+    expect(attachment.vaultCopyPublished, isTrue);
+    await expectLater(
+      workspace.retainAttachmentLocally(attachment.id),
+      throwsArgumentError,
+    );
+    expect(workspace.notes.single.syncStatus, NoteSyncStatus.unverified);
+  });
+  test('reopening completes a durable failed source link without leaving a false failure', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-source-link-retry-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final vault = await Directory('${temporary.path}/vault').create();
+    final local = Directory('${temporary.path}/local');
+    final storage = _RefusingSourceLinkStorage(
+      Directory(await vault.resolveSymbolicLinks()),
+    );
+    var sequence = 0;
+    var workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultStorage: storage,
+      createId: () => 'retry-link-${sequence++}',
+    );
+    final note = await workspace.captureText(title: '修复来源', text: '重启后继续完成来源。');
+    final original = await File('${temporary.path}/资料.pdf')
+        .writeAsBytes([7, 14, 21]);
+    final failed = await workspace.attachFile(
+      noteId: note.id,
+      original: original,
+    );
+    expect(failed.status, AttachmentStatus.exportFailed);
+    await workspace.close();
+    workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
+    addTearDown(workspace.close);
+    expect(workspace.attachments.single.status, AttachmentStatus.localSaved);
+    expect(workspace.attachments.single.error, isNull);
+    expect(
+      '[资料.pdf]'.allMatches(await File(note.notePath).readAsString()),
+      hasLength(1),
+    );
+  });
 }
 
 class _InterruptedSourceStorage extends DirectoryVaultStorage {
@@ -284,5 +402,36 @@ class _InterruptedSourceStorage extends DirectoryVaultStorage {
     throw StateError(
       'Simulated interruption after complete source-link publication',
     );
+  }
+}
+
+class _GatedAttachmentStorage extends DirectoryVaultStorage {
+  _GatedAttachmentStorage(super.directory);
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<void> publishFile(
+    String relativePath,
+    File original,
+    String operationId,
+  ) async {
+    started.complete();
+    await release.future;
+    await super.publishFile(relativePath, original, operationId);
+  }
+}
+
+class _RefusingSourceLinkStorage extends DirectoryVaultStorage {
+  _RefusingSourceLinkStorage(super.directory);
+
+  @override
+  Future<void> replaceText(
+    String relativePath,
+    String expectedText,
+    String text,
+    String operationId,
+  ) async {
+    throw const FileSystemException('Simulated source-link permission failure');
   }
 }

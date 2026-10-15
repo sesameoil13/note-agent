@@ -26,6 +26,8 @@ class WorkspaceAttachment {
     this.error,
     this.copyName,
     this.copyPath,
+    required this.vaultCopyPublished,
+    required this.originalPublished,
   });
 
   final String id;
@@ -38,8 +40,9 @@ class WorkspaceAttachment {
   final String? error;
   final String? copyName;
   final String? copyPath;
-  bool get hasLocalOnlyOriginal =>
-      copyPath != null || status != AttachmentStatus.localSaved;
+  final bool vaultCopyPublished;
+  final bool originalPublished;
+  bool get hasLocalOnlyOriginal => !originalPublished;
 }
 
 /// Internal source durability and publication, used only through NoteWorkspace.
@@ -50,7 +53,8 @@ class WorkspaceAttachments {
       original_name TEXT NOT NULL, original_path TEXT NOT NULL,
       original_bytes INTEGER NOT NULL, source_path TEXT NOT NULL,
       status TEXT NOT NULL, error TEXT, source_entry TEXT NOT NULL DEFAULT '',
-      copy_path TEXT, copy_name TEXT, entry_before TEXT, entry_after TEXT, entry_target TEXT
+      copy_path TEXT, copy_name TEXT, entry_before TEXT, entry_after TEXT, entry_target TEXT,
+      vault_copy_published INTEGER NOT NULL DEFAULT 0, original_published INTEGER NOT NULL DEFAULT 0
     )''');
   }
 
@@ -76,6 +80,8 @@ class WorkspaceAttachments {
             error: row['error'] as String?,
             copyName: row['copy_name'] as String?,
             copyPath: row['copy_path'] as String?,
+            vaultCopyPublished: row['vault_copy_published'] == 1,
+            originalPublished: row['original_published'] == 1,
           ),
         ),
   );
@@ -130,7 +136,7 @@ class WorkspaceAttachments {
 
   Future<WorkspaceAttachment> retainLocally(String id) async {
     final attachment = attachments.firstWhere((item) => item.id == id);
-    if (attachment.status == AttachmentStatus.localSaved) {
+    if (attachment.vaultCopyPublished) {
       throw ArgumentError('此来源已写入笔记库；保留本机不会撤回已写入的文件。');
     }
     database.execute('UPDATE attachments SET status = ? WHERE id = ?', [
@@ -143,6 +149,9 @@ class WorkspaceAttachments {
 
   Future<WorkspaceAttachment> chooseCopy(String id, File copy) async {
     final attachment = attachments.firstWhere((item) => item.id == id);
+    if (attachment.originalPublished) {
+      throw ArgumentError('原件副本已写入笔记库；选择精简副本不会撤回已发布的文件。');
+    }
     final length = await copy.length();
     if (length > ObsidianSyncStandard.maximumFileBytes ||
         length >= attachment.originalByteLength) {
@@ -157,7 +166,7 @@ class WorkspaceAttachments {
     await handle.flush();
     await handle.close();
     database.execute(
-      'UPDATE attachments SET copy_path = ?, copy_name = ?, source_path = ?, status = ?, error = NULL WHERE id = ?',
+      'UPDATE attachments SET copy_path = ?, copy_name = ?, source_path = ?, status = ?, vault_copy_published = 0, error = NULL WHERE id = ?',
       [
         destination.path,
         name,
@@ -180,13 +189,30 @@ class WorkspaceAttachments {
                   [attachment.id],
                 ).single['entry_target']
                 as String?;
-        if (pending != null) await writeEntry(attachment, pending);
+        if (pending != null) {
+          await writeEntry(attachment, pending);
+          final updated = attachments.firstWhere(
+            (item) => item.id == attachment.id,
+          );
+          if (updated.vaultCopyPublished &&
+              updated.error == null &&
+              updated.status == AttachmentStatus.exportFailed) {
+            database.execute('UPDATE attachments SET status = ? WHERE id = ?', [
+              AttachmentStatus.localSaved.name,
+              attachment.id,
+            ]);
+          }
+        }
       }
     }
   }
 
   Future<WorkspaceAttachment> export(String id) async {
     final attachment = attachments.firstWhere((item) => item.id == id);
+    database.execute('UPDATE attachments SET status = ? WHERE id = ?', [
+      AttachmentStatus.exportPending.name,
+      id,
+    ]);
     try {
       final source = File(attachment.copyPath ?? attachment.originalPath);
       if (await source.length() > ObsidianSyncStandard.maximumFileBytes) {
@@ -202,6 +228,15 @@ class WorkspaceAttachments {
         vault.relativePath(attachment.sourcePath),
         File(attachment.copyPath ?? attachment.originalPath),
         attachment.id,
+      );
+      database.execute(
+        'UPDATE attachments SET vault_copy_published = 1, original_published = ? WHERE id = ?',
+        [
+          attachment.copyPath == null
+              ? 1
+              : (attachment.originalPublished ? 1 : 0),
+          id,
+        ],
       );
       final path = Uri(path: vault.relativePath(attachment.sourcePath))
           .toString();

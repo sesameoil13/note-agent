@@ -6,6 +6,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'audio_platform.dart';
 import 'vault_storage.dart';
+import 'sync_policy.dart';
 
 export 'audio_platform.dart';
 
@@ -95,7 +96,7 @@ class WorkspaceRecordings {
     )''');
   }
   static const maximumDuration = Duration(minutes: 10);
-  static const maximumSyncBytes = 5000000;
+  static const maximumSyncBytes = ObsidianSyncStandard.maximumFileBytes;
   final Database database;
   final Directory localDirectory;
   final VaultStorage vault;

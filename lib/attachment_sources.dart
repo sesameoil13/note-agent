@@ -81,7 +81,10 @@ class _AttachmentSourcesState extends State<AttachmentSources> {
     AttachmentStatus.exceedsFileLimit => '超过 Standard 5 MB · 原件仅本机，未同步',
     AttachmentStatus.retainedLocal => '已选择仅保留本机 · 原件未同步',
     AttachmentStatus.exportPending => '原件本机已保留 · 等待写入笔记库',
-    AttachmentStatus.exportFailed => '原件本机已保留 · 笔记库写入未完成',
+    AttachmentStatus.exportFailed =>
+      item.vaultCopyPublished
+          ? '本机笔记库已有副本 · 来源链接未完成，云端尚未核实'
+          : '原件本机已保留 · 笔记库写入未完成',
   };
 
   Future<void> _choices(WorkspaceAttachment item) => showDialog<void>(
@@ -99,7 +102,7 @@ class _AttachmentSourcesState extends State<AttachmentSources> {
               const SizedBox(height: 16),
               const Text('可先在音频或文档工具中制作有效的压缩副本，再在这里选择。原件会继续保留；请核对副本是否完整。'),
               const SizedBox(height: 16),
-              if (item.status != AttachmentStatus.localSaved)
+              if (!item.vaultCopyPublished)
                 OutlinedButton(
                   onPressed: () {
                     Navigator.pop(dialogContext);
