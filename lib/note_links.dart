@@ -8,6 +8,43 @@ String rewriteNoteLinks(
   String oldPath,
   String newPath,
 ) {
+  String? destination(String target, {required bool angled}) {
+    final hash = target.indexOf('#');
+    final path = hash < 0 ? target : target.substring(0, hash);
+    final anchor = hash < 0 ? '' : target.substring(hash);
+    if (path.isEmpty ||
+        path.startsWith('/') ||
+        Uri.tryParse(path)?.hasScheme == true) {
+      return null;
+    }
+    String decoded;
+    try {
+      decoded = path
+          .replaceAllMapped(
+            RegExp(r'(?:%[a-fA-F0-9]{2})+'),
+            (m) => Uri.decodeComponent(m[0]!),
+          )
+          .replaceAllMapped(RegExp(r'\\([() ])'), (m) => m[1]!);
+    } on ArgumentError {
+      return null;
+    }
+    if (p.posix.normalize(p.posix.join(p.posix.dirname(from), decoded)) !=
+        oldPath) {
+      return null;
+    }
+    var replacement = p.posix.relative(newPath, from: p.posix.dirname(from));
+    if (path.startsWith('./') && !replacement.startsWith('.')) {
+      replacement = './$replacement';
+    }
+    if (RegExp(r'%[a-fA-F0-9]{2}').hasMatch(path) ||
+        (!angled && RegExp(r'\s').hasMatch(replacement))) {
+      replacement = Uri(path: replacement).toString();
+    } else if (!angled && path.contains(r'\(')) {
+      replacement = replacement.replaceAll('(', r'\(').replaceAll(')', r'\)');
+    }
+    return '$replacement$anchor';
+  }
+
   String rewrite(String part) {
     final wiki = part.replaceAllMapped(RegExp(r'\[\[([^\]\n]+)\]\]'), (match) {
       final value = match[1]!;
@@ -24,7 +61,7 @@ String rewriteNoteLinks(
           : p.posix.withoutExtension(newPath);
       return '[[$replacement$suffix]]';
     });
-    return wiki.replaceAllMapped(
+    final inline = wiki.replaceAllMapped(
       RegExp(r'(\[[^\]\n]*\]\()(<[^>\n]*>|(?:\\.|[^()\n]|\([^()\n]*\))*)\)'),
       (match) {
         final body = match[2]!;
@@ -42,44 +79,22 @@ String rewriteNoteLinks(
             : targetEnd < 0
             ? ''
             : body.substring(targetEnd);
-        final hash = target.indexOf('#');
-        final path = hash < 0 ? target : target.substring(0, hash);
-        final anchor = hash < 0 ? '' : target.substring(hash);
-        if (path.isEmpty ||
-            path.startsWith('/') ||
-            Uri.tryParse(path)?.hasScheme == true) {
-          return match[0]!;
-        }
-        String decoded;
-        try {
-          decoded = path
-              .replaceAllMapped(
-                RegExp(r'(?:%[a-fA-F0-9]{2})+'),
-                (m) => Uri.decodeComponent(m[0]!),
-              )
-              .replaceAllMapped(RegExp(r'\\([() ])'), (m) => m[1]!);
-        } on ArgumentError {
-          return match[0]!;
-        }
-        if (p.posix.normalize(p.posix.join(p.posix.dirname(from), decoded)) !=
-            oldPath) {
-          return match[0]!;
-        }
-        var replacement = p.posix.relative(
-          newPath,
-          from: p.posix.dirname(from),
+        final replacement = destination(target, angled: angled);
+        if (replacement == null) return match[0]!;
+        return '${match[1]}${angled ? '<' : ''}$replacement${angled ? '>' : ''}$tail)';
+      },
+    );
+    return inline.replaceAllMapped(
+      RegExp(r'^( {0,3}\[[^\]\n]+\]:[ \t]*)(<[^>\n]+>|[^\s]+)(.*)$'),
+      (match) {
+        final target = match[2]!;
+        final angled = target.startsWith('<');
+        final replacement = destination(
+          angled ? target.substring(1, target.length - 1) : target,
+          angled: angled,
         );
-        if (path.startsWith('./') && !replacement.startsWith('.')) {
-          replacement = './$replacement';
-        }
-        if (RegExp(r'%[a-fA-F0-9]{2}').hasMatch(path)) {
-          replacement = Uri(path: replacement).toString();
-        } else if (!angled && path.contains(r'\(')) {
-          replacement = replacement
-              .replaceAll('(', r'\(')
-              .replaceAll(')', r'\)');
-        }
-        return '${match[1]}${angled ? '<' : ''}$replacement$anchor${angled ? '>' : ''}$tail)';
+        if (replacement == null) return match[0]!;
+        return '${match[1]}${angled ? '<' : ''}$replacement${angled ? '>' : ''}${match[3]}';
       },
     );
   }

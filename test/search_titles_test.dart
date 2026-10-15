@@ -75,11 +75,11 @@ void main() {
         semanticTitleCandidates: ['客户会议要点'],
         text: '另一份原文。',
       );
-      expect(duplicate.title, '会议记录（2）');
+      expect(duplicate.title, '会议记录 (2)');
       expect(duplicate.titleCollision, isTrue);
       expect(duplicate.status, NoteStatus.localSaved);
       final next = await workspace.captureText(title: '会议记录', text: '第三份原文。');
-      expect(next.title, '会议记录（3）');
+      expect(next.title, '会议记录 (3)');
       expect(await existing.readAsString(), '用户已有的会议记录');
       await workspace.close();
       workspace = await NoteWorkspace.open(
@@ -111,7 +111,7 @@ void main() {
 
     final renamed = await workspace.renameNote(note.id, title: '中文新标题');
     expect(renamed.id, note.id);
-    expect(renamed.title, '中文新标题（2）');
+    expect(renamed.title, '中文新标题 (2)');
     expect(renamed.titleCollision, isTrue);
     expect(renamed.createdAt, note.createdAt);
     expect(await existing.readAsString(), '保留同名文件');
@@ -119,9 +119,9 @@ void main() {
     expect(await File(renamed.sourcePath).readAsString(), '原文保持不变。');
     expect(
       await inbound.readAsString(),
-      '''[[中文新标题（2）]] [[中文新标题（2）#正文|阅读]] ![[中文新标题（2）]]
-[打开](中文新标题（2）.md) [定位](<中文新标题（2）.md#正文>)
-[编码](%E4%B8%AD%E6%96%87%E6%96%B0%E6%A0%87%E9%A2%98%EF%BC%882%EF%BC%89.md)
+      '''[[中文新标题 (2)]] [[中文新标题 (2)#正文|阅读]] ![[中文新标题 (2)]]
+[打开](%E4%B8%AD%E6%96%87%E6%96%B0%E6%A0%87%E9%A2%98%20(2).md) [定位](<中文新标题 (2).md#正文>)
+[编码](%E4%B8%AD%E6%96%87%E6%96%B0%E6%A0%87%E9%A2%98%20(2).md)
 [[产品观察补充]] [外部](https://example.com/产品观察.md)
 `[[产品观察]]`
 ```
@@ -129,7 +129,10 @@ void main() {
 ```
 ''',
     );
-    expect(await nested.readAsString(), '[引用](../中文新标题（2）.md#正文)');
+    expect(
+      await nested.readAsString(),
+      '[引用](../%E4%B8%AD%E6%96%87%E6%96%B0%E6%A0%87%E9%A2%98%20(2).md#正文)',
+    );
     await workspace.close();
     workspace = await NoteWorkspace.open(
       localDirectory: local,
@@ -152,15 +155,15 @@ void main() {
       await Link('${vault.path}/链接.md').create(outside.path);
       expect(
         (await workspace.captureText(title: '设计', text: '目录重名')).title,
-        '设计（2）',
+        '设计 (2)',
       );
       expect(
         (await workspace.captureText(title: 'api', text: '大小写重名')).title,
-        'api（2）',
+        'api (2)',
       );
       expect(
         (await workspace.captureText(title: '链接', text: '符号链接重名')).title,
-        '链接（2）',
+        '链接 (2)',
       );
       expect(await outside.readAsString(), '不可覆盖');
     },
@@ -218,11 +221,45 @@ void main() {
       workspace.captureText(title: '共同标题', text: '第二份原文'),
       workspace.captureText(title: '共同标题', text: '第三份原文'),
     ]);
-    expect(captured.map((note) => note.title), ['共同标题', '共同标题（2）', '共同标题（3）']);
+    expect(captured.map((note) => note.title), [
+      '共同标题',
+      '共同标题 (2)',
+      '共同标题 (3)',
+    ]);
     for (final note in captured) {
       expect(await File(note.sourcePath).readAsString(), note.text);
       expect(await File(note.notePath).readAsString(), contains(note.text));
     }
+  });
+
+  test('renaming maintains Markdown reference definitions and their optional titles', () async {
+    final note = await workspace.captureText(title: '产品观察', text: '保持原始来源。');
+    final index = File('${vault.path}/阅读索引.md');
+    await index.writeAsString('''[阅读][plain] [定位][angle] [编码][encoded]
+[plain]: 产品观察.md
+[angle]: <产品观察.md#正文> "说明 产品观察"
+[encoded]: %E4%BA%A7%E5%93%81%E8%A7%82%E5%AF%9F.md '说明'
+[external]: https://example.com/产品观察.md
+```
+[example]: 产品观察.md
+```
+''');
+    final folder = await Directory('${vault.path}/资料').create();
+    final nested = File('${folder.path}/延伸阅读.md');
+    await nested.writeAsString('  [relative]: ../产品观察.md (延伸阅读)');
+    final renamed = await workspace.renameNote(note.id, title: '新标题');
+    expect(renamed.status, NoteStatus.localSaved);
+    expect(await index.readAsString(), '''[阅读][plain] [定位][angle] [编码][encoded]
+[plain]: 新标题.md
+[angle]: <新标题.md#正文> "说明 产品观察"
+[encoded]: %E6%96%B0%E6%A0%87%E9%A2%98.md '说明'
+[external]: https://example.com/产品观察.md
+```
+[example]: 产品观察.md
+```
+''');
+    expect(await nested.readAsString(), '  [relative]: ../新标题.md (延伸阅读)');
+    expect(await File(renamed.sourcePath).readAsString(), '保持原始来源。');
   });
 
   test('unavailable title lookup retains original and semantic request for retry after restart', () async {

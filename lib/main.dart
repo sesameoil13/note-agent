@@ -511,7 +511,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                                       : EdgeInsets.zero,
                                   decoration: BoxDecoration(
                                     border: note.titleCollision
-                                        ? Border.all(color: oxide, width: 2)
+                                        ? Border.all(color: bone, width: 2)
                                         : null,
                                   ),
                                   child: Text(
@@ -650,15 +650,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                   enabledBorder: note.titleCollision
                       ? const OutlineInputBorder(
                           borderRadius: BorderRadius.zero,
-                          borderSide: BorderSide(color: oxide, width: 2),
+                          borderSide: BorderSide(color: bone, width: 2),
                         )
                       : null,
-                  focusedBorder: note.titleCollision
-                      ? const OutlineInputBorder(
-                          borderRadius: BorderRadius.zero,
-                          borderSide: BorderSide(color: oxide, width: 2),
-                        )
-                      : null,
+                  focusedBorder: const OutlineInputBorder(
+                    borderRadius: BorderRadius.zero,
+                    borderSide: BorderSide(color: acid, width: 2),
+                  ),
                 ),
                 style: const TextStyle(
                   fontSize: 28,

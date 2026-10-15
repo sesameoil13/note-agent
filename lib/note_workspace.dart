@@ -257,11 +257,11 @@ class NoteWorkspace {
       }
     }
     var number = 2;
-    while (occupied.contains('$preferred（$number）'.toLowerCase()) ||
-        await vaultStorage.exists('$preferred（$number）.md')) {
+    while (occupied.contains('$preferred ($number)'.toLowerCase()) ||
+        await vaultStorage.exists('$preferred ($number).md')) {
       number++;
     }
-    return (title: '$preferred（$number）', collision: true);
+    return (title: '$preferred ($number)', collision: true);
   }
 
   String _safeTitle(String title) {

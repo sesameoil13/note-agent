@@ -143,7 +143,7 @@ void main() {
       text: '新的原文也应保留。',
     );
     expect(collected.status, NoteStatus.localSaved);
-    expect(collected.title, '现有笔记（2）');
+    expect(collected.title, '现有笔记 (2)');
     expect(collected.titleCollision, isTrue);
     expect(collected.text, '新的原文也应保留。');
     await workspace.retryNoteExport(collected.id);

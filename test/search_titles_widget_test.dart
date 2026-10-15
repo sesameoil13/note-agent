@@ -68,7 +68,7 @@ void main() {
       await tester.runAsync(() async {
         await tester.tap(find.text('保存标题'));
         for (var attempt = 0; attempt < 200; attempt++) {
-          if (workspace.search('离线').single.title == '其他记录（2）') return;
+          if (workspace.search('离线').single.title == '其他记录 (2)') return;
           await Future<void>.delayed(const Duration(milliseconds: 10));
         }
         fail('Title edit did not finish.');
@@ -76,7 +76,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(workspace.search('离线').single.titleCollision, isTrue);
       expect(find.byType(AlertDialog), findsNothing);
-      expect(find.text('其他记录（2）'), findsNWidgets(2));
+      expect(find.text('其他记录 (2)'), findsNWidgets(2));
       expect(find.text('摘要'), findsNothing);
       expect(find.text('属性'), findsNothing);
     },
