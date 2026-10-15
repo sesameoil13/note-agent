@@ -179,7 +179,7 @@ class WorkspaceRecordings {
         _backgroundRefresh = refresh()
             .catchError((Object error) {
               state = RecordingState(
-                phase: RecordingPhase.failed,
+                phase: state.phase,
                 recordingId: state.recordingId,
                 duration: state.duration,
                 levels: state.levels,
@@ -223,8 +223,11 @@ class WorkspaceRecordings {
       return;
     }
     _refreshing = true;
+    final recordingId = state.recordingId;
     try {
       final snapshot = await _audio.recordingSnapshot();
+      if (_stopping || !state.isActive || state.recordingId != recordingId)
+        return;
       final levels = [
         ...state.levels,
         snapshot.phase == AudioCapturePhase.recording
