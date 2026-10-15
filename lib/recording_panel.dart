@@ -7,8 +7,13 @@ import 'note_workspace.dart';
 
 /// Recording controls use the same public workspace actions as behavioral tests.
 class RecordingPanel extends StatefulWidget {
-  const RecordingPanel({super.key, required this.workspace});
+  const RecordingPanel({
+    super.key,
+    required this.workspace,
+    this.onStateChanged,
+  });
   final NoteWorkspace workspace;
+  final VoidCallback? onStateChanged;
   @override
   State<RecordingPanel> createState() => _RecordingPanelState();
 }
@@ -18,10 +23,14 @@ class _RecordingPanelState extends State<RecordingPanel> {
   bool _busy = false;
   bool _polling = false;
   String? _error;
+  RecordingState? _observedRecording;
+  PlaybackState? _observedPlayback;
 
   @override
   void initState() {
     super.initState();
+    _observedRecording = widget.workspace.recording;
+    _observedPlayback = widget.workspace.playback;
     _timer = Timer.periodic(const Duration(milliseconds: 150), (_) => _poll());
   }
 
@@ -34,14 +43,25 @@ class _RecordingPanelState extends State<RecordingPanel> {
   Future<void> _poll() async {
     if (_polling || _busy) return;
     if (!widget.workspace.recording.isActive &&
-        !widget.workspace.playback.isPlaying) {
+        !widget.workspace.playback.isPlaying &&
+        identical(_observedRecording, widget.workspace.recording) &&
+        identical(_observedPlayback, widget.workspace.playback)) {
       return;
     }
     _polling = true;
     try {
       await widget.workspace.refreshRecording();
-      await widget.workspace.refreshPlayback();
-      if (mounted) setState(() {});
+      if (widget.workspace.playback.isPlaying) {
+        await widget.workspace.refreshPlayback();
+      }
+      final changedActivity =
+          _observedRecording?.isActive != widget.workspace.recording.isActive;
+      _observedRecording = widget.workspace.recording;
+      _observedPlayback = widget.workspace.playback;
+      if (mounted) {
+        setState(() {});
+        if (changedActivity) widget.onStateChanged?.call();
+      }
     } catch (error) {
       if (mounted) setState(() => _error = _message(error));
     } finally {
@@ -62,7 +82,12 @@ class _RecordingPanelState extends State<RecordingPanel> {
     } catch (error) {
       _error = _message(error);
     }
-    if (mounted) setState(() => _busy = false);
+    if (mounted) {
+      _observedRecording = widget.workspace.recording;
+      _observedPlayback = widget.workspace.playback;
+      setState(() => _busy = false);
+      widget.onStateChanged?.call();
+    }
   }
 
   @override

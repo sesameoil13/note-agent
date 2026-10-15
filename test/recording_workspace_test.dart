@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -270,6 +271,63 @@ void main() {
       expect(workspace.playback.isPlaying, isTrue);
     },
   );
+  test(
+    'late microphone meter result cannot restart a saved recording state',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'note-agent-t08-race-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final microphone = _DelayedSnapshotAudio();
+      final workspace = await NoteWorkspace.open(
+        localDirectory: Directory('${temporary.path}/local'),
+        vaultDirectory: await Directory('${temporary.path}/vault').create(),
+        audioPlatform: microphone,
+        createId: () => 'late-meter',
+      );
+      addTearDown(workspace.close);
+      await workspace.startRecording();
+      microphone.advance(const Duration(seconds: 15), 0.5);
+      final refresh = workspace.refreshRecording();
+      final saved = await workspace.stopRecording();
+      microphone.gate.complete(
+        const AudioCaptureSnapshot(
+          phase: AudioCapturePhase.recording,
+          duration: Duration(seconds: 15),
+          level: 0.5,
+        ),
+      );
+      await refresh;
+      expect(saved.status, RecordingStatus.localSaved);
+      expect(workspace.recording.isActive, isFalse);
+      expect(workspace.recording.recordingId, isNull);
+    },
+  );
+  test(
+    'meter failure leaves explicit stop available to finish the original',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'note-agent-t08-meter-error-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final microphone = _FailedMeterAudio();
+      final workspace = await NoteWorkspace.open(
+        localDirectory: Directory('${temporary.path}/local'),
+        vaultDirectory: await Directory('${temporary.path}/vault').create(),
+        audioPlatform: microphone,
+        createId: () => 'meter-error',
+      );
+      addTearDown(workspace.close);
+      await workspace.startRecording();
+      microphone.advance(const Duration(seconds: 15), 0.5);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      expect(workspace.recording.isActive, isTrue);
+      expect(workspace.recording.error, contains('meter unavailable'));
+      final saved = await workspace.stopRecording();
+      expect(saved.status, RecordingStatus.localSaved);
+      expect(workspace.recording.isActive, isFalse);
+    },
+  );
 }
 
 /// Controlled microphone/player at the operating-system boundary. Files are real.
@@ -398,4 +456,16 @@ class _OversizedAudio extends _ControlledAudio {
       await file.close();
     }
   }
+}
+
+class _DelayedSnapshotAudio extends _ControlledAudio {
+  final gate = Completer<AudioCaptureSnapshot>();
+  @override
+  Future<AudioCaptureSnapshot> recordingSnapshot() => gate.future;
+}
+
+class _FailedMeterAudio extends _ControlledAudio {
+  @override
+  Future<AudioCaptureSnapshot> recordingSnapshot() async =>
+      throw StateError('meter unavailable');
 }

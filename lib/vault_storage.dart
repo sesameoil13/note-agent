@@ -65,14 +65,19 @@ class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
     return relativePath;
   }
 
-  Future<File> _file(String relativePath, {bool createParents = false}) async {
+  Future<File> _file(
+    String relativePath, {
+    bool createParents = false,
+    bool reserveOnly = false,
+  }) async {
     final path = reference(relativePath);
     var current = directory.path;
     final parts = p.split(_safe(relativePath));
     for (var index = 0; index < parts.length; index++) {
       current = p.join(current, parts[index]);
       final type = await FileSystemEntity.type(current, followLinks: false);
-      if (type == FileSystemEntityType.link) {
+      if (type == FileSystemEntityType.link &&
+          !(reserveOnly && index == parts.length - 1)) {
         throw FileSystemException('写入位置不能指向笔记库以外的位置。', current);
       }
       if (index < parts.length - 1) {
@@ -88,7 +93,11 @@ class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
 
   @override
   Future<bool> exists(String relativePath) async =>
-      (await _file(relativePath)).exists();
+      await FileSystemEntity.type(
+        (await _file(relativePath, reserveOnly: true)).path,
+        followLinks: false,
+      ) !=
+      FileSystemEntityType.notFound;
   @override
   Future<String> readText(String relativePath) async =>
       (await _file(relativePath)).readAsString();
@@ -156,7 +165,7 @@ class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
     )) {
       final relative = p.relative(entity.path, from: directory.path);
       if (entity is File &&
-          relative.endsWith('.md') &&
+          relative.toLowerCase().endsWith('.md') &&
           !p.split(relative).any((part) => part.startsWith('.'))) {
         paths.add(relative);
       }

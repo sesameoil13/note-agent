@@ -1,9 +1,13 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'note_workspace.dart';
 import 'attachment_sources.dart';
 import 'sync_panel.dart';
+import 'method_channel_audio.dart';
+import 'recording_panel.dart';
 import 'workspace_platform.dart';
 
 void main() => runApp(const NoteAgentApp());
@@ -92,6 +96,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   final _platform = WorkspacePlatform();
   final _title = TextEditingController();
   final _text = TextEditingController();
+  final _search = TextEditingController();
+  final _editTitle = TextEditingController();
+  String? _editingNoteId;
   NoteWorkspace? _workspace;
   String? _selectedId;
   String? _error;
@@ -102,6 +109,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   bool _loading = false;
   bool _saving = false;
   bool _composing = true;
+  bool _recordingPage = false;
 
   @override
   void initState() {
@@ -114,6 +122,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   void dispose() {
     _title.dispose();
     _text.dispose();
+    _search.dispose();
+    _editTitle.dispose();
     // The injected workspace belongs to its caller (including behavioral tests).
     if (_workspace != widget.initialWorkspace) _workspace?.close();
     super.dispose();
@@ -132,6 +142,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   }
 
   Future<void> _chooseVault() async {
+    if (_workspace?.recording.isActive ?? false) {
+      setState(() => _error = '请先结束并保存当前录音，再切换笔记库。');
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -154,6 +168,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       localDirectory: location.localDirectory,
       vaultDirectory: location.vaultDirectory,
       vaultStorage: location.vaultStorage,
+      audioPlatform: Platform.isMacOS && location.vaultDirectory != null
+          ? MethodChannelAudioPlatform()
+          : null,
     );
     if (!mounted) {
       await workspace.close();
@@ -167,7 +184,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     _deviceInfo = location.deviceInfo;
     _error = location.authorizationError;
     _selectedId = null;
+    _editingNoteId = null;
+    _search.clear();
     _composing = true;
+    _recordingPage = workspace.recordingAvailable;
     if (old != widget.initialWorkspace) await old?.close();
   }
 
@@ -225,6 +245,32 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     }
   }
 
+  Future<void> _rename(WorkspaceNote note) async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final renamed = await _workspace!.renameNote(
+        note.id,
+        title: _editTitle.text,
+      );
+      if (mounted) setState(() => _editTitle.text = renamed.title);
+    } catch (error) {
+      if (mounted) setState(() => _error = _errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _openSource(WorkspaceNote note) async {
+    try {
+      await _platform.openInObsidian(note.sourcePath);
+    } catch (error) {
+      if (mounted) setState(() => _error = _errorMessage(error));
+    }
+  }
+
   String _errorMessage(Object error) {
     if (error is PlatformException) return error.message ?? '系统操作未完成，请重试。';
     if (error is ArgumentError) return error.message.toString();
@@ -269,9 +315,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (wide) _sidebar(),
-                          if (constraints.maxWidth >= 720)
+                          if (!_recordingPage && constraints.maxWidth >= 720)
                             SizedBox(width: 280, child: _noteList()),
-                          Expanded(child: _composing ? _composer() : _detail()),
+                          Expanded(
+                            child: _recordingPage
+                                ? RecordingPanel(
+                                    key: ValueKey(_workspace),
+                                    workspace: _workspace!,
+                                    onStateChanged: () {
+                                      if (mounted) setState(() {});
+                                    },
+                                  )
+                                : _composing
+                                ? _composer()
+                                : _detail(),
+                          ),
                         ],
                       ),
               ),
@@ -311,6 +369,25 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         ],
         const Spacer(),
         if (_workspace != null) ...[
+          if (_workspace!.recordingAvailable) ...[
+            if (wide)
+              OutlinedButton.icon(
+                onPressed: _saving
+                    ? null
+                    : () => setState(() => _recordingPage = true),
+                icon: const Icon(Icons.mic, size: 16),
+                label: const Text('录音'),
+              )
+            else
+              IconButton(
+                onPressed: _saving
+                    ? null
+                    : () => setState(() => _recordingPage = true),
+                tooltip: '录音',
+                icon: const Icon(Icons.mic),
+              ),
+            const SizedBox(width: 8),
+          ],
           if (!wide)
             IconButton(
               onPressed: _showRecent,
@@ -323,6 +400,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                   ? null
                   : () => setState(() {
                       _composing = true;
+                      _recordingPage = false;
                       _selectedId = null;
                       _error = null;
                     }),
@@ -335,6 +413,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                   ? null
                   : () => setState(() {
                       _composing = true;
+                      _recordingPage = false;
                       _selectedId = null;
                       _error = null;
                     }),
@@ -364,11 +443,28 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         _navItem(
           '收集文字',
           Icons.add,
-          _composing,
-          () => setState(() => _composing = true),
+          _composing && !_recordingPage,
+          () => setState(() {
+            _composing = true;
+            _recordingPage = false;
+          }),
         ),
         const SizedBox(height: 8),
-        _navItem('最近记录', Icons.notes, !_composing, _showRecent),
+        _navItem(
+          '最近记录',
+          Icons.notes,
+          !_composing && !_recordingPage,
+          _showRecent,
+        ),
+        if (_workspace!.recordingAvailable) ...[
+          const SizedBox(height: 8),
+          _navItem(
+            '收集录音',
+            Icons.mic,
+            _recordingPage,
+            () => setState(() => _recordingPage = true),
+          ),
+        ],
         const Spacer(),
         const Text('当前笔记库', style: TextStyle(color: ash, fontSize: 12)),
         const SizedBox(height: 8),
@@ -420,18 +516,22 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     if (MediaQuery.sizeOf(context).width < 720) {
       showModalBottomSheet<void>(
         context: context,
-        builder: (context) => _noteList(),
+        builder: (context) => StatefulBuilder(
+          builder: (context, refresh) =>
+              _noteList(refresh: () => refresh(() {})),
+        ),
       );
     } else {
       setState(() {
         _composing = false;
+        _recordingPage = false;
         _selectedId ??= notes.first.id;
       });
     }
   }
 
-  Widget _noteList() {
-    final notes = _workspace!.notes;
+  Widget _noteList({VoidCallback? refresh}) {
+    final notes = _workspace!.search(_search.text);
     return Container(
       decoration: const BoxDecoration(
         color: slate,
@@ -444,8 +544,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
             padding: const EdgeInsets.all(24),
             child: Row(
               children: [
-                const Text(
-                  '最近记录',
+                Text(
+                  _search.text.trim().isEmpty ? '最近记录' : '搜索结果',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                 ),
                 const Spacer(),
@@ -456,13 +556,40 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
               ],
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: TextField(
+              controller: _search,
+              decoration: InputDecoration(
+                labelText: '搜索笔记',
+                hintText: '标题或原文关键词',
+                suffixIcon: _search.text.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清除搜索',
+                        icon: const Icon(Icons.close, size: 16),
+                        onPressed: () {
+                          _search.clear();
+                          setState(() {});
+                          refresh?.call();
+                        },
+                      ),
+              ),
+              onChanged: (_) {
+                setState(() {});
+                refresh?.call();
+              },
+            ),
+          ),
           const Divider(height: 1),
           Expanded(
             child: notes.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.all(24),
+                ? Padding(
+                    padding: const EdgeInsets.all(24),
                     child: Text(
-                      '还没有记录。\n收集的文字会出现在这里。',
+                      _search.text.trim().isEmpty
+                          ? '还没有记录。\n收集的文字会出现在这里。'
+                          : '没有匹配的记录。',
                       style: TextStyle(color: ash, height: 1.7),
                     ),
                   )
@@ -470,7 +597,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                     itemCount: notes.length,
                     itemBuilder: (context, index) {
                       final note = notes[index];
-                      final selected = !_composing && note.id == _selectedId;
+                      final selected =
+                          !_recordingPage &&
+                          !_composing &&
+                          note.id == _selectedId;
                       return Container(
                         margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                         decoration: BoxDecoration(
@@ -487,6 +617,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                                   setState(() {
                                     _selectedId = note.id;
                                     _composing = false;
+                                    _recordingPage = false;
                                     _error = null;
                                   });
                                   if (MediaQuery.sizeOf(this.context).width <
@@ -499,11 +630,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  note.title,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
+                                Container(
+                                  padding: note.titleCollision
+                                      ? const EdgeInsets.all(8)
+                                      : EdgeInsets.zero,
+                                  decoration: BoxDecoration(
+                                    border: note.titleCollision
+                                        ? Border.all(color: bone, width: 2)
+                                        : null,
+                                  ),
+                                  child: Text(
+                                    note.title,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(height: 8),
@@ -611,6 +752,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       (item) => item.id == _selectedId,
       orElse: () => notes.first,
     );
+    if (_editingNoteId != note.id) {
+      _editingNoteId = note.id;
+      _editTitle.text = note.title;
+    }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
       child: Align(
@@ -622,11 +767,37 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
             children: [
               const Text('普通笔记', style: TextStyle(color: ash, fontSize: 12)),
               const SizedBox(height: 8),
-              SelectableText(
-                note.title,
+              TextField(
+                controller: _editTitle,
+                enabled: !_saving && note.status == NoteStatus.localSaved,
+                decoration: InputDecoration(
+                  labelText: '标题',
+                  enabledBorder: note.titleCollision
+                      ? const OutlineInputBorder(
+                          borderRadius: BorderRadius.zero,
+                          borderSide: BorderSide(color: bone, width: 2),
+                        )
+                      : null,
+                  focusedBorder: const OutlineInputBorder(
+                    borderRadius: BorderRadius.zero,
+                    borderSide: BorderSide(color: acid, width: 2),
+                  ),
+                ),
                 style: const TextStyle(
-                  fontSize: 32,
+                  fontSize: 28,
                   fontWeight: FontWeight.w800,
+                ),
+                onSubmitted: (_) {
+                  if (!_saving) _rename(note);
+                },
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _saving || note.status != NoteStatus.localSaved
+                      ? null
+                      : () => _rename(note),
+                  child: const Text('保存标题'),
                 ),
               ),
               const SizedBox(height: 16),
@@ -636,6 +807,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                     child: Text(
                       note.status == NoteStatus.localSaved
                           ? '本机已保存'
+                          : note.status == NoteStatus.renamePending ||
+                                note.status == NoteStatus.renameFailed
+                          ? '原笔记已保留，标题与链接更新待重试'
                           : '原文已保留，笔记库写入失败',
                       style: TextStyle(
                         color: note.status == NoteStatus.localSaved
@@ -741,6 +915,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       ),
       actions: [
         TextButton(
+          onPressed: () => _openSource(note),
+          child: const Text('打开来源文件'),
+        ),
+        TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('关闭'),
         ),
@@ -796,8 +974,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
             child: const Text('选择笔记库'),
           ),
         if (MediaQuery.sizeOf(context).width >= 600)
-          const Text(
-            'TEXT / MARKDOWN',
+          Text(
+            _recordingPage ? 'AUDIO / AAC' : 'TEXT / MARKDOWN',
             style: TextStyle(fontSize: 12, color: ash, fontFamily: 'monospace'),
           ),
       ],

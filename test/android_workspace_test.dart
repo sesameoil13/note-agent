@@ -35,6 +35,12 @@ void main() {
               return null;
             case 'vaultReadText':
               return documents[arguments!['relativePath']! as String];
+            case 'vaultExists':
+              return documents.containsKey(arguments!['relativePath']);
+            case 'vaultListNotePaths':
+              return documents.keys
+                  .where((path) => path.toLowerCase().endsWith('.md'))
+                  .toList();
             default:
               throw PlatformException(
                 code: 'unsupported',
@@ -116,18 +122,27 @@ void main() {
       const channel = MethodChannel('dev.noteagent/workspace');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
+            if (call.method.startsWith('vault') && !granted) {
+              throw PlatformException(
+                code: 'directory_access',
+                message: '笔记库授权已失效，请重新选择同一目录。',
+              );
+            }
+            final arguments = call.arguments as Map?;
             switch (call.method) {
+              case 'vaultExists':
+                return documents.containsKey(arguments!['relativePath']);
+              case 'vaultReadText':
+                return documents[arguments!['relativePath'] as String];
+              case 'vaultListNotePaths':
+                return documents.keys
+                    .where((path) => path.toLowerCase().endsWith('.md'))
+                    .toList();
               case 'restoreLocation':
                 return {'localDirectory': temporary.path};
               case 'chooseLocation':
                 return cancelPicker ? null : location;
               case 'vaultPublishText':
-                if (!granted) {
-                  throw PlatformException(
-                    code: 'directory_access',
-                    message: '笔记库授权已失效，请重新选择同一目录。',
-                  );
-                }
                 final args = call.arguments as Map;
                 documents[args['relativePath'] as String] =
                     args['text'] as String;
@@ -172,8 +187,8 @@ void main() {
       expect(find.text('拒绝授权后仍保留中文。'), findsOneWidget);
       cancelPicker = false;
       granted = true;
-      await tester.tap(find.text('选择笔记库'));
       await tester.runAsync(() async {
+        await tester.tap(find.text('选择笔记库'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
       await tester.pumpAndSettle();
