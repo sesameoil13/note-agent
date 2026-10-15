@@ -2,11 +2,23 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'vault_storage.dart';
+
 class WorkspaceLocation {
-  const WorkspaceLocation(this.localDirectory, this.vaultDirectory);
+  const WorkspaceLocation(
+    this.localDirectory,
+    this.vaultDirectory, {
+    this.vaultStorage,
+    this.deviceInfo,
+    this.authorizationError,
+  });
 
   final Directory localDirectory;
   final Directory? vaultDirectory;
+  final VaultStorage? vaultStorage;
+  final String? deviceInfo;
+  final String? authorizationError;
+  bool get hasVault => vaultDirectory != null || vaultStorage != null;
 }
 
 /// System boundary: directory authorization and external application opening.
@@ -24,8 +36,16 @@ class WorkspacePlatform {
     return result == null ? null : _location(result);
   }
 
-  Future<void> openInObsidian(String path) =>
-      _channel.invokeMethod<void>('openInObsidian', {'path': path});
+  Future<void> openInObsidian(String reference) {
+    final uri = Uri.tryParse(reference);
+    if (uri?.scheme == 'noteagent-vault') {
+      return _channel.invokeMethod<void>('openInObsidian', {
+        'vaultUri': uri!.queryParameters['vault'],
+        'relativePath': uri.queryParameters['file'],
+      });
+    }
+    return _channel.invokeMethod<void>('openInObsidian', {'path': reference});
+  }
 
   WorkspaceLocation _location(Map<String, String>? data) {
     if (data == null || data['localDirectory'] == null) {
@@ -36,6 +56,109 @@ class WorkspacePlatform {
       data['vaultDirectory'] == null
           ? null
           : Directory(data['vaultDirectory']!),
+      vaultStorage: data['vaultUri'] == null
+          ? null
+          : AndroidVaultStorage(data['vaultUri']!, data['vaultName'] ?? '笔记库'),
+      deviceInfo: data['deviceInfo'],
+      authorizationError: data['authorizationError'],
     );
   }
+}
+
+/// SAF content-tree access stays on Android's ContentResolver boundary.
+class AndroidVaultStorage implements VaultStorage {
+  AndroidVaultStorage(this.identity, this.displayName);
+  static const _channel = MethodChannel('dev.noteagent/workspace');
+  @override
+  final String identity;
+  @override
+  final String displayName;
+
+  String _safe(String path) {
+    if (path.isEmpty ||
+        path.startsWith('/') ||
+        path.contains('\\') ||
+        path
+            .split('/')
+            .any((part) => part.isEmpty || part == '.' || part == '..')) {
+      throw FileSystemException('笔记位置必须位于当前笔记库内。', path);
+    }
+    return path;
+  }
+
+  @override
+  String reference(String relativePath) => Uri(
+    scheme: 'noteagent-vault',
+    queryParameters: {'vault': identity, 'file': _safe(relativePath)},
+  ).toString();
+  @override
+  String relativePath(String reference) {
+    final uri = Uri.parse(reference);
+    if (uri.scheme != 'noteagent-vault' ||
+        uri.queryParameters['vault'] != identity) {
+      throw FileSystemException('笔记不在当前笔记库中。', reference);
+    }
+    return _safe(uri.queryParameters['file']!);
+  }
+
+  Future<T?> _invoke<T>(
+    String method,
+    String path, [
+    Map<String, Object?> extra = const {},
+  ]) async {
+    try {
+      return await _channel.invokeMethod<T>(method, {
+        'vaultUri': identity,
+        'relativePath': _safe(path),
+        ...extra,
+      });
+    } on PlatformException catch (error) {
+      throw FileSystemException(error.message ?? '笔记库操作失败，请重新授权后重试。', identity);
+    }
+  }
+
+  @override
+  Future<bool> exists(String relativePath) async =>
+      await _invoke<bool>('vaultExists', relativePath) ?? false;
+  @override
+  Future<String> readText(String relativePath) async {
+    final text = await _invoke<String>('vaultReadText', relativePath);
+    if (text == null) throw FileSystemException('笔记文件不存在。', relativePath);
+    return text;
+  }
+
+  @override
+  Future<void> publishText(
+    String relativePath,
+    String text,
+    String operationId,
+  ) => _invoke<void>('vaultPublishText', relativePath, {
+    'text': text,
+    'operationId': operationId,
+  });
+  @override
+  Future<List<String>> listNotePaths() async {
+    final paths = await _invoke<List<Object?>>(
+      'vaultListNotePaths',
+      '__list__',
+    );
+    return paths?.cast<String>() ?? [];
+  }
+
+  @override
+  Future<void> replaceText(
+    String relativePath,
+    String expectedText,
+    String text,
+    String operationId,
+  ) => _invoke<void>('vaultReplaceText', relativePath, {
+    'expectedText': expectedText,
+    'text': text,
+    'operationId': operationId,
+  });
+  @override
+  Future<void> deleteText(String relativePath, String expectedText) =>
+      _invoke<void>('vaultDeleteText', relativePath, {
+        'expectedText': expectedText,
+      });
 }

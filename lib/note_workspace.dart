@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import 'note_files.dart';
+import 'vault_storage.dart';
+export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
 /// Local file publication is separate from any future sync acknowledgement.
@@ -42,27 +44,40 @@ class WorkspaceNote {
 class NoteWorkspace {
   NoteWorkspace._(
     this._database,
-    this.vaultDirectory,
+    this.vaultStorage,
     this._clock,
     this._createId,
-    this._filePublisher,
   );
 
   final Database _database;
-  final Directory vaultDirectory;
+  final VaultStorage vaultStorage;
+
+  /// Compatibility for desktop callers; SAF references are not local paths.
+  Directory get vaultDirectory {
+    final storage = vaultStorage;
+    if (storage is DirectoryVaultStorage) return storage.directory;
+    throw UnsupportedError('此笔记库通过系统文档授权访问。');
+  }
+
   final DateTime Function() _clock;
   final String Function() _createId;
-  final NoteFilePublisher _filePublisher;
 
   static Future<NoteWorkspace> open({
     required Directory localDirectory,
-    required Directory vaultDirectory,
+    Directory? vaultDirectory,
+    VaultStorage? vaultStorage,
     DateTime Function()? clock,
     String Function()? createId,
     NoteFilePublisher? filePublisher,
   }) async {
-    if (!await vaultDirectory.exists()) {
-      throw const FileSystemException('所选笔记库不存在，请重新选择。');
+    if (vaultStorage == null) {
+      if (vaultDirectory == null || !await vaultDirectory.exists()) {
+        throw const FileSystemException('所选笔记库不存在，请重新选择。');
+      }
+      vaultStorage = DirectoryVaultStorage(
+        Directory(await vaultDirectory.resolveSymbolicLinks()),
+        filePublisher: filePublisher,
+      );
     }
     await localDirectory.create(recursive: true);
     final database = sqlite3.open(
@@ -84,10 +99,9 @@ class NoteWorkspace {
     )''');
     final workspace = NoteWorkspace._(
       database,
-      Directory(await vaultDirectory.resolveSymbolicLinks()),
+      vaultStorage,
       clock ?? DateTime.now,
       createId ?? _randomId,
-      filePublisher ?? AtomicNoteFilePublisher(),
     );
     for (final note in workspace.notes) {
       if (note.status == NoteStatus.exportPending) {
@@ -101,7 +115,7 @@ class NoteWorkspace {
     _database
         .select(
           'SELECT * FROM notes WHERE vault = ? ORDER BY created_at DESC, id DESC',
-          [vaultDirectory.path],
+          [vaultStorage.identity],
         )
         .map(_noteFromRow),
   );
@@ -126,13 +140,8 @@ class NoteWorkspace {
       text: text,
       createdAt: now,
       modifiedAt: now,
-      notePath: p.join(vaultDirectory.path, '$safeTitle.md'),
-      sourcePath: p.join(
-        vaultDirectory.path,
-        'attachments',
-        'note-agent',
-        '$id.txt',
-      ),
+      notePath: vaultStorage.reference('$safeTitle.md'),
+      sourcePath: vaultStorage.reference('attachments/note-agent/$id.txt'),
       status: NoteStatus.exportPending,
     );
     _database.execute(
@@ -141,7 +150,7 @@ class NoteWorkspace {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
       [
         id,
-        vaultDirectory.path,
+        vaultStorage.identity,
         safeTitle,
         text,
         now.toIso8601String(),
@@ -158,26 +167,16 @@ class NoteWorkspace {
   Future<WorkspaceNote> retryNoteExport(String id) async {
     final note = notes.firstWhere((note) => note.id == id);
     try {
-      final staging = Directory(
-        p.join(vaultDirectory.path, '.note-agent-staging', note.id),
+      await vaultStorage.publishText(
+        vaultStorage.relativePath(note.sourcePath),
+        note.text,
+        note.id,
       );
-      await _prepareDirectory(staging);
-      await _prepareDirectory(File(note.sourcePath).parent);
-      await _filePublisher.publish(
-        destination: File(note.sourcePath),
-        staging: File(p.join(staging.path, 'source.txt')),
-        text: note.text,
+      await vaultStorage.publishText(
+        vaultStorage.relativePath(note.notePath),
+        _markdown(note),
+        note.id,
       );
-      await _filePublisher.publish(
-        destination: File(note.notePath),
-        staging: File(p.join(staging.path, 'note.md')),
-        text: _markdown(note),
-      );
-      try {
-        await staging.delete(recursive: true);
-      } on FileSystemException {
-        // Publication has committed; stale private staging can be removed later.
-      }
       _database.execute(
         'UPDATE notes SET status = ?, error = NULL WHERE id = ?',
         [NoteStatus.localSaved.name, id],
@@ -190,25 +189,6 @@ class NoteWorkspace {
       ]);
     }
     return notes.firstWhere((note) => note.id == id);
-  }
-
-  Future<void> _prepareDirectory(Directory directory) async {
-    var current = vaultDirectory.path;
-    for (final part in p.split(p.relative(directory.path, from: current))) {
-      if (part == '.') continue;
-      current = p.join(current, part);
-      final type = await FileSystemEntity.type(current, followLinks: false);
-      if (type == FileSystemEntityType.link) {
-        throw FileSystemException('写入目录不能指向笔记库以外的位置。', current);
-      }
-      if (type == FileSystemEntityType.notFound) {
-        await Directory(current).create();
-      }
-      if (type != FileSystemEntityType.notFound &&
-          type != FileSystemEntityType.directory) {
-        throw FileSystemException('笔记库写入位置不是目录。', current);
-      }
-    }
   }
 
   Future<void> close() async => _database.close();
