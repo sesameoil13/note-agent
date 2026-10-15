@@ -7,7 +7,9 @@ import 'package:sqlite3/sqlite3.dart';
 import 'note_files.dart';
 import 'vault_storage.dart';
 import 'sync_policy.dart';
+import 'recordings.dart';
 export 'sync_policy.dart';
+export 'recordings.dart' hide WorkspaceRecordings;
 export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
@@ -62,6 +64,7 @@ class NoteWorkspace {
     this._createId,
   );
 
+  late final WorkspaceRecordings _recordings;
   final Database _database;
   final VaultStorage vaultStorage;
 
@@ -103,6 +106,7 @@ class NoteWorkspace {
     DateTime Function()? clock,
     String Function()? createId,
     NoteFilePublisher? filePublisher,
+    AudioPlatform? audioPlatform,
   }) async {
     if (vaultStorage == null) {
       if (vaultDirectory == null || !await vaultDirectory.exists()) {
@@ -137,6 +141,15 @@ class NoteWorkspace {
       clock ?? DateTime.now,
       createId ?? _randomId,
     );
+    workspace._recordings = WorkspaceRecordings(
+      database,
+      localDirectory,
+      vaultStorage,
+      audioPlatform,
+      clock ?? DateTime.now,
+      createId ?? _randomId,
+    );
+    await workspace._recordings.recover();
     for (final note in workspace.notes) {
       if (note.status == NoteStatus.exportPending) {
         await workspace.retryNoteExport(note.id);
@@ -225,7 +238,27 @@ class NoteWorkspace {
     return notes.firstWhere((note) => note.id == id);
   }
 
-  Future<void> close() async => _database.close();
+  RecordingState get recording => _recordings.state;
+  PlaybackState get playback => _recordings.playback;
+  List<WorkspaceRecording> get recordings => _recordings.recordings;
+  Future<void> startRecording() => _recordings.start();
+  Future<void> pauseRecording() => _recordings.pause();
+  Future<void> resumeRecording() => _recordings.resume();
+  Future<void> refreshRecording() => _recordings.refresh();
+  Future<WorkspaceRecording> stopRecording() => _recordings.stop();
+  Future<WorkspaceRecording> retryRecordingExport(String id) =>
+      _recordings.export(id);
+  Future<void> playRecording(String id) => _recordings.play(id);
+  Future<void> refreshPlayback() => _recordings.refreshPlayback();
+  Future<void> stopPlayback() => _recordings.stopPlayback();
+
+  Future<void> close() async {
+    try {
+      await _recordings.close();
+    } finally {
+      _database.close();
+    }
+  }
 
   WorkspaceNote _noteFromRow(Row row) => WorkspaceNote(
     id: row['id'] as String,

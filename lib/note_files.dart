@@ -61,6 +61,54 @@ class AtomicNoteFilePublisher implements NoteFilePublisher {
       throw FileSystemException('暂存文件不可使用符号链接。', staging.path);
     }
     await staging.writeAsString(text, flush: true);
+    await _commit(destination, staging);
+  }
+
+  /// Publishes a finalized binary original without replacing an existing file.
+  Future<void> publishFile({
+    required File destination,
+    required File staging,
+    required File original,
+  }) async {
+    final bytes = await original.readAsBytes();
+    final type = await FileSystemEntity.type(
+      destination.path,
+      followLinks: false,
+    );
+    if (type != FileSystemEntityType.notFound) {
+      if (type == FileSystemEntityType.file) {
+        final existing = await destination.readAsBytes();
+        if (existing.length == bytes.length) {
+          var equal = true;
+          for (var index = 0; index < bytes.length; index++) {
+            if (existing[index] != bytes[index]) {
+              equal = false;
+              break;
+            }
+          }
+          if (equal) return;
+        }
+      }
+      throw FileSystemException('已有不同的原音频，保留现有文件及本机原音频。', destination.path);
+    }
+    if (await FileSystemEntity.type(staging.path, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw FileSystemException('暂存文件不可使用符号链接。', staging.path);
+    }
+    await staging.writeAsBytes(bytes, flush: true);
+    await _commit(destination, staging);
+    final published = await destination.readAsBytes();
+    if (published.length != bytes.length) {
+      throw FileSystemException('音频写入核对未通过，本机原音频仍保留。', destination.path);
+    }
+    for (var index = 0; index < bytes.length; index++) {
+      if (published[index] != bytes[index]) {
+        throw FileSystemException('音频写入核对未通过，本机原音频仍保留。', destination.path);
+      }
+    }
+  }
+
+  Future<void> _commit(File destination, File staging) async {
     if (Platform.isWindows) {
       // Neither REPLACE_EXISTING nor COPY_ALLOWED is set: an existing target
       // survives races, and different volumes fail rather than expose a copy.
