@@ -12,7 +12,7 @@ The interruption test injects a process interruption at the file-system boundary
 
 ## Executed on the current Apple Silicon Mac
 
-Environment: Flutter 3.47.7, Dart 3.13.5, macOS 16.0, Apple Swift 6.1.2, CommandLineTools installed; full Xcode absent.
+Environment: Flutter 3.47.7, Dart 3.13.5, macOS 26.6.2 (build 25G83), Apple Swift 6.1.2, CommandLineTools installed; full Xcode absent.
 
 - `flutter test --reporter expanded`: 5 tests passed. Covers restart/recovery, exact ordinary-note template/source, durable original after a vault write failure and retry, interrupted publication recovery, protection of an unrelated existing note, and collection/list/detail/original viewing through the real workspace.
 - `flutter analyze`: passed with no issues.
