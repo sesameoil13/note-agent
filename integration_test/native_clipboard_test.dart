@@ -40,9 +40,12 @@ void main() {
       expect((await Clipboard.getData(Clipboard.kTextPlain))?.text, text);
       await tester.tap(field);
       await tester.pumpAndSettle();
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      final modifier = Platform.isWindows
+          ? LogicalKeyboardKey.controlLeft
+          : LogicalKeyboardKey.metaLeft;
+      await tester.sendKeyDownEvent(modifier);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyUpEvent(modifier);
       await tester.pumpAndSettle();
       expect(find.text(text), findsOneWidget);
     }

@@ -12,3 +12,4 @@ coverage/
 macos/Flutter/ephemeral/
 macos/Pods/
 macos/.symlinks/
+windows/flutter/ephemeral/
