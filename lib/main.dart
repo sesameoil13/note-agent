@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'note_workspace.dart';
+import 'attachment_sources.dart';
+import 'sync_panel.dart';
 import 'workspace_platform.dart';
 
 void main() => runApp(const NoteAgentApp());
@@ -650,6 +652,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                     ),
                 ],
               ),
+              const SizedBox(height: 8),
+              NoteSyncSummary(note: note),
               if (note.status != NoteStatus.localSaved) ...[
                 const SizedBox(height: 16),
                 Text(
@@ -686,6 +690,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                   icon: const Icon(Icons.description_outlined, size: 16),
                   label: const Text('原始文字'),
                 ),
+              ),
+              AttachmentSources(
+                workspace: _workspace!,
+                noteId: note.id,
+                onChanged: () {
+                  if (mounted) setState(() {});
+                },
               ),
               const SizedBox(height: 16),
               Text(
@@ -774,6 +785,11 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         const SizedBox(width: 8),
         const Text('本机存储', style: TextStyle(fontSize: 12, color: ash)),
         const Spacer(),
+        if (_workspace != null)
+          TextButton(
+            onPressed: () => showSyncStorage(context, _workspace!, _platform),
+            child: const Text('同步与存储'),
+          ),
         if (_workspace != null && MediaQuery.sizeOf(context).width < 960)
           TextButton(
             onPressed: _saving || _loading ? null : _chooseVault,

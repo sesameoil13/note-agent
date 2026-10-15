@@ -4,77 +4,285 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 void main() {
-  test('local publication and restart never claim official cloud acknowledgement', () async {
-    final temporary = await Directory.systemTemp.createTemp('note-agent-sync-');
-    final vault = await Directory('${temporary.path}/vault').create();
-    final local = Directory('${temporary.path}/local');
-    addTearDown(() => temporary.delete(recursive: true));
-    var workspace = await NoteWorkspace.open(
-      localDirectory: local,
-      vaultDirectory: vault,
-      createId: () => 'sync-unknown',
+  test(
+    'local publication and restart never claim official cloud acknowledgement',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'note-agent-sync-',
+      );
+      final vault = await Directory('${temporary.path}/vault').create();
+      final local = Directory('${temporary.path}/local');
+      addTearDown(() => temporary.delete(recursive: true));
+      var workspace = await NoteWorkspace.open(
+        localDirectory: local,
+        vaultDirectory: vault,
+        createId: () => 'sync-unknown',
+      );
+      final saved = await workspace.captureText(
+        title: '原文仍在本机',
+        text: '等 Obsidian 运行后同步。',
+      );
+      expect(saved.status, NoteStatus.localSaved);
+      expect(saved.syncStatus, NoteSyncStatus.unverified);
+      expect(workspace.taskStatusSync, TaskStatusSync.notConnected);
+      await workspace.close();
+      workspace = await NoteWorkspace.open(
+        localDirectory: local,
+        vaultDirectory: vault,
+      );
+      addTearDown(workspace.close);
+      expect(workspace.notes.single.syncStatus, NoteSyncStatus.unverified);
+      expect(await File(saved.notePath).exists(), isTrue);
+    },
+  );
+  test(
+    'local vault estimate never stands in for available account storage',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'note-agent-capacity-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final vault = await Directory('${temporary.path}/vault').create();
+      final large = await File('${vault.path}/existing.bin')
+          .open(mode: FileMode.write);
+      await large.truncate(1000000001);
+      await large.close();
+      final workspace = await NoteWorkspace.open(
+        localDirectory: Directory('${temporary.path}/local'),
+        vaultDirectory: vault,
+      );
+      addTearDown(workspace.close);
+      final storage = await workspace.inspectSyncStorage();
+      expect(storage.localVaultBytes, 1000000001);
+      expect(storage.localVaultExceedsAccountLimit, isTrue);
+      expect(storage.remoteUsedBytes, isNull);
+      expect(storage.maximumFileBytes, 5000000);
+      expect(storage.accountStorageBytes, 1000000000);
+    },
+  );
+
+  test(
+    'oversized attachment keeps its complete original privately after restart',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'note-agent-oversize-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final vault = await Directory('${temporary.path}/vault').create();
+      final local = Directory('${temporary.path}/local');
+      final original = File('${temporary.path}/采访.m4a');
+      final bytes = List<int>.generate(5000001, (index) => index % 251);
+      await original.writeAsBytes(bytes);
+      var sequence = 0;
+      var workspace = await NoteWorkspace.open(
+        localDirectory: local,
+        vaultDirectory: vault,
+        createId: () => 'oversize-${sequence++}',
+      );
+      final note = await workspace.captureText(title: '采访来源', text: '保留完整采访。');
+      final attachment = await workspace.attachFile(
+        noteId: note.id,
+        original: original,
+      );
+      expect(attachment.status, AttachmentStatus.exceedsFileLimit);
+      expect(attachment.originalByteLength, 5000001);
+      expect(await File(attachment.originalPath).readAsBytes(), bytes);
+      expect(attachment.originalPath.startsWith(local.path), isTrue);
+      expect(await File(attachment.sourcePath).exists(), isFalse);
+      expect(
+        workspace.notes.single.syncStatus,
+        NoteSyncStatus.attachmentBlocked,
+      );
+      await original.delete();
+      await workspace.close();
+      workspace = await NoteWorkspace.open(
+        localDirectory: local,
+        vaultDirectory: vault,
+      );
+      addTearDown(workspace.close);
+      expect(
+        workspace.attachments.single.status,
+        AttachmentStatus.exceedsFileLimit,
+      );
+      expect(
+        await File(workspace.attachments.single.originalPath).readAsBytes(),
+        bytes,
+      );
+      final markdown = await File(note.notePath).readAsString();
+      expect(
+        RegExp(r'^## ', multiLine: true).allMatches(markdown),
+        hasLength(3),
+      );
+      expect(markdown, contains('采访.m4a（仅本机保留，超过 Standard 单文件 5 MB）'));
+    },
+  );
+
+  test('attachment at the conservative limit publishes a complete source without claiming sync', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-filelimit-',
     );
-    final saved = await workspace.captureText(title: '原文仍在本机', text: '等 Obsidian 运行后同步。');
-    expect(saved.status, NoteStatus.localSaved);
-    expect(saved.syncStatus, NoteSyncStatus.unverified);
-    expect(workspace.taskStatusSync, TaskStatusSync.notConnected);
-    await workspace.close();
-    workspace = await NoteWorkspace.open(localDirectory: local, vaultDirectory: vault);
-    addTearDown(workspace.close);
-    expect(workspace.notes.single.syncStatus, NoteSyncStatus.unverified);
-    expect(await File(saved.notePath).exists(), isTrue);
-  });
-  test('local vault estimate never stands in for available account storage', () async {
-    final temporary = await Directory.systemTemp.createTemp('note-agent-capacity-');
     addTearDown(() => temporary.delete(recursive: true));
     final vault = await Directory('${temporary.path}/vault').create();
-    final large = await File('${vault.path}/existing.bin').open(mode: FileMode.write);
-    await large.truncate(1000000001);
-    await large.close();
+    final original = File('${temporary.path}/资料.pdf');
+    final bytes = List<int>.filled(5000000, 37);
+    await original.writeAsBytes(bytes);
+    var sequence = 0;
     final workspace = await NoteWorkspace.open(
       localDirectory: Directory('${temporary.path}/local'),
       vaultDirectory: vault,
+      createId: () => 'source-${sequence++}',
     );
     addTearDown(workspace.close);
-    final storage = await workspace.inspectSyncStorage();
-    expect(storage.localVaultBytes, 1000000001);
-    expect(storage.localVaultExceedsAccountLimit, isTrue);
-    expect(storage.remoteUsedBytes, isNull);
-    expect(storage.maximumFileBytes, 5000000);
-    expect(storage.accountStorageBytes, 1000000000);
+    final note = await workspace.captureText(title: '资料来源', text: '原文先于附件。');
+    final attachment = await workspace.attachFile(
+      noteId: note.id,
+      original: original,
+    );
+    expect(attachment.status, AttachmentStatus.localSaved);
+    expect(await File(attachment.sourcePath).readAsBytes(), bytes);
+    expect(await File(attachment.originalPath).readAsBytes(), bytes);
+    expect(workspace.notes.single.syncStatus, NoteSyncStatus.unverified);
+    final markdown = await File(note.notePath).readAsString();
+    expect(markdown.indexOf('[原始文字]'), lessThan(markdown.indexOf('[资料.pdf]')));
+    expect(markdown, contains('[资料.pdf](attachments/note-agent/source-1/'));
+    expect(RegExp(r'^## ', multiLine: true).allMatches(markdown), hasLength(3));
   });
 
-  test('oversized attachment keeps its complete original privately after restart', () async {
-    final temporary = await Directory.systemTemp.createTemp('note-agent-oversize-');
+  test('an explicit smaller copy publishes separately while the oversized original stays intact', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-derivative-',
+    );
     addTearDown(() => temporary.delete(recursive: true));
     final vault = await Directory('${temporary.path}/vault').create();
     final local = Directory('${temporary.path}/local');
-    final original = File('${temporary.path}/采访.m4a');
-    final bytes = List<int>.generate(5000001, (index) => index % 251);
-    await original.writeAsBytes(bytes);
+    final original = await File('${temporary.path}/完整采访.m4a')
+        .writeAsBytes(List<int>.filled(5000001, 71));
+    final derivative = await File('${temporary.path}/采访精简.m4a')
+        .writeAsBytes([1, 5, 9, 13]);
     var sequence = 0;
     var workspace = await NoteWorkspace.open(
       localDirectory: local,
       vaultDirectory: vault,
-      createId: () => 'oversize-${sequence++}',
+      createId: () => 'copy-${sequence++}',
     );
-    final note = await workspace.captureText(title: '采访来源', text: '保留完整采访。');
-    final attachment = await workspace.attachFile(noteId: note.id, original: original);
-    expect(attachment.status, AttachmentStatus.exceedsFileLimit);
-    expect(attachment.originalByteLength, 5000001);
-    expect(await File(attachment.originalPath).readAsBytes(), bytes);
-    expect(attachment.originalPath.startsWith(local.path), isTrue);
-    expect(await File(attachment.sourcePath).exists(), isFalse);
-    expect(workspace.notes.single.syncStatus, NoteSyncStatus.attachmentBlocked);
-    await original.delete();
+    final note = await workspace.captureText(title: '采访', text: '原音频继续保留。');
+    final blocked = await workspace.attachFile(
+      noteId: note.id,
+      original: original,
+    );
+    final selected = await workspace.chooseAttachmentCopy(
+      attachmentId: blocked.id,
+      copy: derivative,
+    );
+    expect(selected.status, AttachmentStatus.localSaved);
+    expect(selected.copyName, '采访精简.m4a');
+    expect(selected.hasLocalOnlyOriginal, isTrue);
+    expect(await File(selected.sourcePath).readAsBytes(), [1, 5, 9, 13]);
+    expect(await File(selected.originalPath).length(), 5000001);
+    expect(
+      await File(selected.originalPath).readAsBytes(),
+      List<int>.filled(5000001, 71),
+    );
     await workspace.close();
-    workspace = await NoteWorkspace.open(localDirectory: local, vaultDirectory: vault);
+    workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
     addTearDown(workspace.close);
-    expect(workspace.attachments.single.status, AttachmentStatus.exceedsFileLimit);
-    expect(await File(workspace.attachments.single.originalPath).readAsBytes(), bytes);
+    expect(workspace.attachments.single.copyName, '采访精简.m4a');
     final markdown = await File(note.notePath).readAsString();
-    expect(RegExp(r'^## ', multiLine: true).allMatches(markdown), hasLength(3));
-    expect(markdown, contains('采访.m4a（仅本机保留，超过 Standard 单文件 5 MB）'));
+    expect(markdown, contains('[采访精简.m4a（精简副本）]'));
+    expect(markdown, contains('完整采访.m4a（原件仅本机保留）'));
+    expect(workspace.notes.single.syncStatus, NoteSyncStatus.attachmentBlocked);
   });
 
+  test('choosing local retention persists and never publishes an oversized original', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-retain-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final vault = await Directory('${temporary.path}/vault').create();
+    final local = Directory('${temporary.path}/local');
+    final original = await File('${temporary.path}/完整资料.pdf')
+        .writeAsBytes(List<int>.filled(5000001, 19));
+    var sequence = 0;
+    var workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+      createId: () => 'retain-${sequence++}',
+    );
+    final note = await workspace.captureText(title: '资料', text: '无需为了同步破坏原件。');
+    final blocked = await workspace.attachFile(
+      noteId: note.id,
+      original: original,
+    );
+    final retained = await workspace.retainAttachmentLocally(blocked.id);
+    expect(retained.status, AttachmentStatus.retainedLocal);
+    expect(await File(retained.sourcePath).exists(), isFalse);
+    await workspace.close();
+    workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
+    addTearDown(workspace.close);
+    expect(workspace.attachments.single.status, AttachmentStatus.retainedLocal);
+    expect(await File(retained.originalPath).length(), 5000001);
+    expect(workspace.notes.single.syncStatus, NoteSyncStatus.attachmentBlocked);
+  });
+
+  test('interrupted source-link publication recovers once without replacing external content', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-source-recovery-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final vault = await Directory('${temporary.path}/vault').create();
+    final local = Directory('${temporary.path}/local');
+    final original = await File('${temporary.path}/资料.pdf')
+        .writeAsBytes([10, 20, 30]);
+    var sequence = 0;
+    var workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultStorage: _InterruptedSourceStorage(
+        Directory(await vault.resolveSymbolicLinks()),
+      ),
+      createId: () => 'recover-${sequence++}',
+    );
+    final note = await workspace.captureText(title: '恢复来源', text: '正文保持完整。');
+    await expectLater(
+      workspace.attachFile(noteId: note.id, original: original),
+      throwsStateError,
+    );
+    await workspace.close();
+    workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
+    addTearDown(workspace.close);
+    expect(workspace.attachments.single.status, AttachmentStatus.localSaved);
+    expect(await File(workspace.attachments.single.sourcePath).readAsBytes(), [
+      10,
+      20,
+      30,
+    ]);
+    final markdown = await File(note.notePath).readAsString();
+    expect('[资料.pdf]'.allMatches(markdown), hasLength(1));
+    expect(markdown, contains('正文保持完整。'));
+  });
+}
+
+class _InterruptedSourceStorage extends DirectoryVaultStorage {
+  _InterruptedSourceStorage(super.directory);
+
+  @override
+  Future<void> replaceText(
+    String relativePath,
+    String expectedText,
+    String text,
+    String operationId,
+  ) async {
+    await super.replaceText(relativePath, expectedText, text, operationId);
+    throw StateError(
+      'Simulated interruption after complete source-link publication',
+    );
+  }
 }

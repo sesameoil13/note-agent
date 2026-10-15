@@ -53,11 +53,12 @@ class WorkspaceNote {
   final List<WorkspaceAttachment> attachments;
 
   NoteSyncStatus get syncStatus {
-    if (attachments.any((item) => item.status != AttachmentStatus.localSaved)) {
+    if (attachments.any((item) => item.hasLocalOnlyOriginal)) {
       return NoteSyncStatus.attachmentBlocked;
     }
     return status == NoteStatus.localSaved
-        ? NoteSyncStatus.unverified : NoteSyncStatus.notPublished;
+        ? NoteSyncStatus.unverified
+        : NoteSyncStatus.notPublished;
   }
 }
 
@@ -78,8 +79,21 @@ class NoteWorkspace {
 
   List<WorkspaceAttachment> get attachments => _attachments.attachments;
 
-  Future<WorkspaceAttachment> attachFile({required String noteId, required File original}) =>
-      _attachments.attach(noteId, original);
+  Future<WorkspaceAttachment> attachFile({
+    required String noteId,
+    required File original,
+  }) => _attachments.attach(noteId, original);
+
+  Future<WorkspaceAttachment> chooseAttachmentCopy({
+    required String attachmentId,
+    required File copy,
+  }) => _attachments.chooseCopy(attachmentId, copy);
+
+  Future<WorkspaceAttachment> retainAttachmentLocally(String attachmentId) =>
+      _attachments.retainLocally(attachmentId);
+
+  Future<WorkspaceAttachment> retryAttachmentExport(String attachmentId) =>
+      _attachments.export(attachmentId);
 
   final Database _database;
   final VaultStorage vaultStorage;
@@ -157,7 +171,12 @@ class NoteWorkspace {
       clock ?? DateTime.now,
       createId ?? _randomId,
     );
-    workspace._attachments = WorkspaceAttachments(database, localDirectory, vaultStorage, workspace._createId);
+    workspace._attachments = WorkspaceAttachments(
+      database,
+      localDirectory,
+      vaultStorage,
+      workspace._createId,
+    );
     workspace._recordings = WorkspaceRecordings(
       database,
       localDirectory,
@@ -172,6 +191,7 @@ class NoteWorkspace {
         await workspace.retryNoteExport(note.id);
       }
     }
+    await workspace._attachments.recover();
     return workspace;
   }
 
@@ -287,7 +307,9 @@ class NoteWorkspace {
     sourcePath: row['source_path'] as String,
     status: NoteStatus.values.byName(row['status'] as String),
     error: row['error'] as String?,
-    attachments: List.unmodifiable(_attachments.attachments.where((item) => item.noteId == row['id'])),
+    attachments: List.unmodifiable(
+      _attachments.attachments.where((item) => item.noteId == row['id']),
+    ),
   );
 
   String _markdown(WorkspaceNote note) =>
