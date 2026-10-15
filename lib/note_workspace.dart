@@ -509,6 +509,7 @@ class NoteWorkspace {
     return notes.firstWhere((note) => note.id == id);
   }
 
+  bool get recordingAvailable => _recordings.audio != null;
   RecordingState get recording => _recordings.state;
   PlaybackState get playback => _recordings.playback;
   List<WorkspaceRecording> get recordings => _recordings.recordings;

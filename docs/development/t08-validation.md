@@ -17,8 +17,16 @@ Android/Windows microphone adapters belong to their separate tickets.
 - Additional system-boundary guards cover denied permission with retry, vault
   failure/retry after restart, interrupted source publication with restart, and a
   5,000,001-byte original staying local without a false vault-copy claim.
-- Full host suite: 14 tests pass. `flutter analyze`: no issues.
-- macOS debug static build includes the native AVFoundation bridge and passes.
+- After merging T04 source ancestor `7d4a529`, the combined host suite has 28
+  passing tests and `flutter analyze` reports no issues. This includes the public
+  recorder UI sequence start → pause at 15 seconds → resume → save → local play,
+  plus late meter replies and meter failure keeping explicit Stop available.
+- The live Mac workspace initially opens the recorder page, with a prominent
+  recording entry and convenient text capture. Entering the page does not start
+  the microphone; only the explicit Start action requests permission.
+- Android SAF text behavior remains covered by its existing host regression.
+  Audio controls are enabled only for the supported Mac directory workspace.
+- macOS debug and release static builds include the native AVFoundation bridge and pass.
   Building does not establish microphone permission, real input or audible output.
 
 ## Encoding verification

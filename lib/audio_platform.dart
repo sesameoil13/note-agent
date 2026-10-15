@@ -34,3 +34,11 @@ class AudioPlaybackSnapshot {
   final bool isPlaying;
   final Duration position;
 }
+
+/// User-facing system failure, without platform-channel implementation details.
+class AudioPlatformFailure implements Exception {
+  const AudioPlatformFailure(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}

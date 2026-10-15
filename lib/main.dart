@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'note_workspace.dart';
+import 'method_channel_audio.dart';
+import 'recording_panel.dart';
 import 'workspace_platform.dart';
 
 void main() => runApp(const NoteAgentApp());
@@ -103,6 +107,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   bool _loading = false;
   bool _saving = false;
   bool _composing = true;
+  bool _recordingPage = false;
 
   @override
   void initState() {
@@ -135,6 +140,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   }
 
   Future<void> _chooseVault() async {
+    if (_workspace?.recording.isActive ?? false) {
+      setState(() => _error = '请先结束并保存当前录音，再切换笔记库。');
+      return;
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -157,6 +166,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       localDirectory: location.localDirectory,
       vaultDirectory: location.vaultDirectory,
       vaultStorage: location.vaultStorage,
+      audioPlatform: Platform.isMacOS && location.vaultDirectory != null
+          ? MethodChannelAudioPlatform()
+          : null,
     );
     if (!mounted) {
       await workspace.close();
@@ -173,6 +185,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     _editingNoteId = null;
     _search.clear();
     _composing = true;
+    _recordingPage = workspace.recordingAvailable;
     if (old != widget.initialWorkspace) await old?.close();
   }
 
@@ -300,9 +313,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (wide) _sidebar(),
-                          if (constraints.maxWidth >= 720)
+                          if (!_recordingPage && constraints.maxWidth >= 720)
                             SizedBox(width: 280, child: _noteList()),
-                          Expanded(child: _composing ? _composer() : _detail()),
+                          Expanded(
+                            child: _recordingPage
+                                ? RecordingPanel(
+                                    key: ValueKey(_workspace),
+                                    workspace: _workspace!,
+                                    onStateChanged: () {
+                                      if (mounted) setState(() {});
+                                    },
+                                  )
+                                : _composing
+                                ? _composer()
+                                : _detail(),
+                          ),
                         ],
                       ),
               ),
@@ -342,6 +367,25 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         ],
         const Spacer(),
         if (_workspace != null) ...[
+          if (_workspace!.recordingAvailable) ...[
+            if (wide)
+              OutlinedButton.icon(
+                onPressed: _saving
+                    ? null
+                    : () => setState(() => _recordingPage = true),
+                icon: const Icon(Icons.mic, size: 16),
+                label: const Text('录音'),
+              )
+            else
+              IconButton(
+                onPressed: _saving
+                    ? null
+                    : () => setState(() => _recordingPage = true),
+                tooltip: '录音',
+                icon: const Icon(Icons.mic),
+              ),
+            const SizedBox(width: 8),
+          ],
           if (!wide)
             IconButton(
               onPressed: _showRecent,
@@ -354,6 +398,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                   ? null
                   : () => setState(() {
                       _composing = true;
+                      _recordingPage = false;
                       _selectedId = null;
                       _error = null;
                     }),
@@ -366,6 +411,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                   ? null
                   : () => setState(() {
                       _composing = true;
+                      _recordingPage = false;
                       _selectedId = null;
                       _error = null;
                     }),
@@ -395,11 +441,28 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         _navItem(
           '收集文字',
           Icons.add,
-          _composing,
-          () => setState(() => _composing = true),
+          _composing && !_recordingPage,
+          () => setState(() {
+            _composing = true;
+            _recordingPage = false;
+          }),
         ),
         const SizedBox(height: 8),
-        _navItem('最近记录', Icons.notes, !_composing, _showRecent),
+        _navItem(
+          '最近记录',
+          Icons.notes,
+          !_composing && !_recordingPage,
+          _showRecent,
+        ),
+        if (_workspace!.recordingAvailable) ...[
+          const SizedBox(height: 8),
+          _navItem(
+            '收集录音',
+            Icons.mic,
+            _recordingPage,
+            () => setState(() => _recordingPage = true),
+          ),
+        ],
         const Spacer(),
         const Text('当前笔记库', style: TextStyle(color: ash, fontSize: 12)),
         const SizedBox(height: 8),
@@ -459,6 +522,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     } else {
       setState(() {
         _composing = false;
+        _recordingPage = false;
         _selectedId ??= notes.first.id;
       });
     }
@@ -531,7 +595,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                     itemCount: notes.length,
                     itemBuilder: (context, index) {
                       final note = notes[index];
-                      final selected = !_composing && note.id == _selectedId;
+                      final selected =
+                          !_recordingPage &&
+                          !_composing &&
+                          note.id == _selectedId;
                       return Container(
                         margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                         decoration: BoxDecoration(
@@ -548,6 +615,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                                   setState(() {
                                     _selectedId = note.id;
                                     _composing = false;
+                                    _recordingPage = false;
                                     _error = null;
                                   });
                                   if (MediaQuery.sizeOf(this.context).width <
@@ -890,8 +958,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
             child: const Text('选择笔记库'),
           ),
         if (MediaQuery.sizeOf(context).width >= 600)
-          const Text(
-            'TEXT / MARKDOWN',
+          Text(
+            _recordingPage ? 'AUDIO / AAC' : 'TEXT / MARKDOWN',
             style: TextStyle(fontSize: 12, color: ash, fontFamily: 'monospace'),
           ),
       ],

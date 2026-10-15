@@ -226,8 +226,9 @@ class WorkspaceRecordings {
     final recordingId = state.recordingId;
     try {
       final snapshot = await _audio.recordingSnapshot();
-      if (_stopping || !state.isActive || state.recordingId != recordingId)
+      if (_stopping || !state.isActive || state.recordingId != recordingId) {
         return;
+      }
       final levels = [
         ...state.levels,
         snapshot.phase == AudioCapturePhase.recording
