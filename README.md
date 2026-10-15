@@ -12,6 +12,7 @@ Use Flutter 3.47.7 (Dart 3.13.5) or a compatible newer stable SDK. A native macO
 flutter pub get
 flutter test
 flutter analyze
+flutter test integration_test/native_clipboard_test.dart -d macos
 flutter run -d macos
 ```
 
