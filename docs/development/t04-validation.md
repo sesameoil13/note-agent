@@ -12,13 +12,14 @@ Rename keeps the stable record identity and original source attachment. It publi
 
 Automated evidence on macOS (headless; temporary vaults, real files, public workspace actions; no private SQL assertions):
 
-- `flutter test`: 17 tests passed after merging T02/T03 after T04 changes, including the existing Mac, Android-channel and phone permission-recovery tests.
+- `flutter test`: 18 tests passed after merging T02/T03 after T04 changes, including the existing Mac, Android-channel and phone permission-recovery tests.
 - `flutter analyze`: no issues.
 - Search by Chinese title/original, Latin case folding, missing results and restart order.
 - Semantic alternatives, persisted numbering, existing-file preservation, directory/case/symlink collisions, portable title handling and simultaneous duplicate captures.
 - Chinese rename with inbound wiki/Markdown/encoded/nested links and reference definitions with optional titles, preserved source, same-title no-op and restart retrieval.
 - Simulated interruption after a real inbound-file update: both targets remain available before restart; restart finishes the rename without duplicate records or lost source.
 - Unavailable vault lookup: original plus semantic request remain durable; access restoration and retry select the semantic candidate.
+- Close lifecycle: a gated real publication keeps close pending; close rejects new captures, drains the accepted capture, and reopening retrieves one complete note and source.
 - Combined phone behavior: rejected permission and cancelled reauthorization retain the draft; restoring the same grant retries one durable capture.
 - Widget flow: keyword search → detail → original → source-file platform handoff → duplicate Chinese title edit, with no duplicate dialog and no summary/properties.
 

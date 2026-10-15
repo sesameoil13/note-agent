@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -232,6 +233,54 @@ void main() {
     }
   });
 
+  test(
+    'close drains an accepted capture before reopening the saved original',
+    () async {
+      await workspace.close();
+      final storage = _GatedPublicationStorage(vault);
+      workspace = await NoteWorkspace.open(
+        localDirectory: local,
+        vaultStorage: storage,
+      );
+      final capture = workspace.captureText(
+        title: '关闭时保存',
+        text: '排队中的原文不能丢失。',
+      );
+      await storage.entered.future;
+      var closeCompleted = false;
+      final closing = workspace.close().then((_) => closeCompleted = true);
+      try {
+        await Future<void>.delayed(Duration.zero);
+        expect(closeCompleted, isFalse);
+        await expectLater(
+          workspace.captureText(title: '关闭后不再接收', text: '不能另建一条记录。'),
+          throwsStateError,
+        );
+      } finally {
+        storage.release.complete();
+        try {
+          await capture;
+        } catch (_) {
+          /* Reopen below also cleans up a failed regression case. */
+        }
+        await closing;
+        workspace = await NoteWorkspace.open(
+          localDirectory: local,
+          vaultDirectory: vault,
+        );
+      }
+      final saved = await capture;
+      expect(workspace.notes.single.id, saved.id);
+      expect(workspace.notes.single.status, NoteStatus.localSaved);
+      expect(workspace.notes.single.text, '排队中的原文不能丢失。');
+      expect(await File(saved.sourcePath).readAsString(), '排队中的原文不能丢失。');
+      expect(
+        await File(saved.notePath).readAsString(),
+        contains('排队中的原文不能丢失。'),
+      );
+    },
+  );
+
   test('renaming maintains Markdown reference definitions and their optional titles', () async {
     final note = await workspace.captureText(title: '产品观察', text: '保持原始来源。');
     final index = File('${vault.path}/阅读索引.md');
@@ -314,4 +363,23 @@ class _UnavailableTitleStorage extends DirectoryVaultStorage {
   @override
   Future<List<String>> listNotePaths() async =>
       throw const FileSystemException('Vault permission unavailable');
+}
+
+class _GatedPublicationStorage extends DirectoryVaultStorage {
+  _GatedPublicationStorage(super.directory);
+  final entered = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<void> publishText(
+    String relativePath,
+    String text,
+    String operationId,
+  ) async {
+    if (relativePath.endsWith('.md')) {
+      entered.complete();
+      await release.future;
+    }
+    await super.publishText(relativePath, text, operationId);
+  }
 }

@@ -74,6 +74,9 @@ class NoteWorkspace {
   final DateTime Function() _clock;
   final String Function() _createId;
   Future<void> _mutations = Future.value();
+  int _pendingMutations = 0;
+  bool _closing = false;
+  Future<void>? _closeFuture;
 
   static Future<NoteWorkspace> open({
     required Directory localDirectory,
@@ -282,7 +285,17 @@ class NoteWorkspace {
   }
 
   Future<T> _mutate<T>(Future<T> Function() action) {
-    final result = _mutations.then((_) => action());
+    if (_closing) {
+      return Future<T>.error(StateError('工作区正在关闭，请重新打开后再操作。'));
+    }
+    _pendingMutations++;
+    final result = _mutations.then((_) async {
+      try {
+        return await action();
+      } finally {
+        _pendingMutations--;
+      }
+    });
     _mutations = result.then<void>(
       (_) {},
       onError: (Object _, StackTrace _) {},
@@ -483,7 +496,17 @@ class NoteWorkspace {
     return notes.firstWhere((note) => note.id == id);
   }
 
-  Future<void> close() async => _database.close();
+  /// Reject new mutations and let every accepted file operation settle before
+  /// releasing SQLite. An idle workspace has no work to drain.
+  Future<void> close() {
+    if (_closeFuture != null) return _closeFuture!;
+    _closing = true;
+    if (_pendingMutations == 0) {
+      _database.close();
+      return _closeFuture = Future<void>.value();
+    }
+    return _closeFuture = _mutations.then((_) => _database.close());
+  }
 
   WorkspaceNote _noteFromRow(Row row) => WorkspaceNote(
     id: row['id'] as String,
