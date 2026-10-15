@@ -6,11 +6,20 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'note_files.dart';
 import 'vault_storage.dart';
+import 'sync_policy.dart';
+export 'sync_policy.dart';
 export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus { exportPending, localSaved, exportFailed }
+
+/// Official Sync provides no acknowledgement to this app. Local publication
+/// can only establish eligibility, never arrival on another device.
+enum NoteSyncStatus { notPublished, unverified, attachmentBlocked }
+
+/// The lightweight task-status connection is independent of note-file Sync.
+enum TaskStatusSync { notConnected }
 
 /// A collected note, exposed without storage or processing implementation details.
 class WorkspaceNote {
@@ -35,6 +44,10 @@ class WorkspaceNote {
   final String sourcePath;
   final NoteStatus status;
   final String? error;
+
+  NoteSyncStatus get syncStatus => status == NoteStatus.localSaved
+      ? NoteSyncStatus.unverified
+      : NoteSyncStatus.notPublished;
 }
 
 /// The public business boundary shared by the app and behavioral tests.
@@ -51,6 +64,27 @@ class NoteWorkspace {
 
   final Database _database;
   final VaultStorage vaultStorage;
+
+  TaskStatusSync get taskStatusSync => TaskStatusSync.notConnected;
+
+  Future<SyncStorageOverview> inspectSyncStorage() async {
+    final storage = vaultStorage;
+    if (storage is! DirectoryVaultStorage) {
+      return const SyncStorageOverview(localVaultBytes: null);
+    }
+    var bytes = 0;
+    try {
+      await for (final entity in storage.directory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is File) bytes += await entity.length();
+      }
+      return SyncStorageOverview(localVaultBytes: bytes);
+    } on FileSystemException {
+      return const SyncStorageOverview(localVaultBytes: null);
+    }
+  }
 
   /// Compatibility for desktop callers; SAF references are not local paths.
   Directory get vaultDirectory {
