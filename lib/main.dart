@@ -93,6 +93,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   NoteWorkspace? _workspace;
   String? _selectedId;
   String? _error;
+  String? _deviceInfo;
+  String? _pendingCaptureId;
+  String? _pendingTitle;
+  String? _pendingText;
   bool _loading = false;
   bool _saving = false;
   bool _composing = true;
@@ -117,7 +121,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     setState(() => _loading = true);
     try {
       final location = await _platform.restoreLocation();
-      if (location.vaultDirectory != null) await _open(location);
+      _deviceInfo = location.deviceInfo;
+      if (location.hasVault) await _open(location);
     } catch (error) {
       _error = _errorMessage(error);
     }
@@ -131,7 +136,11 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     });
     try {
       final location = await _platform.chooseLocation();
-      if (location != null) await _open(location);
+      if (location != null) {
+        await _open(location);
+      } else {
+        _error = '未更改笔记库，输入已保留。';
+      }
     } catch (error) {
       _error = _errorMessage(error);
     }
@@ -141,14 +150,20 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   Future<void> _open(WorkspaceLocation location) async {
     final workspace = await NoteWorkspace.open(
       localDirectory: location.localDirectory,
-      vaultDirectory: location.vaultDirectory!,
+      vaultDirectory: location.vaultDirectory,
+      vaultStorage: location.vaultStorage,
     );
     if (!mounted) {
       await workspace.close();
       return;
     }
     final old = _workspace;
+    if (old?.vaultStorage.identity != workspace.vaultStorage.identity) {
+      _pendingCaptureId = null;
+    }
     _workspace = workspace;
+    _deviceInfo = location.deviceInfo;
+    _error = location.authorizationError;
     _selectedId = null;
     _composing = true;
     if (old != widget.initialWorkspace) await old?.close();
@@ -160,16 +175,28 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       _error = null;
     });
     try {
-      final note = await _workspace!.captureText(
-        title: _title.text,
-        text: _text.text,
-      );
+      final pending =
+          _pendingCaptureId != null &&
+          _pendingTitle == _title.text &&
+          _pendingText == _text.text &&
+          _workspace!.notes.any((note) => note.id == _pendingCaptureId);
+      final note = pending
+          ? await _workspace!.retryNoteExport(_pendingCaptureId!)
+          : await _workspace!.captureText(title: _title.text, text: _text.text);
       if (!mounted) return;
       setState(() {
         _selectedId = note.id;
-        _composing = false;
-        _title.clear();
-        _text.clear();
+        if (note.status == NoteStatus.localSaved) {
+          _composing = false;
+          _pendingCaptureId = null;
+          _title.clear();
+          _text.clear();
+        } else {
+          _pendingCaptureId = note.id;
+          _pendingTitle = _title.text;
+          _pendingText = _text.text;
+          _error = note.error ?? '原文已保留，笔记库尚未写入。请重新授权后重试。';
+        }
       });
     } catch (error) {
       if (mounted) setState(() => _error = _errorMessage(error));
@@ -211,6 +238,17 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           return Column(
             children: [
               _header(wide),
+              if (_deviceInfo != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Text(
+                    _deviceInfo!,
+                    style: const TextStyle(color: ash, fontSize: 12),
+                  ),
+                ),
               if (_error != null)
                 Container(
                   width: double.infinity,
@@ -244,7 +282,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   );
 
   Widget _header(bool wide) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+    padding: EdgeInsets.symmetric(horizontal: wide ? 24 : 16, vertical: 16),
     decoration: const BoxDecoration(
       border: Border(bottom: BorderSide(color: ash)),
     ),
@@ -272,17 +310,34 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         const Spacer(),
         if (_workspace != null) ...[
           if (!wide)
-            TextButton(onPressed: _showRecent, child: const Text('最近记录')),
-          OutlinedButton(
-            onPressed: _saving
-                ? null
-                : () => setState(() {
-                    _composing = true;
-                    _selectedId = null;
-                    _error = null;
-                  }),
-            child: const Text('新建文字'),
-          ),
+            IconButton(
+              onPressed: _showRecent,
+              tooltip: '最近记录',
+              icon: const Icon(Icons.notes),
+            ),
+          if (!wide)
+            IconButton(
+              onPressed: _saving
+                  ? null
+                  : () => setState(() {
+                      _composing = true;
+                      _selectedId = null;
+                      _error = null;
+                    }),
+              tooltip: '新建文字',
+              icon: const Icon(Icons.add),
+            ),
+          if (wide)
+            OutlinedButton(
+              onPressed: _saving
+                  ? null
+                  : () => setState(() {
+                      _composing = true;
+                      _selectedId = null;
+                      _error = null;
+                    }),
+              child: const Text('新建文字'),
+            ),
         ],
       ],
     ),
@@ -316,7 +371,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         const Text('当前笔记库', style: TextStyle(color: ash, fontSize: 12)),
         const SizedBox(height: 8),
         Text(
-          _workspace!.vaultDirectory.path.split('/').last,
+          _workspace!.vaultStorage.displayName,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -724,10 +779,11 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
             onPressed: _saving || _loading ? null : _chooseVault,
             child: const Text('选择笔记库'),
           ),
-        const Text(
-          'TEXT / MARKDOWN',
-          style: TextStyle(fontSize: 12, color: ash, fontFamily: 'monospace'),
-        ),
+        if (MediaQuery.sizeOf(context).width >= 600)
+          const Text(
+            'TEXT / MARKDOWN',
+            style: TextStyle(fontSize: 12, color: ash, fontFamily: 'monospace'),
+          ),
       ],
     ),
   );
