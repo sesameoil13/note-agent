@@ -1,0 +1,734 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'note_workspace.dart';
+import 'workspace_platform.dart';
+
+void main() => runApp(const NoteAgentApp());
+
+const graphite = Color(0xFF101215);
+const slate = Color(0xFF1C2024);
+const bone = Color(0xFFEDE7DB);
+const ash = Color(0xFF767C82);
+const acid = Color(0xFFCDFF3A);
+const oxide = Color(0xFFFF4A18);
+
+class NoteAgentApp extends StatelessWidget {
+  const NoteAgentApp({super.key, this.initialWorkspace});
+
+  final NoteWorkspace? initialWorkspace;
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    title: '笔记工作区',
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: graphite,
+      colorScheme: const ColorScheme.dark(
+        primary: acid,
+        onPrimary: graphite,
+        surface: slate,
+        onSurface: bone,
+        error: oxide,
+        onError: graphite,
+      ),
+      textTheme: ThemeData.dark().textTheme.apply(
+        bodyColor: bone,
+        displayColor: bone,
+      ),
+      inputDecorationTheme: const InputDecorationTheme(
+        filled: true,
+        fillColor: graphite,
+        labelStyle: TextStyle(color: ash),
+        hintStyle: TextStyle(color: ash),
+        contentPadding: EdgeInsets.all(16),
+        border: OutlineInputBorder(borderRadius: BorderRadius.zero),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.zero,
+          borderSide: BorderSide(color: ash),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.zero,
+          borderSide: BorderSide(color: acid, width: 2),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          shape: const RoundedRectangleBorder(),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: bone,
+          side: const BorderSide(color: ash),
+          shape: const RoundedRectangleBorder(),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        ),
+      ),
+      dividerColor: ash,
+      textSelectionTheme: const TextSelectionThemeData(
+        cursorColor: acid,
+        selectionColor: Color(0x554C5E18),
+      ),
+      dialogTheme: const DialogThemeData(shape: RoundedRectangleBorder()),
+    ),
+    home: _WorkspaceScreen(initialWorkspace: initialWorkspace),
+  );
+}
+
+class _WorkspaceScreen extends StatefulWidget {
+  const _WorkspaceScreen({this.initialWorkspace});
+  final NoteWorkspace? initialWorkspace;
+
+  @override
+  State<_WorkspaceScreen> createState() => _WorkspaceScreenState();
+}
+
+class _WorkspaceScreenState extends State<_WorkspaceScreen> {
+  final _platform = WorkspacePlatform();
+  final _title = TextEditingController();
+  final _text = TextEditingController();
+  NoteWorkspace? _workspace;
+  String? _selectedId;
+  String? _error;
+  bool _loading = false;
+  bool _saving = false;
+  bool _composing = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _workspace = widget.initialWorkspace;
+    if (_workspace == null) _restore();
+  }
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _text.dispose();
+    // The injected workspace belongs to its caller (including behavioral tests).
+    if (_workspace != widget.initialWorkspace) _workspace?.close();
+    super.dispose();
+  }
+
+  Future<void> _restore() async {
+    setState(() => _loading = true);
+    try {
+      final location = await _platform.restoreLocation();
+      if (location.vaultDirectory != null) await _open(location);
+    } catch (error) {
+      _error = _errorMessage(error);
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _chooseVault() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final location = await _platform.chooseLocation();
+      if (location != null) await _open(location);
+    } catch (error) {
+      _error = _errorMessage(error);
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _open(WorkspaceLocation location) async {
+    final workspace = await NoteWorkspace.open(
+      localDirectory: location.localDirectory,
+      vaultDirectory: location.vaultDirectory!,
+    );
+    if (!mounted) {
+      await workspace.close();
+      return;
+    }
+    final old = _workspace;
+    _workspace = workspace;
+    _selectedId = null;
+    _composing = true;
+    if (old != widget.initialWorkspace) await old?.close();
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final note = await _workspace!.captureText(
+        title: _title.text,
+        text: _text.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _selectedId = note.id;
+        _composing = false;
+        _title.clear();
+        _text.clear();
+      });
+    } catch (error) {
+      if (mounted) setState(() => _error = _errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _retry(WorkspaceNote note) async {
+    setState(() => _saving = true);
+    try {
+      await _workspace!.retryNoteExport(note.id);
+    } catch (error) {
+      _error = _errorMessage(error);
+    }
+    if (mounted) setState(() => _saving = false);
+  }
+
+  Future<void> _openInObsidian(WorkspaceNote note) async {
+    try {
+      await _platform.openInObsidian(note.notePath);
+    } catch (error) {
+      if (mounted) setState(() => _error = _errorMessage(error));
+    }
+  }
+
+  String _errorMessage(Object error) {
+    if (error is PlatformException) return error.message ?? '系统操作未完成，请重试。';
+    if (error is ArgumentError) return error.message.toString();
+    return '操作未完成，输入已保留。$error';
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: SafeArea(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 960;
+          return Column(
+            children: [
+              _header(wide),
+              if (_error != null)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    border: Border(bottom: BorderSide(color: oxide, width: 2)),
+                  ),
+                  child: Text(_error!, style: const TextStyle(color: bone)),
+                ),
+              Expanded(
+                child: _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : _workspace == null
+                    ? _setup()
+                    : Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (wide) _sidebar(),
+                          if (constraints.maxWidth >= 720)
+                            SizedBox(width: 280, child: _noteList()),
+                          Expanded(child: _composing ? _composer() : _detail()),
+                        ],
+                      ),
+              ),
+              _footer(),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+
+  Widget _header(bool wide) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: ash)),
+    ),
+    child: Row(
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          color: acid,
+          child: const Icon(Icons.notes, size: 16, color: graphite),
+        ),
+        const SizedBox(width: 16),
+        const Text(
+          'RIGID BODY',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.4,
+          ),
+        ),
+        if (wide) ...[
+          const SizedBox(width: 24),
+          const Text('笔记工作区', style: TextStyle(color: ash)),
+        ],
+        const Spacer(),
+        if (_workspace != null) ...[
+          if (!wide)
+            TextButton(onPressed: _showRecent, child: const Text('最近记录')),
+          OutlinedButton(
+            onPressed: _saving
+                ? null
+                : () => setState(() {
+                    _composing = true;
+                    _selectedId = null;
+                    _error = null;
+                  }),
+            child: const Text('新建文字'),
+          ),
+        ],
+      ],
+    ),
+  );
+
+  Widget _sidebar() => Container(
+    width: 192,
+    decoration: const BoxDecoration(
+      border: Border(right: BorderSide(color: ash)),
+    ),
+    padding: const EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 8, bottom: 24),
+          child: Text(
+            'WORKSPACE / 01',
+            style: TextStyle(fontSize: 12, color: ash, fontFamily: 'monospace'),
+          ),
+        ),
+        _navItem(
+          '收集文字',
+          Icons.add,
+          _composing,
+          () => setState(() => _composing = true),
+        ),
+        const SizedBox(height: 8),
+        _navItem('最近记录', Icons.notes, !_composing, _showRecent),
+        const Spacer(),
+        const Text('当前笔记库', style: TextStyle(color: ash, fontSize: 12)),
+        const SizedBox(height: 8),
+        Text(
+          _workspace!.vaultDirectory.path.split('/').last,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 16),
+        OutlinedButton(
+          onPressed: _saving ? null : _chooseVault,
+          child: const Text('选择笔记库'),
+        ),
+      ],
+    ),
+  );
+
+  Widget _navItem(
+    String label,
+    IconData icon,
+    bool selected,
+    VoidCallback onTap,
+  ) => Material(
+    color: selected ? acid : slate,
+    child: InkWell(
+      onTap: _saving ? null : onTap,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: selected ? graphite : bone),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? graphite : bone,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  void _showRecent() {
+    final notes = _workspace?.notes ?? [];
+    if (notes.isEmpty) return;
+    if (MediaQuery.sizeOf(context).width < 720) {
+      showModalBottomSheet<void>(
+        context: context,
+        builder: (context) => _noteList(),
+      );
+    } else {
+      setState(() {
+        _composing = false;
+        _selectedId ??= notes.first.id;
+      });
+    }
+  }
+
+  Widget _noteList() {
+    final notes = _workspace!.notes;
+    return Container(
+      decoration: const BoxDecoration(
+        color: slate,
+        border: Border(right: BorderSide(color: ash)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Row(
+              children: [
+                const Text(
+                  '最近记录',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Text(
+                  notes.length.toString().padLeft(2, '0'),
+                  style: const TextStyle(color: ash, fontFamily: 'monospace'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: notes.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      '还没有记录。\n收集的文字会出现在这里。',
+                      style: TextStyle(color: ash, height: 1.7),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: notes.length,
+                    itemBuilder: (context, index) {
+                      final note = notes[index];
+                      final selected = !_composing && note.id == _selectedId;
+                      return Container(
+                        margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                        decoration: BoxDecoration(
+                          color: graphite,
+                          border: Border.all(
+                            color: selected ? acid : ash,
+                            width: selected ? 2 : 1,
+                          ),
+                        ),
+                        child: InkWell(
+                          onTap: _saving
+                              ? null
+                              : () {
+                                  setState(() {
+                                    _selectedId = note.id;
+                                    _composing = false;
+                                    _error = null;
+                                  });
+                                  if (MediaQuery.sizeOf(this.context).width <
+                                      720) {
+                                    Navigator.pop(context);
+                                  }
+                                },
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  note.title,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  note.text.replaceAll('\n', ' '),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: ash,
+                                    height: 1.6,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  note.status == NoteStatus.localSaved
+                                      ? '本机已保存'
+                                      : '原文已保留 · 待写入',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: ash,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _composer() => SingleChildScrollView(
+    padding: const EdgeInsets.all(32),
+    child: Align(
+      alignment: Alignment.topLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 800),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '收集文字',
+              style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '先留在本机，再成为自己的笔记。',
+              style: TextStyle(color: ash, height: 1.5),
+            ),
+            const SizedBox(height: 32),
+            TextField(
+              controller: _title,
+              enabled: !_saving,
+              decoration: const InputDecoration(
+                labelText: '标题',
+                hintText: '用一句简短的话概括内容',
+              ),
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 24),
+            TextField(
+              controller: _text,
+              enabled: !_saving,
+              minLines: 10,
+              maxLines: null,
+              keyboardType: TextInputType.multiline,
+              decoration: const InputDecoration(
+                labelText: '正文',
+                hintText: '输入或粘贴想保留的文字……',
+                alignLabelWithHint: true,
+              ),
+              style: const TextStyle(fontSize: 16, height: 1.5),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '保留完整原文 · 保存为普通笔记',
+                    style: TextStyle(color: ash, fontSize: 12),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                FilledButton(
+                  onPressed: _saving ? null : _save,
+                  child: Text(_saving ? '正在保存…' : '保存文字'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _detail() {
+    final notes = _workspace!.notes;
+    if (notes.isEmpty) return _composer();
+    final note = notes.firstWhere(
+      (item) => item.id == _selectedId,
+      orElse: () => notes.first,
+    );
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(32),
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 800),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text('普通笔记', style: TextStyle(color: ash, fontSize: 12)),
+              const SizedBox(height: 8),
+              SelectableText(
+                note.title,
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      note.status == NoteStatus.localSaved
+                          ? '本机已保存'
+                          : '原文已保留，笔记库写入失败',
+                      style: TextStyle(
+                        color: note.status == NoteStatus.localSaved
+                            ? ash
+                            : oxide,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  if (note.status == NoteStatus.localSaved)
+                    OutlinedButton(
+                      onPressed: () => _openInObsidian(note),
+                      child: const Text('在 Obsidian 打开'),
+                    ),
+                ],
+              ),
+              if (note.status != NoteStatus.localSaved) ...[
+                const SizedBox(height: 16),
+                Text(
+                  note.error ?? '正在写入笔记库。',
+                  style: const TextStyle(color: ash),
+                ),
+                const SizedBox(height: 16),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : () => _retry(note),
+                    child: const Text('重试写入'),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 32),
+              _sectionTitle('正文'),
+              const SizedBox(height: 16),
+              SelectableText(
+                note.text.trimRight(),
+                style: const TextStyle(fontSize: 16, height: 1.5),
+              ),
+              const SizedBox(height: 32),
+              _sectionTitle('关联'),
+              const SizedBox(height: 16),
+              const Text('暂无关联', style: TextStyle(color: ash)),
+              const SizedBox(height: 32),
+              _sectionTitle('来源'),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showOriginal(note),
+                  icon: const Icon(Icons.description_outlined, size: 16),
+                  label: const Text('原始文字'),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '记录：${formatNoteTime(note.createdAt)} · 修改：${formatNoteTime(note.modifiedAt)}',
+                style: const TextStyle(
+                  color: ash,
+                  fontSize: 12,
+                  height: 1.7,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String title) => Row(
+    children: [
+      Container(width: 8, height: 16, color: ash),
+      const SizedBox(width: 8),
+      Text(
+        title,
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+      ),
+    ],
+  );
+
+  void _showOriginal(WorkspaceNote note) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('收集的原文'),
+      content: SizedBox(
+        width: 640,
+        child: SingleChildScrollView(
+          child: SelectableText(
+            note.text,
+            style: const TextStyle(fontSize: 16, height: 1.5),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('关闭'),
+        ),
+      ],
+    ),
+  );
+
+  Widget _setup() => Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 560),
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '给想法一个落点。',
+              style: TextStyle(fontSize: 40, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              '选择一个新的测试笔记库，开始收集文字。\n原文先保存在本机，再写入 Markdown 笔记。',
+              style: TextStyle(fontSize: 16, height: 1.7, color: ash),
+            ),
+            const SizedBox(height: 32),
+            FilledButton(onPressed: _chooseVault, child: const Text('选择测试笔记库')),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  Widget _footer() => Container(
+    decoration: const BoxDecoration(
+      border: Border(top: BorderSide(color: ash)),
+    ),
+    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+    child: Row(
+      children: [
+        const Icon(Icons.circle, size: 8, color: ash),
+        const SizedBox(width: 8),
+        const Text('本机存储', style: TextStyle(fontSize: 12, color: ash)),
+        const Spacer(),
+        if (_workspace != null && MediaQuery.sizeOf(context).width < 960)
+          TextButton(
+            onPressed: _saving || _loading ? null : _chooseVault,
+            child: const Text('选择笔记库'),
+          ),
+        const Text(
+          'TEXT / MARKDOWN',
+          style: TextStyle(fontSize: 12, color: ash, fontFamily: 'monospace'),
+        ),
+      ],
+    ),
+  );
+}
