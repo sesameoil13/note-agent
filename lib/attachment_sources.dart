@@ -98,7 +98,9 @@ class _AttachmentSourcesState extends State<AttachmentSources> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('${sourceSize(item.originalByteLength)} · ${_status(item)}'),
+              Text(
+                '${sourceSize(item.originalByteLength)}（${item.originalByteLength} 字节） · ${_status(item)}',
+              ),
               const SizedBox(height: 16),
               const Text('可先在音频或文档工具中制作有效的压缩副本，再在这里选择。原件会继续保留；请核对副本是否完整。'),
               const SizedBox(height: 16),
