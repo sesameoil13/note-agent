@@ -3,7 +3,9 @@ import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
   private var workspaceChannel: FlutterMethodChannel?
+  private var nativeAudio: NativeAudio?
   private var scopedVaultURL: URL?
+  private var scopedSourceURLs: [String: URL] = [:]
   private let bookmarkKey = "noteAgent.vaultBookmark"
 
   override func awakeFromNib() {
@@ -14,6 +16,7 @@ class MainFlutterWindow: NSWindow {
     minSize = NSSize(width: 640, height: 640)
     title = "笔记工作区"
     RegisterGeneratedPlugins(registry: controller)
+    nativeAudio = NativeAudio(messenger: controller.engine.binaryMessenger)
 
     let channel = FlutterMethodChannel(
       name: "dev.noteagent/workspace",
@@ -25,6 +28,12 @@ class MainFlutterWindow: NSWindow {
       case "restoreLocation": self.restoreLocation(result)
       case "chooseLocation": self.chooseLocation(result)
       case "openInObsidian": self.openInObsidian(call.arguments, result)
+      case "chooseSourceFile": self.chooseSourceFile(result)
+      case "releaseSourceFile": self.releaseSourceFile(call.arguments, result)
+      case "revealLocalSource": self.revealLocalSource(call.arguments, result)
+      case "openSyncPlans":
+        let opened = NSWorkspace.shared.open(URL(string: "https://obsidian.md/help/sync/plans")!)
+        if opened { result(nil) } else { result(FlutterError(code: "open_url", message: "无法打开官方套餐说明。", details: nil)) }
       default: result(FlutterMethodNotImplemented)
       }
     }
@@ -85,6 +94,56 @@ class MainFlutterWindow: NSWindow {
     }
   }
 
+  private func chooseSourceFile(_ result: @escaping FlutterResult) {
+    let panel = NSOpenPanel()
+    panel.title = "选择来源文件或精简副本"
+    panel.message = "原文件会完整保留在 App 本机存储中。超限文件不会自动写入笔记库。"
+    panel.prompt = "选择文件"
+    panel.canChooseFiles = true
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.beginSheetModal(for: self) { [weak self] response in
+      guard let self = self else { return }
+      guard response == .OK, let url = panel.url else { result(nil); return }
+      let started = url.startAccessingSecurityScopedResource()
+      let path = url.resolvingSymlinksInPath().path
+      guard FileManager.default.isReadableFile(atPath: path) else {
+        if started { url.stopAccessingSecurityScopedResource() }
+        result(FlutterError(code: "source_access", message: "无法读取所选来源文件，请重新选择。", details: nil))
+        return
+      }
+      if started {
+        self.scopedSourceURLs.removeValue(forKey: path)?.stopAccessingSecurityScopedResource()
+        self.scopedSourceURLs[path] = url
+      }
+      result(path)
+    }
+  }
+
+  private func releaseSourceFile(_ arguments: Any?, _ result: FlutterResult) {
+    if let values = arguments as? [String: String], let path = values["path"] {
+      scopedSourceURLs.removeValue(forKey: path)?.stopAccessingSecurityScopedResource()
+    }
+    result(nil)
+  }
+
+  private func revealLocalSource(_ arguments: Any?, _ result: FlutterResult) {
+    do {
+      guard let values = arguments as? [String: String], let path = values["path"] else {
+        throw NSError(domain: "NoteWorkspace", code: 3)
+      }
+      let file = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+      let root = try localDirectory().resolvingSymlinksInPath().path + "/"
+      guard file.path.hasPrefix(root), FileManager.default.fileExists(atPath: file.path) else {
+        throw NSError(domain: "NoteWorkspace", code: 4)
+      }
+      NSWorkspace.shared.activateFileViewerSelecting([file])
+      result(nil)
+    } catch {
+      result(FlutterError(code: "source_path", message: "本机原件暂不可用，请核对存储位置。", details: nil))
+    }
+  }
+
   private func persistBookmark(_ url: URL) throws {
     let bookmark = try url.bookmarkData(
       options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil
@@ -131,5 +190,8 @@ class MainFlutterWindow: NSWindow {
     result(nil)
   }
 
-  deinit { scopedVaultURL?.stopAccessingSecurityScopedResource() }
+  deinit {
+    scopedVaultURL?.stopAccessingSecurityScopedResource()
+    for url in scopedSourceURLs.values { url.stopAccessingSecurityScopedResource() }
+  }
 }

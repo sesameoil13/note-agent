@@ -28,8 +28,17 @@ abstract interface class VaultStorage {
   Future<void> deleteText(String relativePath, String expectedText);
 }
 
+/// Optional binary source capability; text-only system providers remain valid.
+abstract interface class BinaryVaultStorage {
+  Future<void> publishFile(
+    String relativePath,
+    File original,
+    String operationId,
+  );
+}
+
 /// Desktop vault storage, preserving the T01 exclusive publication behavior.
-class DirectoryVaultStorage implements VaultStorage {
+class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
   DirectoryVaultStorage(this.directory, {NoteFilePublisher? filePublisher})
     : _publisher = filePublisher ?? AtomicNoteFilePublisher();
 
@@ -117,6 +126,33 @@ class DirectoryVaultStorage implements VaultStorage {
       await staging.parent.delete(recursive: true);
     } on FileSystemException {
       // Publication is committed; leftover private staging is harmless.
+    }
+  }
+
+  @override
+  Future<void> publishFile(
+    String relativePath,
+    File original,
+    String operationId,
+  ) async {
+    final destination = await _file(relativePath, createParents: true);
+    final staging = await _file(
+      p.join(
+        '.note-agent-staging',
+        _safe(operationId),
+        p.basename(relativePath),
+      ),
+      createParents: true,
+    );
+    await AtomicNoteFilePublisher().publishFile(
+      destination: destination,
+      staging: staging,
+      original: original,
+    );
+    try {
+      await staging.parent.delete(recursive: true);
+    } on FileSystemException {
+      // Source publication committed; private staging may be removed later.
     }
   }
 
