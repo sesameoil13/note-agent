@@ -13,6 +13,7 @@ dependencies:
   path: ^1.9.1
   ffi: ^2.2.0
   cryptography: ^2.9.0
+  pdfium_flutter: 0.3.1
 
 dev_dependencies:
   integration_test:
