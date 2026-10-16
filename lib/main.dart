@@ -374,7 +374,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           const Text('笔记工作区', style: TextStyle(color: ash)),
         ],
         const Spacer(),
-        IconButton(
+        AccessibleIconButton(
           onPressed: _saving
               ? null
               : () => Navigator.of(context).push(
@@ -383,7 +383,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                         ConnectionScreen(connection: _connection),
                   ),
                 ),
-          tooltip: '连接与设备',
+          label: '连接与设备',
           icon: const Icon(Icons.link),
         ),
         if (_workspace != null) ...[
