@@ -1,0 +1,19 @@
+{
+  "name": "note-agent-pairing",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-concurrency=1",
+    "dev": "wrangler dev --local",
+    "check": "wrangler deploy --dry-run --outdir .wrangler/review",
+    "format:check": "prettier --check src test tools package.json"
+  },
+  "devDependencies": {
+    "miniflare": "4.20260730.0",
+    "prettier": "3.9.10",
+    "wrangler": "4.151.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'note_workspace.dart';
+import 'connection.dart';
+import 'connection_screen.dart';
 import 'attachment_sources.dart';
 import 'sync_panel.dart';
 import 'accessible_icon_button.dart';
@@ -95,6 +97,7 @@ class _WorkspaceScreen extends StatefulWidget {
 
 class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   final _platform = WorkspacePlatform();
+  late final WorkspaceConnection _connection;
   final _title = TextEditingController();
   final _text = TextEditingController();
   final _search = TextEditingController();
@@ -116,6 +119,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   void initState() {
     super.initState();
     _workspace = widget.initialWorkspace;
+    _connection = _workspace?.connection ?? WorkspaceConnection.platform();
     if (_workspace == null) _restore();
   }
 
@@ -169,6 +173,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       localDirectory: location.localDirectory,
       vaultDirectory: location.vaultDirectory,
       vaultStorage: location.vaultStorage,
+      connection: _connection,
       audioPlatform: Platform.isMacOS && location.vaultDirectory != null
           ? MethodChannelAudioPlatform()
           : null,
@@ -369,6 +374,18 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           const Text('笔记工作区', style: TextStyle(color: ash)),
         ],
         const Spacer(),
+        IconButton(
+          onPressed: _saving
+              ? null
+              : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) =>
+                        ConnectionScreen(connection: _connection),
+                  ),
+                ),
+          tooltip: '连接与设备',
+          icon: const Icon(Icons.link),
+        ),
         if (_workspace != null) ...[
           if (_workspace!.recordingAvailable) ...[
             if (wide)

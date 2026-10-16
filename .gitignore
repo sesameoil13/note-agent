@@ -13,3 +13,8 @@ macos/Flutter/ephemeral/
 macos/Pods/
 macos/.symlinks/
 windows/flutter/ephemeral/
+node_modules/
+.wrangler/
+services/pairing/.local/
+services/pairing/.dev.vars
+services/pairing/.cache/

@@ -1,0 +1,18 @@
+# Reviewable Free-plan deployment. Provision the D1 UUID only after account authorization.
+name = "note-agent-pairing"
+main = "src/worker.mjs"
+compatibility_date = "2026-07-30"
+workers_dev = true
+preview_urls = false
+
+[observability]
+enabled = false
+
+[[d1_databases]]
+binding = "DB"
+database_name = "note-agent-pairing"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# ENROLLMENT_HASH is a Wrangler secret containing SHA-256 of a random, single-use
+# App activation code. The code and Cloudflare management credentials never ship.

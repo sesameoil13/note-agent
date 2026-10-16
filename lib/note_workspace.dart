@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import 'note_files.dart';
+import 'connection.dart';
 import 'attachments.dart';
 import 'note_links.dart';
 export 'attachments.dart' hide WorkspaceAttachments;
@@ -84,6 +85,7 @@ class NoteWorkspace {
     this.vaultStorage,
     this._clock,
     this._createId,
+    this.connection,
   );
 
   late final WorkspaceRecordings _recordings;
@@ -108,6 +110,7 @@ class NoteWorkspace {
       _mutate(() => _attachments.export(attachmentId));
 
   final Database _database;
+  final WorkspaceConnection connection;
   final VaultStorage vaultStorage;
 
   TaskStatusSync get taskStatusSync => TaskStatusSync.notConnected;
@@ -152,6 +155,7 @@ class NoteWorkspace {
     DateTime Function()? clock,
     String Function()? createId,
     NoteFilePublisher? filePublisher,
+    WorkspaceConnection? connection,
     AudioPlatform? audioPlatform,
   }) async {
     if (vaultStorage == null) {
@@ -203,6 +207,7 @@ class NoteWorkspace {
       vaultStorage,
       clock ?? DateTime.now,
       createId ?? _randomId,
+      connection ?? WorkspaceConnection.platform(),
     );
     workspace._attachments = WorkspaceAttachments(
       database,
