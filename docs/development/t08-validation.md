@@ -60,21 +60,57 @@ for playback; the UI does not declare it a completed capture. Recovering a pendi
 vault publication uses the same identity and original. Neither local save nor
 vault publication asserts official Obsidian Sync delivery.
 
-## Native acceptance still pending
+## Root-owned native acceptance
 
-Root coordinates all actual app/native GUI interaction against a dedicated test
-vault. No implementer has launched the app or changed microphone permissions.
-Before closing #9, collect real evidence for:
+Root performed the actual app/native GUI checks against a dedicated test vault
+on October 16–17, 2026. The user owned microphone permission decisions. No
+implementer launched the app or changed microphone permissions. The complete
+session record lives outside the repository at `work/research/t08-native-evidence.md`;
+numeric-only metadata is in `work/native-t08-acceptance/`.
 
-1. Initial microphone permission, a denied attempt and a later allowed retry.
-2. Real 15-second recording with changing measured waveform and timer.
-3. Pause with stationary recording time, resume, stop and audible local playback.
-4. Offline save, normal app quit/relaunch and finding/replaying the same original.
-5. Ten-minute real capture and actual original size (synthetic evidence above is
-   separate), plus any hardware interruption result that is actually exercised.
+Candidate `097fe5e` recorded real microphone input with changing measured
+waveform/time. Pause at 19 seconds froze recording time; resume continued the
+same recording. The session was later found paused at 09:58 after an overnight
+interval with unknown intervening human action. Root resumed the final seconds
+and observed automatic saving without manual Stop. The original decoded to
+599.257687 seconds of finite mono PCM at 22,050 Hz and occupied 2,457,517 bytes.
+Private and vault copies matched by SHA-256. This verifies the observed
+approximately ten-minute cap/save path, not uninterrupted overnight capture or
+an exact 600.000-second duration.
 
-Use the app's `录音` page; the operating-system permission prompt is user-owned.
-Do not touch the old vault or reset global privacy settings for this check.
+Native local playback advanced from 00:00 to 00:54 before root stopped it; the
+user confirmed it was audible. Normal Quit ended the process. Relaunch restored
+the same recording ID, duration, size, saved status and selected vault without a
+picker; local playback then advanced to 00:21 before root stopped it.
+
+Physical OS denial and restoration were subsequently verified with the same
+unchanged `74cd40d` Release binary. With Note Agent OFF in System Settings,
+root quit and relaunched the app before Start. The app immediately showed
+`录音未完成` / `麦克风权限未开启` / `未能开始录音`, stayed at 00:00 and enabled
+Start again without claiming a finalized capture. After the user restored
+Note Agent ON, root quit and relaunched that same binary again. Start produced
+changing measured waveform/time; Stop saved a 52.381315-second, 239,350-byte
+original with `本机原音频已保存 · 尚未转写`. The intended short check ran longer
+because of tool/turn latency; it is not evidence of an exact 15.000-second capture.
+
+The restored-permission original decoded locally to 1,155,008 finite mono PCM
+frames at 22,050 Hz (peak 0.072491139, RMS 0.004519734). Private and vault copies
+matched SHA-256
+`3e080cc468e5c0a5f0b50bb218ee8547c8c0465812421f1765992521ce499c5e`.
+Native local playback entered its playing state and later ended. The original
+599-second recording remained byte-identical. See
+`work/native-t08-acceptance/restored-permission-metadata.json` for numeric details.
+
+Save, recovery and playback used local files; no transcription, remote service,
+AI call or audio upload was involved. Host Wi-Fi was not physically disabled,
+so this session does not prove a physical network-disconnection run.
+
+Platform QA limit: switching permission OFF while the previous process was
+still alive did not immediately invalidate its cached AVFoundation permission.
+The accepted denial/restoration procedure therefore includes normal
+Quit/relaunch after each user-owned toggle. Immediate live-process revocation
+and hardware interruption remain unverified platform edges. No global privacy
+reset or TCC/code-requirement weakening was used.
 
 ## Source follow-up after native observations
 
@@ -83,8 +119,8 @@ recording/recent/new-text controls and the recording-row play/stop control. A
 public semantics test reproduced empty labels despite existing tooltips. The
 controls now expose explicit names, enabled/button state and press actions while
 preserving their appearance and callbacks. Headless accessibility actions navigate
-those pages and start/stop workspace playback. A refreshed native AX check is
-still required after root clears the running bundle for a rebuild.
+those pages and start/stop workspace playback. Root's refreshed native AX check
+on `74cd40d` found the compact header controls named, including `连接与设备`.
 
 A storage operation may publish complete audio and fail while acknowledging its
 result. The recording UI now reports “笔记库写入未确认” for an export failure,
@@ -92,14 +128,18 @@ without asserting the vault copy is absent. A real temporary-file public probe
 checks this case, retained local playback, and one stable recording after retry;
 the independent merger probe also passes.
 
-Root has reported real pause/resume, automatic final saving, audible playback
-confirmed by the user, and normal quit/relaunch restoring the same record on
-candidate `097fe5e`. Actual duration was 599.257687 seconds, 2,457,517 bytes, with
-matching private/vault copies. The session was found paused overnight with
-unknown intervening human action, so it does not prove uninterrupted ten-minute
-capture. OS-level denied-microphone acceptance remains untested. All actual audio
-stays private and local; no transcription/API upload is part of this work.
+The earlier accessibility/publication follow-up passed its complete 33-test host
+suite, clean `flutter analyze`, and the independent publication-truth probe. It
+was source-only: the running native bundle was neither rebuilt nor relaunched by
+the implementer.
 
-The follow-up's complete host suite passes 33 tests, `flutter analyze` is clean,
-and the independent publication-truth probe passes. This follow-up is source-only:
-the running native bundle was neither rebuilt nor relaunched by the implementer.
+The completed physical denial check exposed a naming mismatch: System Settings
+lists `Note Agent` (the configured macOS product name), while the error guidance
+said `笔记工作区`. The finishing follow-up changes only that name in the guidance;
+permission handling and audio behavior are unchanged.
+
+Finishing verification on the `74cd40d` integration base: all 12 existing
+recording workspace/UI tests pass, `flutter analyze --no-pub` is clean, and the
+own-worktree macOS Release static build passes. No native launch or permission
+prompt was performed for this copy/documentation change; root's running bundle
+was untouched.
