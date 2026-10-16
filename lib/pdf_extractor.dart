@@ -8,6 +8,7 @@ import 'package:pdfium_flutter/pdfium_flutter.dart';
 
 import 'document_extraction.dart';
 import 'pdf_native.dart';
+import 'pdf_layout.dart';
 
 /// Owns PDFium on one background isolate at a time. Unlike loadText(), this
 /// adapter checks native handles and character counts BEFORE Dart allocation.
@@ -176,24 +177,74 @@ Future<void> _worker(
           );
         }
         characters += count;
-        final content = StringBuffer();
+        final glyphs = <PdfGlyph>[];
         var badUnicode = false;
-        for (var char = 0; char < count; char++) {
-          final value = GuardedPdfium.FPDFText_GetUnicode(text, char);
-          if (value == 0 ||
-              value > 0x10ffff ||
-              (value >= 0xd800 && value <= 0xdfff)) {
-            content.write('\uFFFD');
-            badUnicode = true;
-          } else {
-            content.writeCharCode(value);
+        using((arena) {
+          final left = arena<Double>();
+          final right = arena<Double>();
+          final bottom = arena<Double>();
+          final top = arena<Double>();
+          for (var char = 0; char < count; char++) {
+            final value = GuardedPdfium.FPDFText_GetUnicode(text, char);
+            String character;
+            if (value == 0 ||
+                value > 0x10ffff ||
+                (value >= 0xd800 && value <= 0xdfff)) {
+              character = '\uFFFD';
+              badUnicode = true;
+            } else {
+              character = String.fromCharCode(value);
+            }
+            final validBox =
+                GuardedPdfium.FPDFText_GetCharBox(
+                  text,
+                  char,
+                  left,
+                  right,
+                  bottom,
+                  top,
+                ) !=
+                0;
+            final box = validBox
+                ? [left.value, bottom.value, right.value, top.value]
+                : null;
+            glyphs.add(
+              PdfGlyph(
+                character,
+                box != null && box.every((v) => v.isFinite) ? box : null,
+              ),
+            );
           }
+        });
+        final pageLocation = DocumentLocation(
+          sourceId: sourceId,
+          page: index + 1,
+          rotation: GuardedPdfium.FPDFPage_GetRotation(page) * 90,
+        );
+        final layout = readPdfLayout(
+          page,
+          glyphs,
+          pageLocation,
+          options.maximumTableCells -
+              tables.fold(
+                0,
+                (sum, t) => sum + t.rows.fold(0, (n, r) => n + r.length),
+              ),
+        );
+        body.addAll(layout.body);
+        tables.addAll(layout.tables);
+        problems.addAll(layout.problems);
+        if (layout.problems.isNotEmpty) unprocessed.add(pageLocation);
+        if (layout.hasImages) {
+          unprocessed.add(pageLocation);
+          problems.add(
+            DocumentProblem(
+              'imageRegion',
+              '此页含图片或嵌套内容，尚未 OCR；成功提取的文字仍已保留。',
+              page: index + 1,
+            ),
+          );
         }
-        final extracted = content
-            .toString()
-            .replaceAll('\r\n', '\n')
-            .replaceAll('\r', '\n')
-            .trim();
         if (badUnicode) {
           problems.add(
             DocumentProblem(
@@ -204,7 +255,7 @@ Future<void> _worker(
           );
           unprocessed.add(location);
         }
-        if (extracted.isEmpty) {
+        if (layout.body.isEmpty && layout.tables.isEmpty) {
           unprocessed.add(location);
           problems.add(
             DocumentProblem(
@@ -213,8 +264,6 @@ Future<void> _worker(
               page: index + 1,
             ),
           );
-        } else {
-          body.add(DocumentBody(extracted, location));
         }
         processed++;
       } on _PageProblem catch (error) {

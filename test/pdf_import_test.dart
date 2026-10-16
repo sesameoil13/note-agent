@@ -4,6 +4,47 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 void main() {
+  test('PDF rule grid becomes a traceable table without repeating or dropping cell text', () async {
+    final root = await Directory.systemTemp.createTemp('pdf-table-');
+    addTearDown(() => root.delete(recursive: true));
+    final vault = await Directory('${root.path}/vault').create();
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: vault,
+    );
+    addTearDown(workspace.close);
+    final note = await workspace.importPdf(
+      original: File('test/fixtures/table.pdf'),
+    );
+    final result = note.document!.result!;
+    expect(result.tables, hasLength(1));
+    expect(
+      result.tables.single.rows
+          .map((r) => r.map((c) => c.text).toList())
+          .toList(),
+      [
+        ['产品', '数量', '备注'],
+        ['苹果', '2', 'A|B'],
+        ['茶叶', '', '第一行\n第二行'],
+      ],
+    );
+    expect(result.tables.single.rows[2][1].location.bounds, [
+      160,
+      560,
+      280,
+      600,
+    ]);
+    expect(result.tables.single.location.page, 1);
+    expect(note.text, contains('| 苹果 | 2 | A&#124;B |'));
+    expect(note.text, contains('| 茶叶 |  | 第一行<br>第二行 |'));
+    expect('苹果'.allMatches(note.text), hasLength(1));
+    expect(note.text.indexOf('采购资料'), lessThan(note.text.indexOf('| 产品')));
+    expect(note.text.indexOf('表格后的原文'), greaterThan(note.text.indexOf('| 茶叶')));
+    expect(
+      await File(note.notePath).readAsString(),
+      contains('| 产品 | 数量 | 备注 |'),
+    );
+  });
   test(
     'PDF Chinese text and its original survive restart as an ordinary note',
     () async {
