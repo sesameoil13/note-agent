@@ -2,6 +2,7 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  private var secureCredentials: SecureCredentials?
   private var workspaceChannel: FlutterMethodChannel?
   private var scopedVaultURL: URL?
   private let bookmarkKey = "noteAgent.vaultBookmark"
@@ -14,6 +15,7 @@ class MainFlutterWindow: NSWindow {
     minSize = NSSize(width: 640, height: 640)
     title = "笔记工作区"
     RegisterGeneratedPlugins(registry: controller)
+    secureCredentials = SecureCredentials(messenger: controller.engine.binaryMessenger)
 
     let channel = FlutterMethodChannel(
       name: "dev.noteagent/workspace",

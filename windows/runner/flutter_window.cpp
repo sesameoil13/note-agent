@@ -25,6 +25,7 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  secure_credentials_ = std::make_unique<SecureCredentials>(flutter_controller_->engine()->messenger());
   workspace_platform_ = std::make_unique<WorkspacePlatform>(
       flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
@@ -42,6 +43,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  secure_credentials_.reset();
   workspace_platform_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

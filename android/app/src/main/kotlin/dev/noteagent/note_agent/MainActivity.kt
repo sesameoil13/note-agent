@@ -15,11 +15,13 @@ import java.util.concurrent.Executors
 class MainActivity : FlutterActivity() {
     private val preferences by lazy { getSharedPreferences("note_workspace", MODE_PRIVATE) }
     private val io = Executors.newSingleThreadExecutor()
+    private var secureCredentials: SecureCredentials? = null
     private var pendingPicker: MethodChannel.Result? = null
     private val readWrite = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        secureCredentials = SecureCredentials(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.noteagent/workspace")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

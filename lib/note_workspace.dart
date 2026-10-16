@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import 'note_files.dart';
+import 'connection.dart';
 import 'vault_storage.dart';
 export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
@@ -47,9 +48,11 @@ class NoteWorkspace {
     this.vaultStorage,
     this._clock,
     this._createId,
+    this.connection,
   );
 
   final Database _database;
+  final WorkspaceConnection connection;
   final VaultStorage vaultStorage;
 
   /// Compatibility for desktop callers; SAF references are not local paths.
@@ -69,6 +72,7 @@ class NoteWorkspace {
     DateTime Function()? clock,
     String Function()? createId,
     NoteFilePublisher? filePublisher,
+    WorkspaceConnection? connection,
   }) async {
     if (vaultStorage == null) {
       if (vaultDirectory == null || !await vaultDirectory.exists()) {
@@ -102,6 +106,7 @@ class NoteWorkspace {
       vaultStorage,
       clock ?? DateTime.now,
       createId ?? _randomId,
+      connection ?? WorkspaceConnection.platform(),
     );
     for (final note in workspace.notes) {
       if (note.status == NoteStatus.exportPending) {

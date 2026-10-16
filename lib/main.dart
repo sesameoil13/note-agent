@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'note_workspace.dart';
+import 'connection.dart';
+import 'connection_screen.dart';
 import 'workspace_platform.dart';
 
 void main() => runApp(const NoteAgentApp());
@@ -88,6 +90,7 @@ class _WorkspaceScreen extends StatefulWidget {
 
 class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   final _platform = WorkspacePlatform();
+  late final WorkspaceConnection _connection;
   final _title = TextEditingController();
   final _text = TextEditingController();
   NoteWorkspace? _workspace;
@@ -105,6 +108,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   void initState() {
     super.initState();
     _workspace = widget.initialWorkspace;
+    _connection = _workspace?.connection ?? WorkspaceConnection.platform();
     if (_workspace == null) _restore();
   }
 
@@ -152,6 +156,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
       localDirectory: location.localDirectory,
       vaultDirectory: location.vaultDirectory,
       vaultStorage: location.vaultStorage,
+      connection: _connection,
     );
     if (!mounted) {
       await workspace.close();
@@ -308,6 +313,18 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           const Text('笔记工作区', style: TextStyle(color: ash)),
         ],
         const Spacer(),
+        IconButton(
+          onPressed: _saving
+              ? null
+              : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) =>
+                        ConnectionScreen(connection: _connection),
+                  ),
+                ),
+          tooltip: '连接与设备',
+          icon: const Icon(Icons.link),
+        ),
         if (_workspace != null) ...[
           if (!wide)
             IconButton(

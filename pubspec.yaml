@@ -12,6 +12,7 @@ dependencies:
   sqlite3: ^3.7.1
   path: ^1.9.1
   ffi: ^2.2.0
+  cryptography: ^2.9.0
 
 dev_dependencies:
   integration_test:
