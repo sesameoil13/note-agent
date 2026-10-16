@@ -34,6 +34,7 @@ readPdfLayout(
   final problems = <DocumentProblem>[];
   var hasImages = false;
   var unsupported = false;
+  var layoutLimited = false;
   final objects = GuardedPdfium.FPDFPage_CountObjects(page);
   if (objects < 0 || objects > 10000) {
     problems.add(
@@ -65,7 +66,7 @@ readPdfLayout(
         final count = GuardedPdfium.FPDFPath_CountSegments(object);
         segmentsRead += count;
         if (count < 0 || count > 1000 || segmentsRead > 50000) {
-          unsupported = true;
+          layoutLimited = true;
           break;
         }
         if (GuardedPdfium.FPDFPath_GetDrawMode(object, fill, stroke) == 0 ||
@@ -99,11 +100,27 @@ readPdfLayout(
                 _Rule(point.$1, math.min(point.$2, py), math.max(point.$2, py)),
               );
             }
+            if (horizontal.length + vertical.length > 1024) {
+              layoutLimited = true;
+              break;
+            }
           }
           previous = type == FPDF_SEGMENT_BEZIERTO ? null : point;
         }
+        if (layoutLimited) break;
       }
     });
+  }
+  if (layoutLimited) {
+    horizontal.clear();
+    vertical.clear();
+    problems.add(
+      DocumentProblem(
+        'layoutLimit',
+        '页面线段超过版面分析上限；保留文字，表格区域尚未核实。',
+        page: location.page,
+      ),
+    );
   }
   final grids = <_Grid>[];
   final used = <_Rule>{};

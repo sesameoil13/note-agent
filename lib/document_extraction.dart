@@ -1,3 +1,5 @@
+import 'dart:io';
+
 /// Engine-neutral document results. Future OCR/Word adapters use these same
 /// values; no native PDF handles or layout engine types cross this boundary.
 enum DocumentCompletion { complete, partial, noExtractableText, failed }
@@ -6,11 +8,15 @@ class DocumentLocation {
   const DocumentLocation({
     required this.sourceId,
     required this.page,
+    this.lastPage,
     this.bounds,
     this.rotation = 0,
   });
   final String sourceId;
   final int page;
+
+  /// Inclusive end of an unprocessed page range; null denotes one page.
+  final int? lastPage;
 
   /// [left, bottom, right, top] in unrotated PDF points, origin bottom-left.
   final List<double>? bounds;
@@ -18,6 +24,7 @@ class DocumentLocation {
   Map<String, Object?> toJson() => {
     'sourceId': sourceId,
     'page': page,
+    'lastPage': lastPage,
     'bounds': bounds,
     'rotation': rotation,
     'coordinates': 'pdf-points-bottom-left',
@@ -26,11 +33,25 @@ class DocumentLocation {
       DocumentLocation(
         sourceId: json['sourceId'] as String,
         page: json['page'] as int,
+        lastPage: json['lastPage'] as int?,
         bounds: (json['bounds'] as List?)
             ?.map((n) => (n as num).toDouble())
             .toList(),
         rotation: json['rotation'] as int? ?? 0,
       );
+}
+
+/// Internal adapter seam shared by local document formats and future OCR.
+/// The source is an already-retained private file; adapters never publish notes.
+abstract interface class DocumentExtractor {
+  Future<DocumentExtraction> extract(
+    File original,
+    String sourceId,
+    DocumentExtractionOptions options,
+  );
+
+  /// Cooperatively stop later pages; an in-flight native call may finish first.
+  void cancel();
 }
 
 class DocumentBody {

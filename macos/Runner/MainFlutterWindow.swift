@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import UniformTypeIdentifiers
 
 class MainFlutterWindow: NSWindow {
   private var secureCredentials: SecureCredentials?
@@ -30,7 +31,7 @@ class MainFlutterWindow: NSWindow {
       case "restoreLocation": self.restoreLocation(result)
       case "chooseLocation": self.chooseLocation(result)
       case "openInObsidian": self.openInObsidian(call.arguments, result)
-      case "chooseSourceFile": self.chooseSourceFile(result)
+      case "chooseSourceFile": self.chooseSourceFile(call.arguments, result)
       case "releaseSourceFile": self.releaseSourceFile(call.arguments, result)
       case "revealLocalSource": self.revealLocalSource(call.arguments, result)
       case "openSyncPlans":
@@ -96,7 +97,7 @@ class MainFlutterWindow: NSWindow {
     }
   }
 
-  private func chooseSourceFile(_ result: @escaping FlutterResult) {
+  private func chooseSourceFile(_ arguments: Any?, _ result: @escaping FlutterResult) {
     let panel = NSOpenPanel()
     panel.title = "选择来源文件或精简副本"
     panel.message = "原文件会完整保留在 App 本机存储中。超限文件不会自动写入笔记库。"
@@ -104,6 +105,11 @@ class MainFlutterWindow: NSWindow {
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
     panel.allowsMultipleSelection = false
+    if (arguments as? [String: Any])?["pdfOnly"] as? Bool == true {
+      panel.allowedContentTypes = [.pdf]
+    } else if (arguments as? [String: Any])?["audioOnly"] as? Bool == true {
+      panel.allowedContentTypes = [.audio]
+    }
     panel.beginSheetModal(for: self) { [weak self] response in
       guard let self = self else { return }
       guard response == .OK, let url = panel.url else { result(nil); return }

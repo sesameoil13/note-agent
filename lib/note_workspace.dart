@@ -153,7 +153,8 @@ class NoteWorkspace {
   bool _closing = false;
   Future<void>? _closeFuture;
   final Set<Future<void>> _documentOperations = {};
-  final Map<String, LocalPdfExtractor> _activeDocuments = {};
+  final Map<String, DocumentExtractor> _activeDocuments = {};
+  final Set<String> _retryingDocuments = {};
 
   static Future<NoteWorkspace> open({
     required Directory localDirectory,
@@ -585,6 +586,7 @@ class NoteWorkspace {
   Future<WorkspaceNote> _retryNoteExport(String id) async {
     if (_renamePlan(id) != null) return _finishRename(id);
     var note = notes.firstWhere((note) => note.id == id);
+    if (note.document != null && note.document!.result == null) return note;
     try {
       final rawRequest =
           _database.select('SELECT naming_request FROM notes WHERE id = ?', [
@@ -633,6 +635,21 @@ class NoteWorkspace {
         'UPDATE notes SET status = ?, error = NULL, naming_request = NULL WHERE id = ?',
         [NoteStatus.localSaved.name, id],
       );
+      if (note.document != null) {
+        final source = attachments.firstWhere(
+          (a) => a.id == note.document!.attachmentId,
+        );
+        if (source.hasLocalOnlyOriginal && source.copyPath == null) {
+          await _attachments.writeEntry(
+            source,
+            source.status == AttachmentStatus.retainedLocal
+                ? '${source.originalName}（仅本机保留，未同步）'
+                : '${source.originalName}（仅本机保留，超过 Standard 单文件 5 MB）',
+          );
+        } else {
+          await _attachments.export(source.id);
+        }
+      }
     } on FileSystemException catch (error) {
       _database.execute('UPDATE notes SET status = ?, error = ? WHERE id = ?', [
         NoteStatus.exportFailed.name,
@@ -710,8 +727,7 @@ ${note.text.trimRight()}
 
 ## 来源
 
-[${note.document == null ? '原始文字' : '提取结果'}](attachments/note-agent/${note.id}.txt)
-${note.document == null ? '' : '\n${_documentSummary(note.document!.result)}\n'}
+[${note.document == null ? '原始文字' : '提取结果'}](attachments/note-agent/${note.id}.txt)${note.document == null ? '' : '\n\n${_documentSummary(note.document!.result)}'}
 
 记录：${formatNoteTime(note.createdAt)} · 修改：${formatNoteTime(note.modifiedAt)}
 ''';
@@ -824,26 +840,54 @@ ${note.document == null ? '' : '\n${_documentSummary(note.document!.result)}\n'}
 
   Future<WorkspaceNote> retryDocumentExtraction(
     String noteId, {
+    File? original,
     DocumentExtractionOptions options = const DocumentExtractionOptions(),
   }) {
     options.validate();
+    if (_activeDocuments.containsKey(noteId) ||
+        !_retryingDocuments.add(noteId)) {
+      return Future.error(StateError('此 PDF 正在提取。'));
+    }
     return _trackDocument(() async {
       final doc = _document(noteId);
-      if (doc?.attachmentId == null) throw StateError('原件未保存完成，请重新选择 PDF。');
+      if (doc == null) throw ArgumentError('此笔记没有 PDF 来源。');
       if (_activeDocuments.containsKey(noteId)) throw StateError('此 PDF 正在提取。');
+      if (doc.attachmentId == null) {
+        if (original == null) throw StateError('原件未保存完成，请重新选择 PDF。');
+        await _mutate(() async {
+          final source = await _attachments.attach(
+            noteId,
+            original,
+            publish: false,
+          );
+          _database.execute(
+            'UPDATE document_imports SET attachment_id = ?, status = ?, error = NULL WHERE note_id = ?',
+            [source.id, DocumentImportStatus.extracting.name, noteId],
+          );
+        });
+      } else if (original != null) {
+        throw ArgumentError('已保留的 PDF 原件不会被替换，请直接重新提取。');
+      }
       final plan = _database.select(
         'SELECT write_plan FROM document_imports WHERE note_id = ?',
         [noteId],
       ).single['write_plan'];
       if (plan != null) return _mutate(() => _finishDocumentWrite(noteId));
-      await _mutate(() async {
+      final publication = await _mutate(() async {
+        final current = notes.firstWhere((n) => n.id == noteId);
+        if (doc.result != null && current.status != NoteStatus.localSaved) {
+          final published = await _retryNoteExport(noteId);
+          if (published.status != NoteStatus.localSaved) return published;
+        }
         _database.execute(
           'UPDATE document_imports SET status = ?, error = NULL WHERE note_id = ?',
           [DocumentImportStatus.extracting.name, noteId],
         );
+        return null;
       });
+      if (publication != null) return publication;
       return _extractDocument(noteId, options);
-    });
+    }).whenComplete(() => _retryingDocuments.remove(noteId));
   }
 
   void cancelDocumentExtraction(String noteId) =>
@@ -871,12 +915,16 @@ ${note.document == null ? '' : '\n${_documentSummary(note.document!.result)}\n'}
     final extractor = LocalPdfExtractor();
     _activeDocuments[id] = extractor;
     if (_closing) extractor.cancel();
-    final result = await extractor.extract(
-      File(source.originalPath),
-      source.id,
-      options,
-    );
-    _activeDocuments.remove(id);
+    late final DocumentExtraction result;
+    try {
+      result = await extractor.extract(
+        File(source.originalPath),
+        source.id,
+        options,
+      );
+    } finally {
+      _activeDocuments.remove(id);
+    }
     return _mutate(() async {
       final note = notes.firstWhere((n) => n.id == id);
       final body = result.markdown.isEmpty ? '尚未提取正文。' : result.markdown;
@@ -897,21 +945,26 @@ ${note.document == null ? '' : '\n${_documentSummary(note.document!.result)}\n'}
           rethrow;
         }
         await _retryNoteExport(id);
-        if (source.originalByteLength > ObsidianSyncStandard.maximumFileBytes) {
-          await _attachments.writeEntry(
-            source,
-            '${source.originalName}（仅本机保留，超过 Standard 单文件 5 MB）',
-          );
-        } else {
-          await _attachments.export(source.id);
-        }
         return notes.firstWhere((n) => n.id == id);
       }
       // Compare the known body before changing an already-published note. The
       // source tail (including external associations/attachment links) stays.
-      final before = await vaultStorage.readText(
-        vaultStorage.relativePath(note.notePath),
-      );
+      String before;
+      try {
+        before = await vaultStorage.readText(
+          vaultStorage.relativePath(note.notePath),
+        );
+      } on FileSystemException {
+        _database.execute(
+          'UPDATE document_imports SET status = ?, error = ? WHERE note_id = ?',
+          [
+            DocumentImportStatus.interrupted.name,
+            '无法读取笔记，请恢复原位置或重新授权后再提取；PDF 原件仍保留。',
+            id,
+          ],
+        );
+        return notes.firstWhere((n) => n.id == id);
+      }
       final oldBody = '## 正文\n\n${note.text.trimRight()}\n\n## 关联';
       final oldSummary = _documentSummary(doc.result);
       if (oldBody.allMatches(before).length != 1 ||
@@ -924,7 +977,7 @@ ${note.document == null ? '' : '\n${_documentSummary(note.document!.result)}\n'}
             id,
           ],
         );
-        return note;
+        return notes.firstWhere((n) => n.id == id);
       }
       final after = before
           .replaceFirst(oldBody, '## 正文\n\n${body.trimRight()}\n\n## 关联')

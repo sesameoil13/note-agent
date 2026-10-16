@@ -13,15 +13,17 @@ import 'pdf_layout.dart';
 /// Owns PDFium on one background isolate at a time. Unlike loadText(), this
 /// adapter checks native handles and character counts BEFORE Dart allocation.
 /// No rendering, URI opening, remote fonts, JavaScript, OCR or network access.
-class LocalPdfExtractor {
+class LocalPdfExtractor implements DocumentExtractor {
   static Future<void> _queue = Future.value();
   SendPort? _cancelPort;
   bool _cancelled = false;
+  @override
   void cancel() {
     _cancelled = true;
     _cancelPort?.send('cancel');
   }
 
+  @override
   Future<DocumentExtraction> extract(
     File original,
     String sourceId,
@@ -35,13 +37,15 @@ class LocalPdfExtractor {
     Isolate? isolate;
     try {
       final result = Completer<DocumentExtraction>();
+      final exited = Completer<void>();
       messages.listen((message) {
         if (message is SendPort) {
           _cancelPort = message;
           if (_cancelled) message.send('cancel');
         }
         if (message is DocumentExtraction) result.complete(message);
-        if (message is List && !result.isCompleted) {
+        if (message == null) exited.complete();
+        if ((message is List || message == null) && !result.isCompleted) {
           result.complete(
             const DocumentExtraction(
               completion: DocumentCompletion.failed,
@@ -59,9 +63,21 @@ class LocalPdfExtractor {
         _worker,
         (messages.sendPort, original.path, sourceId, options),
         onError: messages.sendPort,
+        onExit: messages.sendPort,
         errorsAreFatal: true,
       );
-      return await result.future;
+      final extraction = await result.future;
+      // Result delivery can precede native finally/DestroyLibrary. Keep the
+      // global queue locked until the worker has exited and released PDFium.
+      await exited.future;
+      return extraction;
+    } catch (_) {
+      return const DocumentExtraction(
+        completion: DocumentCompletion.failed,
+        problems: [
+          DocumentProblem('engineUnavailable', '本机 PDF 引擎无法启动，请重试；原件已保留。'),
+        ],
+      );
     } finally {
       _cancelPort = null;
       messages.close();
@@ -80,6 +96,7 @@ Future<void> _worker(
   cancellation.listen((_) => cancelled = true);
   output.send(cancellation.sendPort);
   var initialized = false;
+  final timer = Stopwatch()..start();
   FPDF_DOCUMENT document = nullptr;
   try {
     if (await File(path).length() > options.maximumInputBytes) {
@@ -135,9 +152,9 @@ Future<void> _worker(
     final tables = <DocumentTable>[];
     final unprocessed = <DocumentLocation>[];
     final problems = <DocumentProblem>[];
-    final timer = Stopwatch()..start();
     var processed = 0;
     var characters = 0;
+    var outputCharacters = 0;
     for (var index = 0; index < total; index++) {
       await Future<void>.delayed(Duration.zero);
       if (cancelled ||
@@ -155,7 +172,13 @@ Future<void> _worker(
             lastPage: total,
           ),
         );
-        unprocessed.add(DocumentLocation(sourceId: sourceId, page: index + 1));
+        unprocessed.add(
+          DocumentLocation(
+            sourceId: sourceId,
+            page: index + 1,
+            lastPage: total,
+          ),
+        );
         break;
       }
       final location = DocumentLocation(sourceId: sourceId, page: index + 1);
@@ -234,6 +257,34 @@ Future<void> _worker(
                 (sum, t) => sum + t.rows.fold(0, (n, r) => n + r.length),
               ),
         );
+        final serialized = DocumentExtraction(
+          completion: DocumentCompletion.complete,
+          body: layout.body,
+          tables: layout.tables,
+        ).markdown;
+        if (outputCharacters +
+                serialized.length +
+                (outputCharacters == 0 ? 0 : 2) >
+            options.maximumCharacters) {
+          problems.add(
+            DocumentProblem(
+              'outputLimit',
+              '提取后的文字和表格达到输出上限；此页及后续页面未写入，完整原件已保留。',
+              page: index + 1,
+              lastPage: total,
+            ),
+          );
+          unprocessed.add(
+            DocumentLocation(
+              sourceId: sourceId,
+              page: index + 1,
+              lastPage: total,
+              rotation: pageLocation.rotation,
+            ),
+          );
+          break;
+        }
+        outputCharacters += serialized.length + (outputCharacters == 0 ? 0 : 2);
         body.addAll(layout.body);
         tables.addAll(layout.tables);
         problems.addAll(layout.problems);
@@ -282,7 +333,9 @@ Future<void> _worker(
     output.send(
       DocumentExtraction(
         completion: body.isEmpty && tables.isEmpty
-            ? problems.every((p) => p.code == 'noText' || p.code == 'imageRegion')
+            ? problems.every(
+                    (p) => p.code == 'noText' || p.code == 'imageRegion',
+                  )
                   ? DocumentCompletion.noExtractableText
                   : DocumentCompletion.failed
             : problems.isEmpty
@@ -290,7 +343,9 @@ Future<void> _worker(
             : DocumentCompletion.partial,
         body: body,
         tables: tables,
-        unprocessed: {for (final region in unprocessed) region.page: region}.values.toList(),
+        unprocessed: {for (final region in unprocessed) region.page: region}
+            .values
+            .toList(),
         problems: problems,
         totalPages: total,
         processedPages: processed,
