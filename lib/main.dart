@@ -361,8 +361,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           child: const Icon(Icons.notes, size: 16, color: graphite),
         ),
         const SizedBox(width: 16),
-        const Text(
-          'RIGID BODY',
+        Text(
+          wide ? 'RIGID BODY' : 'RIGID',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.w900,
@@ -387,7 +387,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           icon: const Icon(Icons.link),
         ),
         if (_workspace != null) ...[
-          if (_workspace!.recordingAvailable) ...[
+          if (_workspace!.recordingAvailable ||
+              _platform.supportsSourceFiles) ...[
             if (wide)
               OutlinedButton.icon(
                 onPressed: _saving
@@ -474,7 +475,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           !_composing && !_recordingPage,
           _showRecent,
         ),
-        if (_workspace!.recordingAvailable) ...[
+        if (_workspace!.recordingAvailable ||
+            _platform.supportsSourceFiles) ...[
           const SizedBox(height: 8),
           _navItem(
             '收集录音',
@@ -926,7 +928,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
         width: 640,
         child: SingleChildScrollView(
           child: SelectableText(
-            note.text,
+            note.originalText,
             style: const TextStyle(fontSize: 16, height: 1.5),
           ),
         ),

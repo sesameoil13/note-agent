@@ -91,6 +91,45 @@ class WorkspaceAttachments {
         ),
   );
 
+  /// An audio collection already owns its durable private original. Reuse it
+  /// and the publication facts rather than making a second copy or identity.
+  void adoptAudio({
+    required String id,
+    required String noteId,
+    required String name,
+    required String originalPath,
+    required int bytes,
+    required String sourcePath,
+    required bool published,
+    required String sourceEntry,
+    String? error,
+  }) {
+    database.execute(
+      '''INSERT OR IGNORE INTO attachments
+      (id,note_id,vault,original_name,original_path,original_bytes,source_path,status,source_entry,
+       vault_copy_published,original_published,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+      [
+        id,
+        noteId,
+        vault.identity,
+        name,
+        originalPath,
+        bytes,
+        sourcePath,
+        (published
+                ? AttachmentStatus.localSaved
+                : bytes > ObsidianSyncStandard.maximumFileBytes
+                ? AttachmentStatus.exceedsFileLimit
+                : AttachmentStatus.exportFailed)
+            .name,
+        sourceEntry,
+        published ? 1 : 0,
+        published ? 1 : 0,
+        error,
+      ],
+    );
+  }
+
   Future<WorkspaceAttachment> attach(String noteId, File original) async {
     if (database.select('SELECT id FROM notes WHERE id = ? AND vault = ?', [
       noteId,

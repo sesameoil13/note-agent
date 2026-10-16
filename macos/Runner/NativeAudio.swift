@@ -1,5 +1,7 @@
 import AVFoundation
 import Cocoa
+import AudioToolbox
+#if canImport(FlutterMacOS)
 import FlutterMacOS
 
 /// macOS microphone/player system boundary. Originals never leave this device here.
@@ -12,6 +14,8 @@ final class NativeAudio: NSObject, AVAudioRecorderDelegate {
   private var recordingError: String?
   private var limitTimer: Timer?
   private var requestingAccess = false
+  private var inspectingSource = false
+  private let inspectionQueue = DispatchQueue(label: "dev.noteagent.audio-inspection")
 
   init(messenger: FlutterBinaryMessenger) {
     super.init()
@@ -62,6 +66,34 @@ final class NativeAudio: NSObject, AVAudioRecorderDelegate {
         let audio = try AVAudioPlayer(contentsOf: originalURL(call.arguments))
         guard audio.prepareToPlay(), audio.duration > 0 else { throw audioError("原音频尚不可回放，现有文件已保留。") }
         result(Int((audio.duration * 1000).rounded()))
+      case "inspectAudioSource":
+        guard !inspectingSource else {
+          result(FlutterError(code: "inspection_busy", message: "已有音频正在检查，请稍后重试。", details: nil))
+          return
+        }
+        let path = try sourcePath(call.arguments)
+        let inspector = try sourceInspector()
+        // Resolve and validate scope before leaving the channel handler.
+        _ = try inspector.sourceURL(path)
+        inspectingSource = true
+        inspectionQueue.async { [weak self] in
+          let inspected = Result { try inspector.inspect(path) }
+          DispatchQueue.main.async {
+            self?.inspectingSource = false
+            switch inspected {
+            case .success(let metadata): result(metadata)
+            case .failure(let error): result(FlutterError(code: "audio_inspection", message: error.localizedDescription, details: nil))
+            }
+          }
+        }
+      case "playAudioSource":
+        guard phase == "stopped" else { throw audioError("请先结束录音再回放。") }
+        player?.stop()
+        let source = try sourceInspector().sourceURL(sourcePath(call.arguments))
+        let audio = try AVAudioPlayer(contentsOf: source)
+        guard audio.prepareToPlay(), audio.play() else { throw audioError("无法回放此原音频，原件已保留。") }
+        player = audio
+        result(nil)
       case "play":
         guard phase == "stopped" else { throw audioError("请先结束录音再回放。") }
         player?.stop()
@@ -147,6 +179,15 @@ final class NativeAudio: NSObject, AVAudioRecorderDelegate {
     finish()
   }
 
+  private func sourcePath(_ arguments: Any?) throws -> String {
+    guard let arguments = arguments as? [String: Any], let path = arguments["path"] as? String else { throw audioError("缺少原音频位置。") }
+    return path
+  }
+  private func sourceInspector() throws -> PrivateAudioSourceInspector {
+    let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+    return PrivateAudioSourceInspector(workspace: support.appendingPathComponent("dev.noteagent/workspace", isDirectory: true))
+  }
+
   private func originalURL(_ arguments: Any?) throws -> URL {
     guard let arguments = arguments as? [String: Any], let path = arguments["path"] as? String else { throw audioError("缺少原音频位置。") }
     let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -160,4 +201,67 @@ final class NativeAudio: NSObject, AVAudioRecorderDelegate {
   private func flutterError(_ error: Error) -> FlutterError { FlutterError(code: "audio", message: error.localizedDescription, details: nil) }
 
   deinit { limitTimer?.invalidate(); recorder?.stop(); player?.stop() }
+}
+
+#endif
+
+/// Import-only, bounded inspection of complete workspace-owned originals.
+/// Separate from the microphone's exact recordings/<id>.m4a capability.
+struct PrivateAudioSourceInspector {
+  let workspace: URL
+  private func failure(_ message: String) -> NSError {
+    NSError(domain: "NoteAgentAudioInspection", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+  }
+  func sourceURL(_ path: String) throws -> URL {
+    let root = workspace.appendingPathComponent("audio-sources", isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
+    let recordings = workspace.appendingPathComponent("recordings", isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
+    let literal = URL(fileURLWithPath: path).standardizedFileURL
+    let url = literal.resolvingSymlinksInPath()
+    let imported = url.deletingLastPathComponent().deletingLastPathComponent() == root && literal == url
+    let captured = url.deletingLastPathComponent() == recordings && url.pathExtension == "m4a" && literal == url
+    guard imported || captured else { throw failure("音频检查仅允许本机私有来源目录内的完整原件。") }
+    return url
+  }
+  func inspect(_ path: String) throws -> [String: Any] {
+    let url = try sourceURL(path)
+    let size = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+    guard size.isRegularFile == true, let bytes = size.fileSize, bytes > 0, bytes <= 256 * 1024 * 1024 else {
+      throw failure("原件为空或超过本机 256 MB 检查上限，原件已保留。")
+    }
+    var file: AudioFileID?
+    guard AudioFileOpenURL(url as CFURL, .readPermission, 0, &file) == noErr, let file = file else { throw failure("没有可识别的音频容器，原件已保留。") }
+    defer { AudioFileClose(file) }
+    var type: AudioFileTypeID = 0
+    var typeSize = UInt32(MemoryLayout.size(ofValue: type))
+    var format = AudioStreamBasicDescription()
+    var formatSize = UInt32(MemoryLayout.size(ofValue: format))
+    guard AudioFileGetProperty(file, kAudioFilePropertyFileFormat, &typeSize, &type) == noErr,
+      AudioFileGetProperty(file, kAudioFilePropertyDataFormat, &formatSize, &format) == noErr else {
+      throw failure("音频格式信息不完整，原件已保留。")
+    }
+    let container: String
+    let codec: String
+    switch (type, format.mFormatID) {
+    case (kAudioFileM4AType, kAudioFormatMPEG4AAC), (kAudioFileMPEG4Type, kAudioFormatMPEG4AAC): container = "M4A"; codec = "AAC"
+    case (kAudioFileMP3Type, kAudioFormatMPEGLayer3): container = "MP3"; codec = "MP3"
+    case (kAudioFileWAVEType, kAudioFormatLinearPCM): container = "WAV"; codec = "PCM"
+    default: throw failure("此平台当前支持 AAC / M4A、MP3、PCM / WAV；此原件格式尚不支持。")
+    }
+    let audio = try AVAudioFile(forReading: url)
+    let rate = audio.processingFormat.sampleRate
+    let duration = Double(audio.length) / rate
+    guard rate.isFinite, rate >= 8000, rate <= 384000, duration.isFinite, duration > 0, duration <= 86400,
+      audio.processingFormat.channelCount >= 1, audio.processingFormat.channelCount <= 32,
+      let buffer = AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 4096) else {
+      throw failure("音频时长或参数无效，原件已保留。")
+    }
+    // Decode bounded windows, including the tail, rather than loading the file.
+    for position in [AVAudioFramePosition(0), audio.length / 2, max(0, audio.length - 4096)] {
+      audio.framePosition = position
+      try audio.read(into: buffer, frameCount: AVAudioFrameCount(min(4096, audio.length - position)))
+      guard buffer.frameLength > 0 else { throw failure("音频数据无法解码，原件可能不完整。") }
+    }
+    return ["container": container, "codec": codec, "durationMs": Int((duration * 1000).rounded()),
+      "sampleRate": Int(rate.rounded()), "channels": Int(audio.processingFormat.channelCount)]
+  }
 }

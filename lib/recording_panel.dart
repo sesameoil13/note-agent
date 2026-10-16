@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import 'note_workspace.dart';
 import 'accessible_icon_button.dart';
+import 'workspace_platform.dart';
 
 /// Recording controls use the same public workspace actions as behavioral tests.
 class RecordingPanel extends StatefulWidget {
@@ -20,7 +22,10 @@ class RecordingPanel extends StatefulWidget {
 }
 
 class _RecordingPanelState extends State<RecordingPanel> {
+  final _platform = WorkspacePlatform();
   Timer? _timer;
+  String? _pendingSubmissionId;
+  String _observedAudio = '';
   bool _busy = false;
   bool _polling = false;
   String? _error;
@@ -30,6 +35,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
   @override
   void initState() {
     super.initState();
+    _observedAudio = _audioSignature;
     _observedRecording = widget.workspace.recording;
     _observedPlayback = widget.workspace.playback;
     _timer = Timer.periodic(const Duration(milliseconds: 150), (_) => _poll());
@@ -46,7 +52,8 @@ class _RecordingPanelState extends State<RecordingPanel> {
     if (!widget.workspace.recording.isActive &&
         !widget.workspace.playback.isPlaying &&
         identical(_observedRecording, widget.workspace.recording) &&
-        identical(_observedPlayback, widget.workspace.playback)) {
+        identical(_observedPlayback, widget.workspace.playback) &&
+        _observedAudio == _audioSignature) {
       return;
     }
     _polling = true;
@@ -57,6 +64,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
       }
       final changedActivity =
           _observedRecording?.isActive != widget.workspace.recording.isActive;
+      _observedAudio = _audioSignature;
       _observedRecording = widget.workspace.recording;
       _observedPlayback = widget.workspace.playback;
       if (mounted) {
@@ -84,12 +92,41 @@ class _RecordingPanelState extends State<RecordingPanel> {
       _error = _message(error);
     }
     if (mounted) {
+      _observedAudio = _audioSignature;
       _observedRecording = widget.workspace.recording;
       _observedPlayback = widget.workspace.playback;
       setState(() => _busy = false);
       widget.onStateChanged?.call();
     }
   }
+
+  String get _audioSignature => widget.workspace.audioSources
+      .map(
+        (s) =>
+            '${s.id}:${s.processingStatus}:${s.stage}:${s.processingReason}:${s.publicationStatus}',
+      )
+      .join('|');
+
+  Future<void> _importAudio({String? submissionId}) => _act(() async {
+    File? selected;
+    try {
+      selected = await _platform.chooseSourceFile();
+      if (selected == null) return;
+      final token =
+          submissionId ??
+          _pendingSubmissionId ??
+          widget.workspace.newAudioSubmissionId();
+      _pendingSubmissionId = token;
+      await widget.workspace.importAudio(
+        original: selected,
+        submissionId: token,
+      );
+      _pendingSubmissionId = null;
+      await widget.workspace.resumePendingAudioProcessing();
+    } finally {
+      if (selected != null) await _platform.releaseSourceFile(selected);
+    }
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -116,114 +153,125 @@ class _RecordingPanelState extends State<RecordingPanel> {
             '离线也可保存。保留原音频，尚未转写。',
             style: TextStyle(color: Color(0xFF767C82), height: 1.5),
           ),
-          const SizedBox(height: 32),
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1C2024),
-              border: Border(
-                left: BorderSide(
-                  color: active ? color : const Color(0xFF767C82),
-                  width: 8,
-                ),
-                top: const BorderSide(color: Color(0xFF767C82)),
-                right: const BorderSide(color: Color(0xFF767C82)),
-                bottom: const BorderSide(color: Color(0xFF767C82)),
+          const SizedBox(height: 24),
+          if (_platform.supportsSourceFiles)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _busy ? null : _importAudio,
+                icon: const Icon(Icons.audio_file),
+                label: const Text('导入已有录音'),
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        switch (state.phase) {
-                          RecordingPhase.starting => '等待麦克风权限',
-                          RecordingPhase.recording => '录音中',
-                          RecordingPhase.paused => '已暂停',
-                          RecordingPhase.saving => '正在保存原音频',
-                          RecordingPhase.failed => '录音未完成',
-                          RecordingPhase.idle => '准备录音',
-                        },
+          const SizedBox(height: 24),
+          if (workspace.recordingAvailable)
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1C2024),
+                border: Border(
+                  left: BorderSide(
+                    color: active ? color : const Color(0xFF767C82),
+                    width: 8,
+                  ),
+                  top: const BorderSide(color: Color(0xFF767C82)),
+                  right: const BorderSide(color: Color(0xFF767C82)),
+                  bottom: const BorderSide(color: Color(0xFF767C82)),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          switch (state.phase) {
+                            RecordingPhase.starting => '等待麦克风权限',
+                            RecordingPhase.recording => '录音中',
+                            RecordingPhase.paused => '已暂停',
+                            RecordingPhase.saving => '正在保存原音频',
+                            RecordingPhase.failed => '录音未完成',
+                            RecordingPhase.idle => '准备录音',
+                          },
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        formatRecordingDuration(state.duration),
                         style: const TextStyle(
-                          fontSize: 24,
+                          fontSize: 32,
+                          fontFamily: 'monospace',
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                    ),
-                    Text(
-                      formatRecordingDuration(state.duration),
-                      style: const TextStyle(
-                        fontSize: 32,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                Semantics(
-                  label: paused
-                      ? '录音已暂停，计时停止'
-                      : active
-                      ? '麦克风实时音量波形'
-                      : '尚未开始录音',
-                  child: SizedBox(
-                    height: 80,
-                    child: CustomPaint(
-                      painter: _Waveform(
-                        state.levels,
-                        active && !paused ? color : const Color(0xFF767C82),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  Semantics(
+                    label: paused
+                        ? '录音已暂停，计时停止'
+                        : active
+                        ? '麦克风实时音量波形'
+                        : '尚未开始录音',
+                    child: SizedBox(
+                      height: 80,
+                      child: CustomPaint(
+                        painter: _Waveform(
+                          state.levels,
+                          active && !paused ? color : const Color(0xFF767C82),
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 24),
-                Wrap(
-                  spacing: 16,
-                  runSpacing: 16,
-                  children: [
-                    if (!active)
-                      FilledButton.icon(
-                        onPressed: working
-                            ? null
-                            : () => _act(workspace.startRecording),
-                        icon: const Icon(Icons.mic),
-                        label: const Text('开始录音'),
-                      ),
-                    if (active) ...[
-                      FilledButton.icon(
-                        onPressed: working
-                            ? null
-                            : () => _act(() async {
-                                await workspace.stopRecording();
-                              }),
-                        icon: const Icon(Icons.stop),
-                        label: const Text('结束并保存'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: working
-                            ? null
-                            : () => _act(
-                                paused
-                                    ? workspace.resumeRecording
-                                    : workspace.pauseRecording,
-                              ),
-                        icon: Icon(paused ? Icons.mic : Icons.pause),
-                        label: Text(paused ? '继续录音' : '暂停'),
-                      ),
+                  const SizedBox(height: 24),
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 16,
+                    children: [
+                      if (!active)
+                        FilledButton.icon(
+                          onPressed: working
+                              ? null
+                              : () => _act(workspace.startRecording),
+                          icon: const Icon(Icons.mic),
+                          label: const Text('开始录音'),
+                        ),
+                      if (active) ...[
+                        FilledButton.icon(
+                          onPressed: working
+                              ? null
+                              : () => _act(() async {
+                                  await workspace.stopRecording();
+                                }),
+                          icon: const Icon(Icons.stop),
+                          label: const Text('结束并保存'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: working
+                              ? null
+                              : () => _act(
+                                  paused
+                                      ? workspace.resumeRecording
+                                      : workspace.pauseRecording,
+                                ),
+                          icon: Icon(paused ? Icons.mic : Icons.pause),
+                          label: Text(paused ? '继续录音' : '暂停'),
+                        ),
+                      ],
                     ],
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  '支持 15 秒至 10 分钟；达到 10 分钟自动结束保存。',
-                  style: TextStyle(color: Color(0xFF767C82), fontSize: 12),
-                ),
-              ],
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    '支持 15 秒至 10 分钟；达到 10 分钟自动结束保存。',
+                    style: TextStyle(color: Color(0xFF767C82), fontSize: 12),
+                  ),
+                ],
+              ),
             ),
-          ),
           if (_error != null || state.error != null)
             Padding(
               padding: const EdgeInsets.only(top: 16),
@@ -242,8 +290,151 @@ class _RecordingPanelState extends State<RecordingPanel> {
             ),
           for (final recording in workspace.recordings) ...[
             _recording(recording),
+            if (workspace.audioSources.any((s) => s.id == recording.id))
+              _processing(
+                workspace.audioSources.firstWhere((s) => s.id == recording.id),
+              ),
             const SizedBox(height: 16),
           ],
+          for (final source in workspace.audioSources.where(
+            (s) => !workspace.recordings.any((r) => r.id == s.id),
+          )) ...[_importedSource(source), const SizedBox(height: 16)],
+        ],
+      ),
+    );
+  }
+
+  Widget _processing(WorkspaceAudioSource source) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        switch (source.processingStatus) {
+          AudioProcessingStatus.pending => '待处理',
+          AudioProcessingStatus.processing =>
+            source.stage == 'transcribe'
+                ? '处理中 · 转写'
+                : source.stage == 'organize'
+                ? '处理中 · 整理'
+                : '处理中 · 写入笔记',
+          AudioProcessingStatus.failed => '失败',
+          AudioProcessingStatus.completed => '处理完成',
+        },
+        style: TextStyle(
+          color: source.processingStatus == AudioProcessingStatus.failed
+              ? const Color(0xFFFF4A18)
+              : const Color(0xFF767C82),
+        ),
+      ),
+      if (source.processingReason != null)
+        SelectableText(
+          source.processingReason!,
+          style: const TextStyle(fontSize: 12),
+        ),
+      if (source.nextAttemptAt != null)
+        Text(
+          '稍后重试：${formatNoteTime(source.nextAttemptAt!)} · 自动重试 ${source.automaticRetries}/3',
+          style: const TextStyle(fontSize: 12),
+        ),
+      if (source.processingStatus == AudioProcessingStatus.failed &&
+          source.originalSaved)
+        TextButton(
+          onPressed: _busy
+              ? null
+              : () => _act(
+                  () => widget.workspace.retryAudioProcessing(source.id),
+                ),
+          child: const Text('重试处理'),
+        ),
+    ],
+  );
+
+  Widget _importedSource(WorkspaceAudioSource source) {
+    final metadata = source.metadata;
+    final playing =
+        widget.workspace.playback.recordingId == source.id &&
+        widget.workspace.playback.isPlaying;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C2024),
+        border: Border.all(color: const Color(0xFF767C82)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            source.originalName,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            source.originalSaved ? '本机原音频已保存' : '原件尚未完整保存',
+            style: const TextStyle(fontSize: 12),
+          ),
+          Text(
+            '${(source.byteLength / 1000).toStringAsFixed(1)} KB${metadata == null ? '' : ' · ${metadata.codec} / ${metadata.container} · ${formatRecordingDuration(metadata.duration)}'}',
+            style: const TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          _processing(source),
+          Text(switch (source.publicationStatus) {
+            AudioPublicationStatus.pending => '原件待写入笔记库',
+            AudioPublicationStatus.published => '原件已写入本机笔记库 · 官方 Sync 状态待核对',
+            AudioPublicationStatus.exceedsFileLimit => '原件超过 5 MB · 仅本机保留，未同步',
+            AudioPublicationStatus.failed => '原件笔记库写入未确认',
+          }, style: const TextStyle(fontSize: 12, color: Color(0xFF767C82))),
+          if (source.publicationError != null)
+            SelectableText(
+              source.publicationError!,
+              style: const TextStyle(fontSize: 12),
+            ),
+          Wrap(
+            spacing: 8,
+            children: [
+              if (source.originalSaved)
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () => _act(
+                          () =>
+                              _platform.revealLocalSource(source.originalPath),
+                        ),
+                  child: const Text('打开原件'),
+                ),
+              if (source.originalSaved &&
+                  metadata != null &&
+                  widget.workspace.audioSourcePlaybackAvailable)
+                TextButton(
+                  onPressed: _busy || widget.workspace.recording.isActive
+                      ? null
+                      : () => _act(
+                          playing
+                              ? widget.workspace.stopPlayback
+                              : () =>
+                                    widget.workspace.playAudioSource(source.id),
+                        ),
+                  child: Text(playing ? '停止回放' : '回放原音频'),
+                ),
+              if (!source.originalSaved)
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () => _importAudio(submissionId: source.submissionId),
+                  child: const Text('重新选择原件'),
+                ),
+              if (source.publicationStatus == AudioPublicationStatus.failed)
+                TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () => _act(
+                          () => widget.workspace.retryAudioSourceExport(
+                            source.id,
+                          ),
+                        ),
+                  child: const Text('重试写入笔记库'),
+                ),
+            ],
+          ),
         ],
       ),
     );

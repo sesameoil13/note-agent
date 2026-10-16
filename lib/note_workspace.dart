@@ -13,6 +13,8 @@ export 'attachments.dart' hide WorkspaceAttachments;
 import 'vault_storage.dart';
 import 'sync_policy.dart';
 import 'recordings.dart';
+import 'audio_queue.dart';
+export 'audio_queue.dart' hide WorkspaceAudioQueue;
 export 'sync_policy.dart';
 export 'recordings.dart' hide WorkspaceRecordings;
 export 'vault_storage.dart';
@@ -48,11 +50,14 @@ class WorkspaceNote {
     this.titleCollision = false,
     this.error,
     this.attachments = const [],
+    this.sourceText,
   });
 
   final String id;
   final String title;
   final String text;
+  final String? sourceText;
+  String get originalText => sourceText ?? text;
   final DateTime createdAt;
   final DateTime modifiedAt;
   final String notePath;
@@ -89,6 +94,18 @@ class NoteWorkspace {
   );
 
   late final WorkspaceRecordings _recordings;
+  late final WorkspaceAudioQueue _audioQueue;
+
+  String newAudioSubmissionId() => _randomId();
+  List<WorkspaceAudioSource> get audioSources => _audioQueue.sources;
+  Future<WorkspaceAudioSource> importAudio({
+    required File original,
+    required String submissionId,
+  }) => _mutate(() async {
+    final result = await _audioQueue.import(original, submissionId);
+    if (_audioQueue.processor == null) _audioQueue.markDisconnected();
+    return _audioQueue.source(result.id);
+  });
   late final WorkspaceAttachments _attachments;
 
   List<WorkspaceAttachment> get attachments => _attachments.attachments;
@@ -108,6 +125,83 @@ class NoteWorkspace {
 
   Future<WorkspaceAttachment> retryAttachmentExport(String attachmentId) =>
       _mutate(() => _attachments.export(attachmentId));
+
+  Future<void> _adoptRecording(WorkspaceRecording recording) =>
+      _audioQueue.adoptRecording(
+        id: recording.id,
+        original: File(recording.originalPath),
+        sourcePath: recording.sourcePath,
+        createdAt: recording.createdAt,
+      );
+
+  bool get audioSourcePlaybackAvailable =>
+      _recordings.audio is AudioSourcePlayer;
+  Future<void> playAudioSource(String id) => _mutate(() async {
+    final source = _audioQueue.source(id);
+    if (!source.originalSaved || source.metadata == null) {
+      throw StateError('此原件尚未通过音频检查，请打开原件核对。');
+    }
+    await _recordings.playSource(id, source.originalPath);
+  });
+  Future<void> retryAudioSourceExport(String id) =>
+      _mutate(() => _audioQueue.publish(id));
+
+  Future<void> resumePendingAudioProcessing() =>
+      _audioQueue.run(_mutate, _materializeAudioNote);
+
+  Future<void> retryAudioProcessing(String id) async {
+    await _mutate(() => _audioQueue.retry(id));
+    await resumePendingAudioProcessing();
+  }
+
+  Future<void> _materializeAudioNote(
+    WorkspaceAudioSource source,
+    AudioOrganizedNote output,
+  ) async {
+    final id = source.outputNoteId;
+    if (!notes.any((note) => note.id == id)) {
+      final title = _safeTitle(output.title);
+      _database.execute(
+        '''INSERT INTO notes
+        (id,vault,title,body,created_at,modified_at,note_path,source_path,status,naming_request)
+        VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        [
+          id,
+          vaultStorage.identity,
+          title,
+          output.text,
+          source.createdAt.toIso8601String(),
+          _clock().toIso8601String(),
+          vaultStorage.reference('$title.md'),
+          vaultStorage.reference('attachments/note-agent/$id.txt'),
+          NoteStatus.exportPending.name,
+          jsonEncode({
+            'title': title,
+            'alternatives': <String>[],
+            'allocated': false,
+          }),
+        ],
+      );
+    }
+    _attachments.adoptAudio(
+      id: source.id,
+      noteId: id,
+      name: source.originalName,
+      originalPath: source.originalPath,
+      bytes: source.byteLength,
+      sourcePath: source.sourcePath,
+      published: source.publicationStatus == AudioPublicationStatus.published,
+      sourceEntry: _audioSourceEntry(source),
+      error: source.publicationError,
+    );
+    final note = await _retryNoteExport(id);
+    if (note.status != NoteStatus.localSaved) {
+      throw const AudioProcessingFailure(
+        AudioProcessingFailureKind.recoverable,
+        '转写与整理已保留，笔记库写入未完成。',
+      );
+    }
+  }
 
   final Database _database;
   final WorkspaceConnection connection;
@@ -157,6 +251,8 @@ class NoteWorkspace {
     NoteFilePublisher? filePublisher,
     WorkspaceConnection? connection,
     AudioPlatform? audioPlatform,
+    AudioSourceInspector? audioInspector,
+    AudioProcessor? audioProcessor,
   }) async {
     if (vaultStorage == null) {
       if (vaultDirectory == null || !await vaultDirectory.exists()) {
@@ -222,8 +318,31 @@ class NoteWorkspace {
       audioPlatform,
       clock ?? DateTime.now,
       createId ?? _randomId,
+      onFinalized: (recording) => workspace._adoptRecording(recording),
     );
+    workspace._audioQueue = WorkspaceAudioQueue(
+      database,
+      localDirectory,
+      vaultStorage,
+      audioInspector ??
+          (audioPlatform is AudioSourceInspector
+              ? audioPlatform as AudioSourceInspector
+              : PcmWaveInspector()),
+      workspace._clock,
+      workspace._createId,
+      audioProcessor,
+    );
+    await workspace._audioQueue.recover();
+    if (audioProcessor == null) workspace._audioQueue.markDisconnected();
     await workspace._recordings.recover();
+    for (final recording in workspace.recordings.where(
+      (r) =>
+          r.status == RecordingStatus.localSaved ||
+          r.status == RecordingStatus.exportFailed ||
+          r.status == RecordingStatus.savePending,
+    )) {
+      await workspace._adoptRecording(recording);
+    }
     for (final note in workspace.notes) {
       if (note.status == NoteStatus.exportPending) {
         await workspace.retryNoteExport(note.id);
@@ -608,7 +727,11 @@ class NoteWorkspace {
       }
       await vaultStorage.publishText(
         vaultStorage.relativePath(note.sourcePath),
-        note.text,
+        _audioQueue.sources
+                .where((s) => s.outputNoteId == note.id)
+                .firstOrNull
+                ?.transcript ??
+            note.text,
         note.id,
       );
       await vaultStorage.publishText(
@@ -649,6 +772,7 @@ class NoteWorkspace {
   Future<void> close() {
     if (_closeFuture != null) return _closeFuture!;
     _closing = true;
+    _audioQueue.stop();
     if (_pendingMutations == 0 && !_recordings.needsClosing) {
       _database.close();
       return _closeFuture = Future<void>.value();
@@ -666,6 +790,10 @@ class NoteWorkspace {
     id: row['id'] as String,
     title: row['title'] as String,
     text: row['body'] as String,
+    sourceText: _audioQueue.sources
+        .where((s) => s.outputNoteId == row['id'])
+        .firstOrNull
+        ?.transcript,
     createdAt: DateTime.parse(row['created_at'] as String),
     modifiedAt: DateTime.parse(row['modified_at'] as String),
     notePath: row['note_path'] as String,
@@ -678,8 +806,19 @@ class NoteWorkspace {
     ),
   );
 
-  String _markdown(WorkspaceNote note) =>
-      '''## 正文
+  String _audioSourceEntry(WorkspaceAudioSource source) =>
+      source.publicationStatus == AudioPublicationStatus.published
+      ? '[${source.originalName}](${Uri(path: vaultStorage.relativePath(source.sourcePath))})'
+      : '${source.originalName}（原件仅本机保留；${source.publicationError ?? '尚未写入笔记库'}）';
+
+  String _markdown(WorkspaceNote note) {
+    final audio = _audioQueue.sources
+        .where((s) => s.outputNoteId == note.id)
+        .firstOrNull;
+    final source = audio == null
+        ? '[原始文字](attachments/note-agent/${note.id}.txt)'
+        : '[完整转写](attachments/note-agent/${note.id}.txt)\n\n${_audioSourceEntry(audio)}';
+    return '''## 正文
 
 ${note.text.trimRight()}
 
@@ -689,10 +828,11 @@ ${note.text.trimRight()}
 
 ## 来源
 
-[原始文字](attachments/note-agent/${note.id}.txt)
+$source
 
 记录：${formatNoteTime(note.createdAt)} · 修改：${formatNoteTime(note.modifiedAt)}
 ''';
+  }
 
   static String _randomId() {
     final random = Random.secure();

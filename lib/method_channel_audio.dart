@@ -1,9 +1,11 @@
 import 'package:flutter/services.dart';
 
 import 'audio_platform.dart';
+import 'audio_sources.dart';
 
 /// macOS AVFoundation bridge. Other platforms explicitly report unavailable.
-class MethodChannelAudioPlatform implements AudioPlatform {
+class MethodChannelAudioPlatform
+    implements AudioPlatform, AudioSourceInspector, AudioSourcePlayer {
   static const _channel = MethodChannel('dev.noteagent/audio');
 
   Future<T?> _invoke<T>(String method, [Object? arguments]) async {
@@ -18,6 +20,26 @@ class MethodChannelAudioPlatform implements AudioPlatform {
 
   Future<Map<String, dynamic>> _map(String method) async =>
       ((await _invoke<Object?>(method)) as Map).cast<String, dynamic>();
+
+  @override
+  Future<AudioSourceMetadata> inspectAudioSource(String privatePath) async {
+    try {
+      final value = (await _channel.invokeMapMethod<String, dynamic>(
+        'inspectAudioSource',
+        {'path': privatePath},
+      ))!;
+      return AudioSourceMetadata.fromJson(value);
+    } on PlatformException catch (error) {
+      throw AudioInspectionFailure(
+        error.message ?? '此音频无法检查，原件已保留。',
+        retryable: error.code == 'inspection_busy',
+      );
+    }
+  }
+
+  @override
+  Future<void> playAudioSource(String privatePath) =>
+      _invoke<void>('playAudioSource', {'path': privatePath});
 
   @override
   Future<void> startRecording(String originalPath) =>
