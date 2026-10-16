@@ -33,7 +33,7 @@ final class NativeAudio: NSObject, AVAudioRecorderDelegate {
           guard let self = self else { return }
           self.requestingAccess = false
           guard granted else {
-            result(FlutterError(code: "microphone_denied", message: "麦克风权限未开启。请在系统设置 → 隐私与安全性 → 麦克风中允许笔记工作区，然后重试。", details: nil))
+            result(FlutterError(code: "microphone_denied", message: "麦克风权限未开启。请在系统设置 → 隐私与安全性 → 麦克风中允许 Note Agent，然后重试。", details: nil))
             return
           }
           do {
