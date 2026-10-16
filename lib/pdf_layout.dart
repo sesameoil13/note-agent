@@ -70,8 +70,9 @@ readPdfLayout(
         }
         if (GuardedPdfium.FPDFPath_GetDrawMode(object, fill, stroke) == 0 ||
             stroke.value == 0 ||
-            GuardedPdfium.FPDFPageObj_GetMatrix(object, matrix) == 0)
+            GuardedPdfium.FPDFPageObj_GetMatrix(object, matrix) == 0) {
           continue;
+        }
         (double, double)? previous;
         for (var j = 0; j < count; j++) {
           final segment = GuardedPdfium.FPDFPath_GetPathSegment(object, j);
@@ -88,14 +89,16 @@ readPdfLayout(
           final type = GuardedPdfium.FPDFPathSegment_GetType(segment);
           if (type == FPDF_SEGMENT_LINETO && previous != null) {
             final (px, py) = previous;
-            if ((point.$2 - py).abs() < .5 && (point.$1 - px).abs() > 8)
+            if ((point.$2 - py).abs() < .5 && (point.$1 - px).abs() > 8) {
               horizontal.add(
                 _Rule(point.$2, math.min(point.$1, px), math.max(point.$1, px)),
               );
-            if ((point.$1 - px).abs() < .5 && (point.$2 - py).abs() > 8)
+            }
+            if ((point.$1 - px).abs() < .5 && (point.$2 - py).abs() > 8) {
               vertical.add(
                 _Rule(point.$1, math.min(point.$2, py), math.max(point.$2, py)),
               );
+            }
           }
           previous = type == FPDF_SEGMENT_BEZIERTO ? null : point;
         }
@@ -148,8 +151,9 @@ readPdfLayout(
     grids.clear();
     unsupported = true;
   }
-  if (horizontal.length >= 2 && vertical.length >= 2 && grids.isEmpty)
+  if (horizontal.length >= 2 && vertical.length >= 2 && grids.isEmpty) {
     unsupported = true;
+  }
   final tables = <DocumentTable>[];
   final consumed = <int>{};
   var cells = 0;
@@ -165,22 +169,26 @@ readPdfLayout(
     for (var index = 0; index < glyphs.length; index++) {
       final glyph = glyphs[index];
       final box = glyph.box;
-      if (box == null || !glyph.visible) continue;
+      if (box == null || glyph.text == '\r' || glyph.text == '\n') continue;
       final x = (box[0] + box[2]) / 2;
       final y = (box[1] + box[3]) / 2;
       if (x <= grid.xs.first ||
           x >= grid.xs.last ||
           y <= grid.ys.first ||
-          y >= grid.ys.last)
+          y >= grid.ys.last) {
         continue;
+      }
       final column = _interval(grid.xs, x);
       final row = _interval(grid.ys, y);
       if (box[0] < grid.xs[column] - 1 ||
           box[2] > grid.xs[column + 1] + 1 ||
           box[1] < grid.ys[row] - 1 ||
           box[3] > grid.ys[row + 1] + 1) {
-        ambiguous = true;
-        break;
+        if (glyph.visible) {
+          ambiguous = true;
+          break;
+        }
+        continue;
       }
       assignments.putIfAbsent((row, column), () => []).add(glyph);
       indices.add(index);
@@ -219,7 +227,7 @@ readPdfLayout(
     consumed.addAll(indices);
     cells += cellCount;
   }
-  if (unsupported)
+  if (unsupported) {
     problems.add(
       DocumentProblem(
         'unsupportedLayout',
@@ -227,6 +235,7 @@ readPdfLayout(
         page: location.page,
       ),
     );
+  }
   final body = <DocumentBody>[];
   var buffer = StringBuffer();
   List<double>? bounds;
@@ -236,7 +245,7 @@ readPdfLayout(
         .replaceAll('\r\n', '\n')
         .replaceAll('\r', '\n')
         .trim();
-    if (text.isNotEmpty)
+    if (text.isNotEmpty) {
       body.add(
         DocumentBody(
           text,
@@ -248,6 +257,7 @@ readPdfLayout(
           ),
         ),
       );
+    }
     buffer = StringBuffer();
     bounds = null;
   }
@@ -260,7 +270,7 @@ readPdfLayout(
     }
     buffer.write(glyph.text);
     final box = glyph.box;
-    if (glyph.visible && box != null)
+    if (glyph.visible && box != null) {
       bounds = bounds == null
           ? List.of(box)
           : [
@@ -269,6 +279,7 @@ readPdfLayout(
               math.max(bounds![2], box[2]),
               math.max(bounds![3], box[3]),
             ];
+    }
   }
   flush();
   return (body: body, tables: tables, problems: problems, hasImages: hasImages);

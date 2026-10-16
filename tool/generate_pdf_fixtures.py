@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1] / 'test' / 'fixtures'
 ROOT.mkdir(parents=True, exist_ok=True)
 
-def pdf(name, pages, drawings=None):
+def pdf(name, pages, drawings=None, image_pages=()):
     chars = ''.join(dict.fromkeys(''.join(t for page in pages for _, _, t in page)))
     codes = {char: i + 1 for i, char in enumerate(chars)}
     cmap = ('/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n'
@@ -28,7 +28,13 @@ def pdf(name, pages, drawings=None):
         content='\n'.join(f'BT /F1 12 Tf {x} {y} Td <'+''.join(f'{codes[c]:04X}' for c in text)+'> Tj ET' for x,y,text in page)
         if drawings:
             content += '\n' + drawings[page_index]
-        objects.extend([f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {page_id+1} 0 R >>'.encode(),stream(content)])
+        image_resource = ''
+        if page_index in image_pages:
+            content += '\nq 100 0 0 100 40 500 cm /Im Do Q'
+            image_resource = f'/XObject << /Im {page_id+2} 0 R >>'
+        objects.extend([f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> {image_resource} >> /Contents {page_id+1} 0 R >>'.encode(),stream(content)])
+        if page_index in image_pages:
+            objects.append(b'<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\x00\nendstream')
     objects[1]=f'<< /Type /Pages /Count {len(kids)} /Kids [{" ".join(kids)}] >>'.encode()
     output=bytearray(b'%PDF-1.7\n')
     offsets=[0]
@@ -43,4 +49,5 @@ def pdf(name, pages, drawings=None):
 pdf('chinese.pdf', [[(40, 730, '中文资料：保留原文。 Latin 42')]])
 
 grid='\n'.join([f'{x} 560 m {x} 680 l S' for x in [40,160,280,400]] + [f'40 {y} m 400 {y} l S' for y in [560,600,640,680]])
-pdf('table.pdf', [[(40,730,'采购资料'),(50,660,'产品'),(170,660,'数量'),(290,660,'备注'),(50,620,'苹果'),(170,620,'2'),(290,620,'A|B'),(50,580,'茶叶'),(290,580,'第一行'),(290,568,'第二行'),(40,500,'表格后的原文。')]], [grid])
+pdf('table.pdf', [[(40,730,'采购资料'),(50,660,'产品'),(170,660,'数量'),(290,660,'备注'),(50,620,'苹果'),(170,620,'2'),(290,620,'A | B'),(50,580,'茶叶'),(290,580,'第一行'),(290,568,'第二行'),(40,500,'表格后的原文。')]], [grid])
+pdf('scan.pdf', [[]], image_pages=(0,))

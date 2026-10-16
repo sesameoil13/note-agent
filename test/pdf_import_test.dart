@@ -4,6 +4,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 void main() {
+  test('scan is retained with an explicit unextracted status rather than empty success', () async {
+    final root = await Directory.systemTemp.createTemp('pdf-scan-');
+    addTearDown(() => root.delete(recursive: true));
+    final vault = await Directory('${root.path}/vault').create();
+    final workspace = await NoteWorkspace.open(localDirectory: Directory('${root.path}/local'), vaultDirectory: vault);
+    addTearDown(workspace.close);
+    final note = await workspace.importPdf(original: File('test/fixtures/scan.pdf'));
+    expect(note.document!.result!.completion, DocumentCompletion.noExtractableText);
+    expect(note.document!.result!.unprocessed.single.page, 1);
+    expect(note.document!.result!.body, isEmpty);
+    expect(await File(note.attachments.single.originalPath).readAsBytes(), await File('test/fixtures/scan.pdf').readAsBytes());
+    expect(await File(note.notePath).readAsString(), contains('尚未 OCR'));
+  });
   test('PDF rule grid becomes a traceable table without repeating or dropping cell text', () async {
     final root = await Directory.systemTemp.createTemp('pdf-table-');
     addTearDown(() => root.delete(recursive: true));
@@ -24,7 +37,7 @@ void main() {
           .toList(),
       [
         ['产品', '数量', '备注'],
-        ['苹果', '2', 'A|B'],
+        ['苹果', '2', 'A | B'],
         ['茶叶', '', '第一行\n第二行'],
       ],
     );
@@ -35,7 +48,7 @@ void main() {
       600,
     ]);
     expect(result.tables.single.location.page, 1);
-    expect(note.text, contains('| 苹果 | 2 | A&#124;B |'));
+    expect(note.text, contains('| 苹果 | 2 | A &#124; B |'));
     expect(note.text, contains('| 茶叶 |  | 第一行<br>第二行 |'));
     expect('苹果'.allMatches(note.text), hasLength(1));
     expect(note.text.indexOf('采购资料'), lessThan(note.text.indexOf('| 产品')));

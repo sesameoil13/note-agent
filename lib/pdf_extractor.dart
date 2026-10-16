@@ -41,7 +41,7 @@ class LocalPdfExtractor {
           if (_cancelled) message.send('cancel');
         }
         if (message is DocumentExtraction) result.complete(message);
-        if (message is List && !result.isCompleted)
+        if (message is List && !result.isCompleted) {
           result.complete(
             const DocumentExtraction(
               completion: DocumentCompletion.failed,
@@ -53,6 +53,7 @@ class LocalPdfExtractor {
               ],
             ),
           );
+        }
       });
       isolate = await Isolate.spawn(
         _worker,
@@ -164,11 +165,13 @@ Future<void> _worker(
         page = GuardedPdfium.FPDF_LoadPage(document, index);
         if (page == nullptr) throw const _PageProblem('pageFailed', '此页无法打开。');
         text = GuardedPdfium.FPDFText_LoadPage(page);
-        if (text == nullptr)
+        if (text == nullptr) {
           throw const _PageProblem('textPageFailed', '此页文字层无法读取。');
+        }
         final count = GuardedPdfium.FPDFText_CountChars(text);
-        if (count < 0)
+        if (count < 0) {
           throw const _PageProblem('textPageFailed', '此页文字计数失败，未当作空白页。');
+        }
         if (count > options.maximumPageCharacters ||
             characters + count > options.maximumCharacters) {
           throw const _PageProblem(
@@ -279,7 +282,7 @@ Future<void> _worker(
     output.send(
       DocumentExtraction(
         completion: body.isEmpty && tables.isEmpty
-            ? problems.every((p) => p.code == 'noText')
+            ? problems.every((p) => p.code == 'noText' || p.code == 'imageRegion')
                   ? DocumentCompletion.noExtractableText
                   : DocumentCompletion.failed
             : problems.isEmpty
@@ -287,7 +290,7 @@ Future<void> _worker(
             : DocumentCompletion.partial,
         body: body,
         tables: tables,
-        unprocessed: unprocessed,
+        unprocessed: {for (final region in unprocessed) region.page: region}.values.toList(),
         problems: problems,
         totalPages: total,
         processedPages: processed,

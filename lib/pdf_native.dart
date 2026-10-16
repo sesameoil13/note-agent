@@ -1,3 +1,5 @@
+// ignore_for_file: non_constant_identifier_names
+// Names and signatures intentionally match the public PDFium C API.
 import 'dart:ffi' as ffi;
 
 import 'package:pdfium_flutter/pdfium_flutter.dart';
