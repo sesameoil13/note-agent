@@ -146,6 +146,178 @@ void main() {
     expect(workspace.notes, hasLength(1));
   });
 
+  test('reserved title punctuation stays findable with valid Markdown and wiki destinations', () async {
+    final note = await workspace.captureText(title: '原标题', text: '保留编程语言名称。');
+    final inbound = File('${vault.path}/索引.md');
+    await inbound.writeAsString('[[原标题#正文|阅读]]\n[引用](原标题.md#正文)');
+    final renamed = await workspace.renameNote(note.id, title: 'C#学习');
+    final markup = await inbound.readAsString();
+    final destination = RegExp(r'\]\(([^)]+)\)').firstMatch(markup)!.group(1)!;
+    final uri = vault.uri.resolve(destination);
+    expect(
+      await File.fromUri(uri.replace(fragment: '')).exists(),
+      isTrue,
+      reason: 'The maintained Markdown path must resolve to the renamed note.',
+    );
+    expect(Uri.decodeComponent(uri.fragment), '正文');
+    expect(renamed.title, 'C＃学习');
+    expect(markup, startsWith('[[C＃学习#正文|阅读]]\n'));
+    expect(workspace.search('C#').single.id, note.id);
+    final duplicate = await workspace.captureText(
+      title: 'C#学习',
+      text: '另一条同名原文。',
+    );
+    expect(duplicate.title, 'C＃学习 (2)');
+    final semantic = await workspace.captureText(
+      title: 'C#学习',
+      semanticTitleCandidates: ['概念|C^进阶:100%[示例]'],
+      text: '候选同样采用可链接标题。',
+    );
+    expect(semantic.title, '概念｜C＾进阶：100％［示例］');
+    expect(await File(semantic.notePath).exists(), isTrue);
+    expect(await File(renamed.sourcePath).readAsString(), '保留编程语言名称。');
+  });
+
+  test('rename preserves literal code and escaped links while updating adjacent real links', () async {
+    final note = await workspace.captureText(title: '原标题', text: '不应改写代码示例。');
+    final inbound = File('${vault.path}/代码示例.md');
+    await inbound.writeAsString(r'''``[[原标题]] and `literal` text``
+文字 ``跨行 [[原标题]]
+和 `literal` 行`` [[原标题]]
+\[[原标题]] \[文字](原标题.md)
+\\[[原标题]]
+\`[[原标题]]\`
+`code \` [[原标题]]
+
+````markdown
+[[原标题]]
+```
+[[原标题]]
+````
+~~~md
+[文字](原标题.md)
+~~~
+    [[原标题]]
+[[原标题]] [正文](%E5%8E%9F%E6%A0%87%E9%A2%98.md#正文)
+未闭合 ` [[原标题]]
+''');
+    final renamed = await workspace.renameNote(note.id, title: '新标题');
+    expect(await inbound.readAsString(), r'''``[[原标题]] and `literal` text``
+文字 ``跨行 [[原标题]]
+和 `literal` 行`` [[新标题]]
+\[[原标题]] \[文字](原标题.md)
+\\[[新标题]]
+\`[[新标题]]\`
+`code \` [[新标题]]
+
+````markdown
+[[原标题]]
+```
+[[原标题]]
+````
+~~~md
+[文字](原标题.md)
+~~~
+    [[原标题]]
+[[新标题]] [正文](%E6%96%B0%E6%A0%87%E9%A2%98.md#正文)
+未闭合 ` [[新标题]]
+''');
+    expect(await File(renamed.sourcePath).readAsString(), '不应改写代码示例。');
+  });
+
+  test('rename preserves code in list and quote containers and updates real surrounding links', () async {
+    final note = await workspace.captureText(title: '原标题', text: '保留容器内的代码原文。');
+    const examples = <({String name, String before, String after})>[
+      (
+        name: 'bullet',
+        before: '- ```markdown\n  [[原标题]]\n  ```\n\n[[原标题]]',
+        after: '- ```markdown\n  [[原标题]]\n  ```\n\n[[新标题]]',
+      ),
+      (
+        name: 'ordered',
+        before: '10. ```md\n    [[原标题]]\n    ```\n\n[[原标题]]',
+        after: '10. ```md\n    [[原标题]]\n    ```\n\n[[新标题]]',
+      ),
+      (
+        name: 'nested',
+        before: '- 说明\n  - ````md\n    [[原标题]]\n    ```\n    [[原标题]]\n    ````\n  - [[原标题]]\n\n[[原标题]]',
+        after: '- 说明\n  - ````md\n    [[原标题]]\n    ```\n    [[原标题]]\n    ````\n  - [[新标题]]\n\n[[新标题]]',
+      ),
+      (
+        name: 'list-in-quote',
+        before: '> - ~~~md\n>   [[原标题]]\n>   ~~~\n> [[原标题]]\n\n[[原标题]]',
+        after: '> - ~~~md\n>   [[原标题]]\n>   ~~~\n> [[新标题]]\n\n[[新标题]]',
+      ),
+      (
+        name: 'quote-in-list',
+        before: '- > ```md\n  > [[原标题]]\n  > ```\n  [[原标题]]\n\n[[原标题]]',
+        after: '- > ```md\n  > [[原标题]]\n  > ```\n  [[新标题]]\n\n[[新标题]]',
+      ),
+      (
+        name: 'mixed-nesting',
+        before: '> 1. 说明\n>    - > ```md\n>      > [[原标题]]\n>      > ```\n>    - [[原标题]]\n\n[[原标题]]',
+        after: '> 1. 说明\n>    - > ```md\n>      > [[原标题]]\n>      > ```\n>    - [[新标题]]\n\n[[新标题]]',
+      ),
+      (
+        name: 'unclosed-list-fence',
+        before: '- ~~~md\n  [[原标题]]\n- [[原标题]]\n\n[[原标题]]',
+        after: '- ~~~md\n  [[原标题]]\n- [[新标题]]\n\n[[新标题]]',
+      ),
+      (
+        name: 'unclosed-quote-fence',
+        before: '> ```md\n> [[原标题]]\n[[原标题]]',
+        after: '> ```md\n> [[原标题]]\n[[新标题]]',
+      ),
+      (
+        name: 'blank-and-tab',
+        before: '-\t```md\n\n\t[[原标题]]\n\t```\n[[原标题]]',
+        after: '-\t```md\n\n\t[[原标题]]\n\t```\n[[新标题]]',
+      ),
+      (
+        name: 'indented-list-code',
+        before: '- 示例\n\n      [[原标题]]\n\n  [[原标题]]\n\n[[原标题]]',
+        after: '- 示例\n\n      [[原标题]]\n\n  [[新标题]]\n\n[[新标题]]',
+      ),
+      (
+        name: 'adjacent-reference',
+        before: '- ```md\n  [[原标题]]\n  ```\n  [ref]: 原标题.md\n\n[跳转][ref]',
+        after: '- ```md\n  [[原标题]]\n  ```\n  [ref]: 新标题.md\n\n[跳转][ref]',
+      ),
+      (
+        name: 'windows-lines',
+        before:
+            '- ```md\r\n  [[原标题]]\r\n  ```\r\n  [ref]: 原标题.md\r\n\r\n[[原标题]]',
+        after:
+            '- ```md\r\n  [[原标题]]\r\n  ```\r\n  [ref]: 新标题.md\r\n\r\n[[新标题]]',
+      ),
+      (
+        name: 'quote-paragraph-code',
+        before: '> ``[[原标题]]\nand `literal` text`` [[原标题]]\n\n[[原标题]]',
+        after: '> ``[[原标题]]\nand `literal` text`` [[新标题]]\n\n[[新标题]]',
+      ),
+      (
+        name: 'list-paragraph-code',
+        before: '- ``[[原标题]]\nand `literal` text`` [[原标题]]\n\n[[原标题]]',
+        after: '- ``[[原标题]]\nand `literal` text`` [[新标题]]\n\n[[新标题]]',
+      ),
+    ];
+    for (final example in examples) {
+      await File('${vault.path}/${example.name}.md')
+          .writeAsString(example.before);
+    }
+    final renamed = await workspace.renameNote(note.id, title: '新标题');
+    for (final example in examples) {
+      expect(
+        await File('${vault.path}/${example.name}.md').readAsString(),
+        example.after,
+        reason: example.name,
+      );
+    }
+    expect(renamed.status, NoteStatus.localSaved);
+    expect(await File(note.notePath).exists(), isFalse);
+    expect(await File(renamed.sourcePath).readAsString(), '保留容器内的代码原文。');
+  });
+
   test(
     'duplicate file names reserve directories, case variants and symlinks',
     () async {
