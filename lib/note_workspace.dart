@@ -500,6 +500,10 @@ class NoteWorkspace {
           update['after'] as String,
           'rename-$id',
         );
+        _inboundNoteContentsChanged(
+          update['path'] as String,
+          update['after'] as String,
+        );
       }
       await vaultStorage.deleteText(
         plan['oldPath'] as String,
@@ -533,6 +537,27 @@ class NoteWorkspace {
       ]);
     }
     return notes.firstWhere((note) => note.id == id);
+  }
+
+  void _inboundNoteContentsChanged(String relativePath, String text) {
+    final owners = _database.select(
+      'SELECT id FROM notes WHERE vault = ? AND note_path = ?',
+      [vaultStorage.identity, vaultStorage.reference(relativePath)],
+    );
+    if (owners.isEmpty) return;
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      for (final owner in owners) {
+        _attachments.noteContentsChanged(owner['id'] as String, text);
+      }
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
+    // The parent's durable rename plan stays until every update is complete.
+    // If interrupted before this commit, replay acknowledges the same file and
+    // repeats this rebase before attachment recovery runs.
   }
 
   /// Retries publication of an existing durable capture without collecting again.
