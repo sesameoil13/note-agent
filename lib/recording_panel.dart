@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'note_workspace.dart';
+import 'accessible_icon_button.dart';
 
 /// Recording controls use the same public workspace actions as behavioral tests.
 class RecordingPanel extends StatefulWidget {
@@ -266,8 +267,8 @@ class _RecordingPanelState extends State<RecordingPanel> {
         children: [
           Row(
             children: [
-              IconButton(
-                tooltip: playing ? '停止回放' : '回放原音频',
+              AccessibleIconButton(
+                label: playing ? '停止回放' : '回放原音频',
                 onPressed:
                     _busy ||
                         widget.workspace.recording.isActive ||
@@ -301,7 +302,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
             RecordingStatus.capturing => '录制中 · 原音频尚未完成',
             RecordingStatus.savePending => '原音频已保留 · 待写入笔记库',
             RecordingStatus.localSaved => '本机原音频已保存 · 尚未转写',
-            RecordingStatus.exportFailed => '本机原音频已保留 · 笔记库未写入',
+            RecordingStatus.exportFailed => '本机原音频已保留 · 笔记库写入未确认',
             RecordingStatus.interrupted => '录音意外中断 · 请回放核对',
             RecordingStatus.failed => '未能开始录音',
           }, style: const TextStyle(color: Color(0xFF767C82), fontSize: 12)),
