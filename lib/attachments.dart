@@ -130,7 +130,11 @@ class WorkspaceAttachments {
     );
   }
 
-  Future<WorkspaceAttachment> attach(String noteId, File original) async {
+  Future<WorkspaceAttachment> attach(
+    String noteId,
+    File original, {
+    bool publish = true,
+  }) async {
     if (database.select('SELECT id FROM notes WHERE id = ? AND vault = ?', [
       noteId,
       vault.identity,
@@ -170,6 +174,7 @@ class WorkspaceAttachments {
       ],
     );
     final result = attachments.firstWhere((item) => item.id == id);
+    if (!publish) return result;
     if (status == AttachmentStatus.exceedsFileLimit) {
       await writeEntry(result, '$name（仅本机保留，超过 Standard 单文件 5 MB）');
     } else {

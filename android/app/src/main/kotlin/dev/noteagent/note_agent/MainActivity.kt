@@ -5,11 +5,16 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
 import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
@@ -26,6 +31,8 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "chooseLocation" -> chooseLocation(result)
+                    "chooseSourceFile" -> chooseSourceFile(call, result)
+                    "revealLocalSource" -> revealLocalSource(call, result)
                     "openInObsidian" -> openInObsidian(call, result)
                     "openSyncPlans" -> {
                         try {
@@ -43,6 +50,16 @@ class MainActivity : FlutterActivity() {
                                 "vaultReadText" -> vault(call).readText(path(call))
                                 "vaultPublishText" -> {
                                     vault(call).publishText(path(call), text(call), operation(call)); null
+                                }
+                                "vaultPublishFile" -> {
+                                    val source = privateSource(requireNotNull(call.argument<String>("sourcePath")))
+                                    vault(call).publishFile(path(call), source, operation(call)); null
+                                }
+                                "releaseSourceFile" -> {
+                                    val source = File(requireNotNull(call.argument<String>("path"))).canonicalFile
+                                    val root = File(cacheDir, "selected-sources").canonicalFile
+                                    require(source.path.startsWith(root.path + File.separator)) { "来源位置无效。" }
+                                    source.delete(); source.parentFile?.delete(); null
                                 }
                                 "vaultListNotePaths" -> vault(call).listNotePaths()
                                 "vaultReplaceText" -> {
@@ -131,11 +148,36 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Activity result API retained for FlutterActivity's system picker bridge")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 2002) return
+        if (requestCode != 2002 && requestCode != 2003) return
         val result = pendingPicker ?: return
         pendingPicker = null
         val uri = data?.data
         if (resultCode != Activity.RESULT_OK || uri == null) { result.success(null); return }
+        if (requestCode == 2003) {
+            io.execute {
+                var destination: File? = null
+                try {
+                    require(uri.scheme == "content") { "请选择系统文档提供方中的文件。" }
+                    val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                        if (it.moveToFirst()) it.getString(0) else null
+                    } ?: "document.pdf"
+                    val safeName = name.replace(Regex("[\\\\/\\p{Cntrl}]"), "_").take(180).ifBlank { "document.pdf" }
+                    val folder = File(cacheDir, "selected-sources/${UUID.randomUUID()}")
+                    check(folder.mkdirs()) { "无法准备本机来源副本。" }
+                    val selected = File(folder, safeName)
+                    destination = selected
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(selected).use { output -> input.copyTo(output, 65536); output.fd.sync() }
+                    } ?: error("无法读取所选文件。")
+                    val selectedPath = selected.absolutePath
+                    runOnUiThread { result.success(selectedPath) }
+                } catch (error: Exception) {
+                    destination?.delete(); destination?.parentFile?.delete()
+                    runOnUiThread { result.error("source_access", error.message ?: "无法完整保留所选来源，请重新选择。", null) }
+                }
+            }
+            return
+        }
         io.execute {
             try {
                 // Obsidian's Android vault must be a local shared-storage directory.
@@ -156,6 +198,47 @@ class MainActivity : FlutterActivity() {
                 runOnUiThread { result.error("directory_access", error.message ?: "无法获得目录授权，输入已保留。", null) }
             }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun chooseSourceFile(call: MethodCall, result: MethodChannel.Result) {
+        if (pendingPicker != null) { result.error("picker_busy", "系统选择器已打开。", null); return }
+        pendingPicker = result
+        try {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                type = when {
+                    call.argument<Boolean>("pdfOnly") == true -> "application/pdf"
+                    call.argument<Boolean>("audioOnly") == true -> "audio/*"
+                    else -> "*/*"
+                }
+                addCategory(Intent.CATEGORY_OPENABLE)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+            }, 2003)
+        } catch (_: Exception) {
+            pendingPicker = null
+            result.error("picker_unavailable", "无法打开系统文件选择器。", null)
+        }
+    }
+
+    private fun privateSource(path: String): File {
+        val source = File(path).canonicalFile
+        val allowed = listOf("originals", "copies", "recordings").any {
+            val root = File(filesDir, "workspace/$it").canonicalFile
+            source.path.startsWith(root.path + File.separator)
+        }
+        require(source.isFile && allowed) { "本机原件位置无效。" }
+        return source
+    }
+
+    private fun revealLocalSource(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val source = privateSource(requireNotNull(call.argument<String>("path")))
+            val uri = FileProvider.getUriForFile(this, "$packageName.sources", source)
+            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(source.extension.lowercase()) ?: "application/octet-stream"
+            startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            result.success(null)
+        } catch (_: Exception) { result.error("source_open", "无法打开原件，请安装相应文档阅读工具。原件继续保留。", null) }
     }
 
     private fun openInObsidian(call: MethodCall, result: MethodChannel.Result) {

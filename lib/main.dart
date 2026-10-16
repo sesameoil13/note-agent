@@ -12,6 +12,7 @@ import 'accessible_icon_button.dart';
 import 'method_channel_audio.dart';
 import 'recording_panel.dart';
 import 'workspace_platform.dart';
+import 'document_panel.dart';
 
 void main() => runApp(const NoteAgentApp());
 
@@ -277,6 +278,17 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     }
   }
 
+  void _documentChanged(String? id) {
+    if (!mounted) return;
+    setState(() {
+      if (id != null) {
+        _selectedId = id;
+        _composing = false;
+        _recordingPage = false;
+      }
+    });
+  }
+
   String _errorMessage(Object error) {
     if (error is PlatformException) return error.message ?? '系统操作未完成，请重试。';
     if (error is ArgumentError) return error.message.toString();
@@ -387,6 +399,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
           icon: const Icon(Icons.link),
         ),
         if (_workspace != null) ...[
+          if (wide) ...[
+            PdfImportButton(
+              workspace: _workspace!,
+              onChanged: _documentChanged,
+            ),
+            const SizedBox(width: 8),
+          ],
           if (_workspace!.recordingAvailable ||
               _platform.supportsSourceFiles) ...[
             if (wide)
@@ -720,6 +739,16 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
               style: TextStyle(color: ash, height: 1.5),
             ),
             const SizedBox(height: 32),
+            if (MediaQuery.sizeOf(context).width < 960) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: PdfImportButton(
+                  workspace: _workspace!,
+                  onChanged: _documentChanged,
+                ),
+              ),
+              const SizedBox(height: 24),
+            ],
             TextField(
               controller: _title,
               enabled: !_saving,
@@ -877,12 +906,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
               const SizedBox(height: 32),
               _sectionTitle('来源'),
               const SizedBox(height: 16),
+              if (note.document != null) ...[
+                DocumentStatusView(
+                  key: ValueKey(note.id),
+                  workspace: _workspace!,
+                  note: note,
+                  onChanged: () => _documentChanged(null),
+                ),
+                const SizedBox(height: 16),
+              ],
               Align(
                 alignment: Alignment.centerLeft,
                 child: OutlinedButton.icon(
                   onPressed: () => _showOriginal(note),
                   icon: const Icon(Icons.description_outlined, size: 16),
-                  label: const Text('原始文字'),
+                  label: Text(note.document == null ? '原始文字' : '提取结果'),
                 ),
               ),
               AttachmentSources(
@@ -923,7 +961,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   void _showOriginal(WorkspaceNote note) => showDialog<void>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('收集的原文'),
+      title: Text(note.document == null ? '收集的原文' : 'PDF 提取结果'),
       content: SizedBox(
         width: 640,
         child: SingleChildScrollView(

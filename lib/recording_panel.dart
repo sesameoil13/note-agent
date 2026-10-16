@@ -110,7 +110,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
   Future<void> _importAudio({String? submissionId}) => _act(() async {
     File? selected;
     try {
-      selected = await _platform.chooseSourceFile();
+      selected = await _platform.chooseSourceFile(audioOnly: true);
       if (selected == null) return;
       final token =
           submissionId ??
