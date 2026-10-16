@@ -215,6 +215,7 @@ readPdfLayout(
       continue;
     }
     DocumentLocation at(List<double> box) => DocumentLocation(
+      coordinateSpace: location.coordinateSpace,
       sourceId: location.sourceId,
       page: location.page,
       bounds: box,
@@ -267,6 +268,7 @@ readPdfLayout(
         DocumentBody(
           text,
           DocumentLocation(
+            coordinateSpace: location.coordinateSpace,
             sourceId: location.sourceId,
             page: location.page,
             bounds: bounds,

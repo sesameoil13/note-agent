@@ -9,7 +9,10 @@ when a smaller Sync copy was chosen. If saving the original failed, its optional
 The internal `DocumentExtractor` interface accepts the retained file, source
 identity and validated options. Its engine-neutral result contains body blocks,
 table cells, source locations, completion, structured problems, and unprocessed
-page/region ranges. PDF locations use 1-based pages and unrotated PDF points
+page/region ranges. A location can instead identify a source `part` and
+zero-based `blockIndex` without inventing a page or coordinate system. Body
+and table blocks can declare global `order` for stable mixed content; old PDF
+JSON falls back to page/top ordering. PDF locations use 1-based pages and unrotated PDF points
 `[left, bottom, right, top]` from a bottom-left origin; rotation is explicit.
 Word and future OCR adapters can return the same result types.
 

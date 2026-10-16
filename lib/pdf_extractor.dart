@@ -10,6 +10,8 @@ import 'document_extraction.dart';
 import 'pdf_native.dart';
 import 'pdf_layout.dart';
 
+const _engine = 'pdfium/7811 guarded-text-v1';
+
 /// Owns PDFium on one background isolate at a time. Unlike loadText(), this
 /// adapter checks native handles and character counts BEFORE Dart allocation.
 /// No rendering, URI opening, remote fonts, JavaScript, OCR or network access.
@@ -48,6 +50,7 @@ class LocalPdfExtractor implements DocumentExtractor {
         if ((message is List || message == null) && !result.isCompleted) {
           result.complete(
             const DocumentExtraction(
+              engine: _engine,
               completion: DocumentCompletion.failed,
               problems: [
                 DocumentProblem(
@@ -73,6 +76,7 @@ class LocalPdfExtractor implements DocumentExtractor {
       return extraction;
     } catch (_) {
       return const DocumentExtraction(
+        engine: _engine,
         completion: DocumentCompletion.failed,
         problems: [
           DocumentProblem('engineUnavailable', '本机 PDF 引擎无法启动，请重试；原件已保留。'),
@@ -102,6 +106,7 @@ Future<void> _worker(
     if (await File(path).length() > options.maximumInputBytes) {
       output.send(
         const DocumentExtraction(
+          engine: _engine,
           completion: DocumentCompletion.failed,
           problems: [
             DocumentProblem(
@@ -125,6 +130,7 @@ Future<void> _worker(
       final error = GuardedPdfium.FPDF_GetLastError();
       output.send(
         DocumentExtraction(
+          engine: _engine,
           completion: DocumentCompletion.failed,
           problems: [
             DocumentProblem(
@@ -174,6 +180,7 @@ Future<void> _worker(
         );
         unprocessed.add(
           DocumentLocation(
+            coordinateSpace: 'pdf-points-bottom-left',
             sourceId: sourceId,
             page: index + 1,
             lastPage: total,
@@ -181,7 +188,11 @@ Future<void> _worker(
         );
         break;
       }
-      final location = DocumentLocation(sourceId: sourceId, page: index + 1);
+      final location = DocumentLocation(
+        coordinateSpace: 'pdf-points-bottom-left',
+        sourceId: sourceId,
+        page: index + 1,
+      );
       FPDF_PAGE page = nullptr;
       FPDF_TEXTPAGE text = nullptr;
       try {
@@ -243,6 +254,7 @@ Future<void> _worker(
           }
         });
         final pageLocation = DocumentLocation(
+          coordinateSpace: 'pdf-points-bottom-left',
           sourceId: sourceId,
           page: index + 1,
           rotation: GuardedPdfium.FPDFPage_GetRotation(page) * 90,
@@ -258,6 +270,7 @@ Future<void> _worker(
               ),
         );
         final serialized = DocumentExtraction(
+          engine: _engine,
           completion: DocumentCompletion.complete,
           body: layout.body,
           tables: layout.tables,
@@ -276,6 +289,7 @@ Future<void> _worker(
           );
           unprocessed.add(
             DocumentLocation(
+              coordinateSpace: 'pdf-points-bottom-left',
               sourceId: sourceId,
               page: index + 1,
               lastPage: total,
@@ -332,6 +346,7 @@ Future<void> _worker(
     }
     output.send(
       DocumentExtraction(
+        engine: _engine,
         completion: body.isEmpty && tables.isEmpty
             ? problems.every(
                     (p) => p.code == 'noText' || p.code == 'imageRegion',
@@ -354,6 +369,7 @@ Future<void> _worker(
   } catch (_) {
     output.send(
       const DocumentExtraction(
+        engine: _engine,
         completion: DocumentCompletion.failed,
         problems: [
           DocumentProblem('engineFailed', '本机 PDF 处理失败，原件已保留；可重试或查看原件。'),
