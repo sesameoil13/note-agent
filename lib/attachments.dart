@@ -287,9 +287,10 @@ class WorkspaceAttachments {
           rowEntry['entry_after'] as String,
           'attachment-${attachment.id}',
         );
-        database.execute(
-          'UPDATE attachments SET source_entry = entry_target, entry_before = NULL, entry_after = NULL, entry_target = NULL, error = NULL WHERE id = ?',
-          [attachment.id],
+        _entryCommitted(
+          attachment,
+          rowEntry['entry_target'] as String,
+          rowEntry['entry_after'] as String,
         );
         rowEntry = database.select('SELECT * FROM attachments WHERE id = ?', [
           attachment.id,
@@ -298,24 +299,7 @@ class WorkspaceAttachments {
       final old = rowEntry['source_entry'] as String;
       if (old == entry) return;
       final text = await vault.readText(path);
-      String updated;
-      if (old.isNotEmpty) {
-        if (!text.contains('\n\n$old\n\n')) {
-          throw const FileSystemException('来源已在其他位置修改，请核对后重试。');
-        }
-        updated = text.replaceFirst('\n\n$old\n\n', '\n\n$entry\n\n');
-      } else {
-        const anchor = '## 来源\n\n';
-        if (anchor.allMatches(text).length != 1) {
-          throw const FileSystemException('未找到唯一的来源位置，请核对笔记。');
-        }
-        final date = text.indexOf(
-          '\n\n记录：',
-          text.indexOf(anchor) + anchor.length,
-        );
-        if (date < 0) throw const FileSystemException('未找到来源后的记录时间，请核对笔记。');
-        updated = '${text.substring(0, date)}\n\n$entry${text.substring(date)}';
-      }
+      final updated = _withEntry(text, old, entry);
       database.execute(
         'UPDATE attachments SET entry_before = ?, entry_after = ?, entry_target = ? WHERE id = ?',
         [text, updated, entry, attachment.id],
@@ -326,15 +310,97 @@ class WorkspaceAttachments {
         updated,
         'attachment-${attachment.id}',
       );
-      database.execute(
-        'UPDATE attachments SET source_entry = ?, entry_before = NULL, entry_after = NULL, entry_target = NULL, error = NULL WHERE id = ?',
-        [entry, attachment.id],
-      );
+      _entryCommitted(attachment, entry, updated);
     } on FileSystemException catch (error) {
       database.execute('UPDATE attachments SET error = ? WHERE id = ?', [
         error.message,
         attachment.id,
       ]);
     }
+  }
+
+  void _entryCommitted(
+    WorkspaceAttachment attachment,
+    String entry,
+    String text,
+  ) {
+    database.execute('BEGIN IMMEDIATE');
+    try {
+      database.execute(
+        'UPDATE attachments SET source_entry = ?, entry_before = NULL, entry_after = NULL, entry_target = NULL, error = NULL WHERE id = ?',
+        [entry, attachment.id],
+      );
+      noteContentsChanged(attachment.noteId, text);
+      database.execute('COMMIT');
+    } catch (_) {
+      database.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  /// Called inside the transaction that commits an owned rename/source write.
+  /// The new note text is already published. Rebase only our source delta;
+  /// never replay the journal's older body or modification line over it.
+  void noteContentsChanged(String noteId, String renamedText) {
+    final pending = database.select(
+      'SELECT * FROM attachments WHERE vault = ? AND note_id = ? AND entry_before IS NOT NULL',
+      [vault.identity, noteId],
+    );
+    for (final row in pending) {
+      try {
+        final target = row['entry_target'] as String;
+        final updated = _withEntry(
+          renamedText,
+          row['source_entry'] as String,
+          target,
+          acceptExisting: true,
+        );
+        database.execute(
+          'UPDATE attachments SET entry_before = ?, entry_after = ? WHERE id = ?',
+          [renamedText, updated, row['id']],
+        );
+      } on FileSystemException catch (error) {
+        // A genuinely edited/ambiguous source remains pending. The rename
+        // succeeds without overwriting those changes or asserting publication.
+        database.execute('UPDATE attachments SET error = ? WHERE id = ?', [
+          error.message,
+          row['id'],
+        ]);
+      }
+    }
+  }
+
+  String _withEntry(
+    String text,
+    String old,
+    String entry, {
+    bool acceptExisting = false,
+  }) {
+    const anchor = '## 来源\n\n';
+    if (anchor.allMatches(text).length != 1) {
+      throw const FileSystemException('未找到唯一的来源位置，请核对笔记。');
+    }
+    final start = text.indexOf(anchor);
+    final date = text.indexOf('\n\n记录：', start + anchor.length);
+    if (date < 0) {
+      throw const FileSystemException('未找到来源后的记录时间，请核对笔记。');
+    }
+    final source = '${text.substring(start, date)}\n\n';
+    final targetPattern = '\n\n$entry\n\n';
+    final targets = targetPattern.allMatches(source).length;
+    final oldPattern = '\n\n$old\n\n';
+    final oldMatches = old.isEmpty ? 0 : oldPattern.allMatches(source).length;
+    if (acceptExisting &&
+        targets == 1 &&
+        (old.isEmpty || oldMatches == 0 || old == entry)) {
+      return text;
+    }
+    if (targets != 0 || (old.isNotEmpty && oldMatches != 1)) {
+      throw const FileSystemException('来源已在其他位置修改，请核对后重试。');
+    }
+    final updatedSource = old.isEmpty
+        ? '${source.substring(0, source.length - 2)}\n\n$entry\n\n'
+        : source.replaceFirst(oldPattern, targetPattern);
+    return '${text.substring(0, start)}${updatedSource.substring(0, updatedSource.length - 2)}${text.substring(date)}';
   }
 }

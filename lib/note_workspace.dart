@@ -518,6 +518,7 @@ class NoteWorkspace {
             id,
           ],
         );
+        _attachments.noteContentsChanged(id, plan['renamed'] as String);
         _database.execute('DELETE FROM note_renames WHERE note_id = ?', [id]);
         _database.execute('COMMIT');
       } catch (_) {
