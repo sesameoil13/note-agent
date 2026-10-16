@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'note_workspace.dart';
+import 'accessible_icon_button.dart';
 import 'method_channel_audio.dart';
 import 'recording_panel.dart';
 import 'workspace_platform.dart';
@@ -377,23 +378,23 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                 label: const Text('录音'),
               )
             else
-              IconButton(
+              AccessibleIconButton(
                 onPressed: _saving
                     ? null
                     : () => setState(() => _recordingPage = true),
-                tooltip: '录音',
+                label: '录音',
                 icon: const Icon(Icons.mic),
               ),
             const SizedBox(width: 8),
           ],
           if (!wide)
-            IconButton(
+            AccessibleIconButton(
               onPressed: _showRecent,
-              tooltip: '最近记录',
+              label: '最近记录',
               icon: const Icon(Icons.notes),
             ),
           if (!wide)
-            IconButton(
+            AccessibleIconButton(
               onPressed: _saving
                   ? null
                   : () => setState(() {
@@ -402,7 +403,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
                       _selectedId = null;
                       _error = null;
                     }),
-              tooltip: '新建文字',
+              label: '新建文字',
               icon: const Icon(Icons.add),
             ),
           if (wide)

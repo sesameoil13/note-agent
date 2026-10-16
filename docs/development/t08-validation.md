@@ -75,3 +75,31 @@ Before closing #9, collect real evidence for:
 
 Use the app's `录音` page; the operating-system permission prompt is user-owned.
 Do not touch the old vault or reset global privacy settings for this check.
+
+## Source follow-up after native observations
+
+Root's native session found blank accessibility names on the compact icon-only
+recording/recent/new-text controls and the recording-row play/stop control. A
+public semantics test reproduced empty labels despite existing tooltips. The
+controls now expose explicit names, enabled/button state and press actions while
+preserving their appearance and callbacks. Headless accessibility actions navigate
+those pages and start/stop workspace playback. A refreshed native AX check is
+still required after root clears the running bundle for a rebuild.
+
+A storage operation may publish complete audio and fail while acknowledging its
+result. The recording UI now reports “笔记库写入未确认” for an export failure,
+without asserting the vault copy is absent. A real temporary-file public probe
+checks this case, retained local playback, and one stable recording after retry;
+the independent merger probe also passes.
+
+Root has reported real pause/resume, automatic final saving, audible playback
+confirmed by the user, and normal quit/relaunch restoring the same record on
+candidate `097fe5e`. Actual duration was 599.257687 seconds, 2,457,517 bytes, with
+matching private/vault copies. The session was found paused overnight with
+unknown intervening human action, so it does not prove uninterrupted ten-minute
+capture. OS-level denied-microphone acceptance remains untested. All actual audio
+stays private and local; no transcription/API upload is part of this work.
+
+The follow-up's complete host suite passes 33 tests, `flutter analyze` is clean,
+and the independent publication-truth probe passes. This follow-up is source-only:
+the running native bundle was neither rebuilt nor relaunched by the implementer.
