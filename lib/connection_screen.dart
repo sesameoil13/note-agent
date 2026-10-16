@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'connection.dart';
+import 'secure_connection_field.dart';
 
 /// The only UI that accepts the service Key. Secret text is never reflected in status.
 class ConnectionScreen extends StatefulWidget {
@@ -110,20 +111,13 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                 style: const TextStyle(height: 1.6),
               ),
               const SizedBox(height: 16),
-              TextField(
+              SecureConnectionField(
                 controller: _key,
                 enabled: !_busy,
-                obscureText: true,
-                autocorrect: false,
-                enableSuggestions: false,
-                autofillHints: const [],
-                keyboardType: TextInputType.visiblePassword,
-                decoration: InputDecoration(
-                  labelText: connection.state.hasKey
-                      ? '替换 OpenRouter API Key'
-                      : 'OpenRouter API Key',
-                  helperText: '仅存入本机系统安全存储；连接检测不调用收费模型。',
-                ),
+                label: connection.state.hasKey
+                    ? '替换 OpenRouter API Key'
+                    : 'OpenRouter API Key',
+                helperText: '仅存入本机系统安全存储；连接检测不调用收费模型。',
               ),
               const SizedBox(height: 16),
               Wrap(
@@ -188,13 +182,10 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     style: TextStyle(height: 1.6),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  SecureConnectionField(
                     controller: _activation,
                     enabled: !_busy,
-                    obscureText: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: const InputDecoration(labelText: '首次启用码'),
+                    label: '首次启用码',
                   ),
                   const SizedBox(height: 12),
                   Align(

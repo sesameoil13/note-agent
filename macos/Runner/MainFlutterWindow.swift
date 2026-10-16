@@ -17,6 +17,11 @@ class MainFlutterWindow: NSWindow {
     minSize = NSSize(width: 640, height: 640)
     title = "笔记工作区"
     RegisterGeneratedPlugins(registry: controller)
+    let secureInputRegistrar = controller.registrar(forPlugin: "SecureInput")
+    secureInputRegistrar.register(
+      SecureInputFactory(messenger: secureInputRegistrar.messenger),
+      withId: "dev.noteagent/secure-input"
+    )
     secureCredentials = SecureCredentials(messenger: controller.engine.binaryMessenger)
     nativeAudio = NativeAudio(messenger: controller.engine.binaryMessenger)
 

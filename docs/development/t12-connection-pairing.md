@@ -16,6 +16,8 @@
 
 “连接与设备”在工作区顶部可进入，尚未选择笔记库时也可进入。Key 只在 App 的遮蔽输入框填写；检测只请求 `GET https://openrouter.ai/api/v1/key`，禁止重定向，不发送笔记，不调用模型。管理／Provisioning Key 元数据会被拒绝。凭据错误不自动循环重试，界面不回显 Key 或服务原始错误。
 
+macOS 的 Key 与首次启用码使用 AppKit `NSSecureTextField`，通过 Flutter `AppKitView` 嵌入，保留有名称的原生密码输入、键盘编辑与系统辅助功能。当前 SDK 的 Flutter 遮蔽文本虽已在 Dart semantics 中掩码，macOS 辅助功能桥仍会把正在编辑的原文写入普通 `NSTextField`，因此仅检查界面圆点或 `find.text` 不足以证明保密。公开 App UI 回归检查两个输入确实交给原生节点、编辑能到达原连接动作且 Flutter semantics 不含测试 Key；真实 macOS AX 的密码角色与值仍须由隔离实际 App 验收。其他平台继续使用 Flutter 的遮蔽输入；可见配对码与复制操作不变。参见 [Apple 安全输入](https://developer.apple.com/documentation/appkit/nssecuretextfield) 与 [Flutter macOS 原生视图](https://docs.flutter.dev/platform-integration/macos/platform-views)。
+
 整个凭据包（OpenRouter Key、设备随机令牌、未完成配对的随机秘密和恢复状态）只经系统安全存储 Adapter 持久化：
 
 - macOS：Keychain generic password，独立 service/account，`AfterFirstUnlockThisDeviceOnly`，不写 UserDefaults、SQLite 或笔记库。
