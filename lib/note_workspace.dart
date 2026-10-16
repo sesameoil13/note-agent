@@ -7,8 +7,14 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'note_files.dart';
 import 'connection.dart';
+import 'attachments.dart';
 import 'note_links.dart';
+export 'attachments.dart' hide WorkspaceAttachments;
 import 'vault_storage.dart';
+import 'sync_policy.dart';
+import 'recordings.dart';
+export 'sync_policy.dart';
+export 'recordings.dart' hide WorkspaceRecordings;
 export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
@@ -20,6 +26,13 @@ enum NoteStatus {
   renamePending,
   renameFailed,
 }
+
+/// Official Sync provides no acknowledgement to this app. Local publication
+/// can only establish eligibility, never arrival on another device.
+enum NoteSyncStatus { notPublished, unverified, attachmentBlocked }
+
+/// The lightweight task-status connection is independent of note-file Sync.
+enum TaskStatusSync { notConnected }
 
 /// A collected note, exposed without storage or processing implementation details.
 class WorkspaceNote {
@@ -34,6 +47,7 @@ class WorkspaceNote {
     required this.status,
     this.titleCollision = false,
     this.error,
+    this.attachments = const [],
   });
 
   final String id;
@@ -48,6 +62,17 @@ class WorkspaceNote {
   /// Numbering was needed after the supplied semantic alternatives conflicted.
   final bool titleCollision;
   final String? error;
+
+  final List<WorkspaceAttachment> attachments;
+
+  NoteSyncStatus get syncStatus {
+    if (attachments.any((item) => item.hasLocalOnlyOriginal)) {
+      return NoteSyncStatus.attachmentBlocked;
+    }
+    return status == NoteStatus.localSaved
+        ? NoteSyncStatus.unverified
+        : NoteSyncStatus.notPublished;
+  }
 }
 
 /// The public business boundary shared by the app and behavioral tests.
@@ -63,9 +88,51 @@ class NoteWorkspace {
     this.connection,
   );
 
+  late final WorkspaceRecordings _recordings;
+  late final WorkspaceAttachments _attachments;
+
+  List<WorkspaceAttachment> get attachments => _attachments.attachments;
+
+  Future<WorkspaceAttachment> attachFile({
+    required String noteId,
+    required File original,
+  }) => _mutate(() => _attachments.attach(noteId, original));
+
+  Future<WorkspaceAttachment> chooseAttachmentCopy({
+    required String attachmentId,
+    required File copy,
+  }) => _mutate(() => _attachments.chooseCopy(attachmentId, copy));
+
+  Future<WorkspaceAttachment> retainAttachmentLocally(String attachmentId) =>
+      _mutate(() => _attachments.retainLocally(attachmentId));
+
+  Future<WorkspaceAttachment> retryAttachmentExport(String attachmentId) =>
+      _mutate(() => _attachments.export(attachmentId));
+
   final Database _database;
   final WorkspaceConnection connection;
   final VaultStorage vaultStorage;
+
+  TaskStatusSync get taskStatusSync => TaskStatusSync.notConnected;
+
+  Future<SyncStorageOverview> inspectSyncStorage() async {
+    final storage = vaultStorage;
+    if (storage is! DirectoryVaultStorage) {
+      return const SyncStorageOverview(localVaultBytes: null);
+    }
+    var bytes = 0;
+    try {
+      await for (final entity in storage.directory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is File) bytes += await entity.length();
+      }
+      return SyncStorageOverview(localVaultBytes: bytes);
+    } on FileSystemException {
+      return const SyncStorageOverview(localVaultBytes: null);
+    }
+  }
 
   /// Compatibility for desktop callers; SAF references are not local paths.
   Directory get vaultDirectory {
@@ -89,6 +156,7 @@ class NoteWorkspace {
     String Function()? createId,
     NoteFilePublisher? filePublisher,
     WorkspaceConnection? connection,
+    AudioPlatform? audioPlatform,
   }) async {
     if (vaultStorage == null) {
       if (vaultDirectory == null || !await vaultDirectory.exists()) {
@@ -141,6 +209,21 @@ class NoteWorkspace {
       createId ?? _randomId,
       connection ?? WorkspaceConnection.platform(),
     );
+    workspace._attachments = WorkspaceAttachments(
+      database,
+      localDirectory,
+      vaultStorage,
+      workspace._createId,
+    );
+    workspace._recordings = WorkspaceRecordings(
+      database,
+      localDirectory,
+      vaultStorage,
+      audioPlatform,
+      clock ?? DateTime.now,
+      createId ?? _randomId,
+    );
+    await workspace._recordings.recover();
     for (final note in workspace.notes) {
       if (note.status == NoteStatus.exportPending) {
         await workspace.retryNoteExport(note.id);
@@ -152,6 +235,7 @@ class NoteWorkspace {
     )) {
       await workspace._finishRename(row['note_id'] as String);
     }
+    await workspace._attachments.recover();
     return workspace;
   }
 
@@ -421,6 +505,10 @@ class NoteWorkspace {
           update['after'] as String,
           'rename-$id',
         );
+        _inboundNoteContentsChanged(
+          update['path'] as String,
+          update['after'] as String,
+        );
       }
       await vaultStorage.deleteText(
         plan['oldPath'] as String,
@@ -439,6 +527,7 @@ class NoteWorkspace {
             id,
           ],
         );
+        _attachments.noteContentsChanged(id, plan['renamed'] as String);
         _database.execute('DELETE FROM note_renames WHERE note_id = ?', [id]);
         _database.execute('COMMIT');
       } catch (_) {
@@ -453,6 +542,27 @@ class NoteWorkspace {
       ]);
     }
     return notes.firstWhere((note) => note.id == id);
+  }
+
+  void _inboundNoteContentsChanged(String relativePath, String text) {
+    final owners = _database.select(
+      'SELECT id FROM notes WHERE vault = ? AND note_path = ?',
+      [vaultStorage.identity, vaultStorage.reference(relativePath)],
+    );
+    if (owners.isEmpty) return;
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      for (final owner in owners) {
+        _attachments.noteContentsChanged(owner['id'] as String, text);
+      }
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
+    // The parent's durable rename plan stays until every update is complete.
+    // If interrupted before this commit, replay acknowledges the same file and
+    // repeats this rebase before attachment recovery runs.
   }
 
   /// Retries publication of an existing durable capture without collecting again.
@@ -520,16 +630,36 @@ class NoteWorkspace {
     return notes.firstWhere((note) => note.id == id);
   }
 
-  /// Reject new mutations and let every accepted file operation settle before
-  /// releasing SQLite. An idle workspace has no work to drain.
+  bool get recordingAvailable => _recordings.audio != null;
+  RecordingState get recording => _recordings.state;
+  PlaybackState get playback => _recordings.playback;
+  List<WorkspaceRecording> get recordings => _recordings.recordings;
+  Future<void> startRecording() => _mutate(_recordings.start);
+  Future<void> pauseRecording() => _mutate(_recordings.pause);
+  Future<void> resumeRecording() => _mutate(_recordings.resume);
+  Future<void> refreshRecording() => _recordings.refresh();
+  Future<WorkspaceRecording> stopRecording() => _mutate(_recordings.stop);
+  Future<WorkspaceRecording> retryRecordingExport(String id) =>
+      _mutate(() => _recordings.export(id));
+  Future<void> playRecording(String id) => _mutate(() => _recordings.play(id));
+  Future<void> refreshPlayback() => _recordings.refreshPlayback();
+  Future<void> stopPlayback() => _mutate(_recordings.stopPlayback);
+
+  /// Drain accepted mutations and recording finalization before releasing SQLite.
   Future<void> close() {
     if (_closeFuture != null) return _closeFuture!;
     _closing = true;
-    if (_pendingMutations == 0) {
+    if (_pendingMutations == 0 && !_recordings.needsClosing) {
       _database.close();
       return _closeFuture = Future<void>.value();
     }
-    return _closeFuture = _mutations.then((_) => _database.close());
+    return _closeFuture = _mutations.then((_) async {
+      try {
+        await _recordings.close();
+      } finally {
+        _database.close();
+      }
+    });
   }
 
   WorkspaceNote _noteFromRow(Row row) => WorkspaceNote(
@@ -543,6 +673,9 @@ class NoteWorkspace {
     status: NoteStatus.values.byName(row['status'] as String),
     titleCollision: row['title_collision'] == 1,
     error: row['error'] as String?,
+    attachments: List.unmodifiable(
+      _attachments.attachments.where((item) => item.noteId == row['id']),
+    ),
   );
 
   String _markdown(WorkspaceNote note) =>

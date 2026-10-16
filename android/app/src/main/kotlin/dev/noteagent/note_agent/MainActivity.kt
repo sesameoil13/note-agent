@@ -27,6 +27,14 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "chooseLocation" -> chooseLocation(result)
                     "openInObsidian" -> openInObsidian(call, result)
+                    "openSyncPlans" -> {
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://obsidian.md/help/sync/plans")))
+                            result.success(null)
+                        } catch (error: Exception) {
+                            result.error("open_url", "无法打开官方套餐说明。", null)
+                        }
+                    }
                     else -> io.execute {
                         try {
                             val value: Any? = when (call.method) {

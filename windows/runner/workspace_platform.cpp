@@ -175,6 +175,17 @@ void WorkspacePlatform::HandleMethodCall(
     RestoreLocation(std::move(result));
   } else if (call.method_name() == "chooseLocation") {
     ChooseLocation(std::move(result));
+  } else if (call.method_name() == "chooseSourceFile") {
+    ChooseSourceFile(std::move(result));
+  } else if (call.method_name() == "releaseSourceFile") {
+    result->Success();
+  } else if (call.method_name() == "revealLocalSource") {
+    RevealLocalSource(call.arguments(), std::move(result));
+  } else if (call.method_name() == "openSyncPlans") {
+    const auto launched = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open",
+        L"https://obsidian.md/help/sync/plans", nullptr, nullptr, SW_SHOWNORMAL));
+    if (launched > 32) result->Success();
+    else result->Error("open_url", "无法打开官方套餐说明。");
   } else if (call.method_name() == "openInObsidian") {
     OpenInObsidian(call.arguments(), std::move(result));
   } else {
@@ -237,6 +248,59 @@ void WorkspacePlatform::ChooseLocation(std::unique_ptr<Result> result) {
   }
   vault_directory_ = *directory;
   result->Success(Location(*local, vault_directory_));
+}
+
+void WorkspacePlatform::ChooseSourceFile(std::unique_ptr<Result> result) {
+  ComPtr<IFileOpenDialog> dialog;
+  HRESULT status = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                                    CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+  FILEOPENDIALOGOPTIONS options = 0;
+  if (SUCCEEDED(status)) status = dialog->GetOptions(&options);
+  if (SUCCEEDED(status)) status = dialog->SetOptions(options | FOS_FORCEFILESYSTEM |
+      FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+  if (SUCCEEDED(status)) status = dialog->SetTitle(L"选择来源文件或精简副本");
+  if (SUCCEEDED(status)) status = dialog->Show(window_);
+  if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) { result->Success(); return; }
+  ComPtr<IShellItem> selected;
+  if (SUCCEEDED(status)) status = dialog->GetResult(&selected);
+  PWSTR selected_path = nullptr;
+  if (SUCCEEDED(status)) status = selected->GetDisplayName(SIGDN_FILESYSPATH, &selected_path);
+  const auto file = SUCCEEDED(status) && selected_path
+      ? ExistingPath(selected_path, false) : std::nullopt;
+  CoTaskMemFree(selected_path);
+  if (!file) { result->Error("source_access", "无法读取所选来源文件，请重新选择。"); return; }
+  result->Success(EncodableValue(Utf8(*file)));
+}
+
+void WorkspacePlatform::RevealLocalSource(const EncodableValue* arguments,
+                                         std::unique_ptr<Result> result) {
+  const auto* values = arguments ? std::get_if<EncodableMap>(arguments) : nullptr;
+  const std::string* path = nullptr;
+  if (values) {
+    const auto entry = values->find(EncodableValue("path"));
+    if (entry != values->end()) path = std::get_if<std::string>(&entry->second);
+  }
+  const auto wide = path ? Utf16(*path) : std::nullopt;
+  const auto file = wide ? ExistingPath(*wide, false) : std::nullopt;
+  const auto local = LocalDirectory();
+  std::wstring root = local.value_or(L"");
+  if (!root.empty() && root.back() != L'\\') root += L'\\';
+  if (!file || root.empty() || file->size() <= root.size() ||
+      CompareStringOrdinal(file->data(), static_cast<int>(root.size()),
+          root.data(), static_cast<int>(root.size()), TRUE) != CSTR_EQUAL) {
+    result->Error("source_path", "本机原件暂不可用，请核对存储位置。"); return;
+  }
+  PIDLIST_ABSOLUTE item = ILCreateFromPathW(file->c_str());
+  PIDLIST_ABSOLUTE parent = item ? ILCloneFull(item) : nullptr;
+  HRESULT status = E_FAIL;
+  if (parent && ILRemoveLastID(parent)) {
+    const ITEMIDLIST* child = ILFindLastID(item);
+    status = SHOpenFolderAndSelectItems(parent, 1, &child, 0);
+  }
+  CoTaskMemFree(parent);
+  CoTaskMemFree(item);
+  if (FAILED(status)) result->Error("source_path", "无法在系统中显示本机原件。");
+  else result->Success();
 }
 
 void WorkspacePlatform::OpenInObsidian(

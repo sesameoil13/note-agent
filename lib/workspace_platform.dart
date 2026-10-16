@@ -36,6 +36,23 @@ class WorkspacePlatform {
     return result == null ? null : _location(result);
   }
 
+  bool get supportsSourceFiles => Platform.isMacOS || Platform.isWindows;
+
+  /// Selected paths are ephemeral grants. The workspace copies the source
+  /// privately before the UI releases the system access.
+  Future<File?> chooseSourceFile() async {
+    final path = await _channel.invokeMethod<String>('chooseSourceFile');
+    return path == null ? null : File(path);
+  }
+
+  Future<void> releaseSourceFile(File file) =>
+      _channel.invokeMethod<void>('releaseSourceFile', {'path': file.path});
+
+  Future<void> revealLocalSource(String path) =>
+      _channel.invokeMethod<void>('revealLocalSource', {'path': path});
+
+  Future<void> openSyncPlans() => _channel.invokeMethod<void>('openSyncPlans');
+
   Future<void> openInObsidian(String reference) {
     final uri = Uri.tryParse(reference);
     if (uri?.scheme == 'noteagent-vault') {
