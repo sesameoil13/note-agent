@@ -176,11 +176,13 @@ class NoteWorkspace {
   /// An empty query returns recent records in the same order as [notes].
   List<WorkspaceNote> search(String query) {
     final keyword = query.trim().toLowerCase();
+    final titleKeyword = _normalizeTitlePunctuation(keyword);
     return List.unmodifiable(
       notes.where(
         (note) =>
             keyword.isEmpty ||
-            note.title.toLowerCase().contains(keyword) ||
+            _normalizeTitlePunctuation(note.title.toLowerCase())
+                .contains(titleKeyword) ||
             note.text.toLowerCase().contains(keyword),
       ),
     );
@@ -246,14 +248,15 @@ class NoteWorkspace {
         : vaultStorage.relativePath(current.notePath);
     final occupied = <String>{
       for (final note in notes)
-        if (note.id != excludingId) note.title.toLowerCase(),
+        if (note.id != excludingId)
+          _normalizeTitlePunctuation(note.title).toLowerCase(),
     };
     for (final path in await vaultStorage.listNotePaths()) {
       if (path != currentPath) {
         occupied.add(
-          p.posix
-              .basenameWithoutExtension(path.replaceAll('\\', '/'))
-              .toLowerCase(),
+          _normalizeTitlePunctuation(
+            p.posix.basenameWithoutExtension(path.replaceAll('\\', '/')),
+          ).toLowerCase(),
         );
       }
     }
@@ -281,7 +284,7 @@ class NoteWorkspace {
   }
 
   String _safeTitle(String title) {
-    var safe = title
+    var safe = _normalizeTitlePunctuation(title)
         .trim()
         .replaceAll(RegExp(r'[/\\:*?"<>|\x00-\x1f]'), ' ')
         .replaceAll(RegExp(r'[. ]+$'), '');
@@ -296,6 +299,22 @@ class NoteWorkspace {
     }
     return safe;
   }
+
+  /// Obsidian reserves these ASCII characters for headings, blocks, aliases,
+  /// comments and wiki syntax. Fullwidth forms retain readable punctuation
+  /// (including C＃) while producing one linkable title across all entry points.
+  String _normalizeTitlePunctuation(String title) => title.replaceAllMapped(
+    RegExp(r'[#|^:%\[\]]'),
+    (match) => const {
+      '#': '＃',
+      '|': '｜',
+      '^': '＾',
+      ':': '：',
+      '%': '％',
+      '[': '［',
+      ']': '］',
+    }[match[0]]!,
+  );
 
   Future<T> _mutate<T>(Future<T> Function() action) {
     if (_closing) {
