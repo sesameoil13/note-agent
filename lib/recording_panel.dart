@@ -122,11 +122,22 @@ class _RecordingPanelState extends State<RecordingPanel> {
         submissionId: token,
       );
       _pendingSubmissionId = null;
-      await widget.workspace.resumePendingAudioProcessing();
     } finally {
       if (selected != null) await _platform.releaseSourceFile(selected);
     }
+    _startProcessing();
   });
+
+  void _startProcessing([String? sourceId]) {
+    final work = sourceId == null
+        ? widget.workspace.resumePendingAudioProcessing()
+        : widget.workspace.retryAudioProcessing(sourceId);
+    unawaited(
+      work.catchError((Object error) {
+        if (mounted) setState(() => _error = _message(error));
+      }),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -336,13 +347,9 @@ class _RecordingPanelState extends State<RecordingPanel> {
           style: const TextStyle(fontSize: 12),
         ),
       if (source.processingStatus == AudioProcessingStatus.failed &&
-          source.originalSaved)
+          source.canRetryProcessing)
         TextButton(
-          onPressed: _busy
-              ? null
-              : () => _act(
-                  () => widget.workspace.retryAudioProcessing(source.id),
-                ),
+          onPressed: _busy ? null : () => _startProcessing(source.id),
           child: const Text('重试处理'),
         ),
     ],

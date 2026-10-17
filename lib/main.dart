@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -96,7 +97,8 @@ class _WorkspaceScreen extends StatefulWidget {
   State<_WorkspaceScreen> createState() => _WorkspaceScreenState();
 }
 
-class _WorkspaceScreenState extends State<_WorkspaceScreen> {
+class _WorkspaceScreenState extends State<_WorkspaceScreen>
+    with WidgetsBindingObserver {
   final _platform = WorkspacePlatform();
   late final WorkspaceConnection _connection;
   final _title = TextEditingController();
@@ -119,6 +121,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _workspace = widget.initialWorkspace;
     _connection = _workspace?.connection ?? WorkspaceConnection.platform();
     if (_workspace == null) _restore();
@@ -126,6 +129,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _title.dispose();
     _text.dispose();
     _search.dispose();
@@ -133,6 +137,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     // The injected workspace belongs to its caller (including behavioral tests).
     if (_workspace != widget.initialWorkspace) _workspace?.close();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _resumeAudioQueue();
+  }
+
+  void _resumeAudioQueue() {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    unawaited(
+      workspace.resumePendingAudioProcessing().catchError((Object error) {
+        if (mounted) setState(() => _error = _errorMessage(error));
+      }),
+    );
   }
 
   Future<void> _restore() async {
@@ -196,6 +215,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen> {
     _composing = true;
     _recordingPage = workspace.recordingAvailable;
     if (old != widget.initialWorkspace) await old?.close();
+    _resumeAudioQueue();
   }
 
   Future<void> _save() async {

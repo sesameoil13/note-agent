@@ -130,6 +130,22 @@ class WorkspaceAttachments {
     );
   }
 
+  Future<void> acknowledgeAudioPublication(String id) async {
+    database.execute(
+      'UPDATE attachments SET vault_copy_published = 1, original_published = 1, status = ?, error = NULL WHERE id = ? AND copy_path IS NULL',
+      [AttachmentStatus.localSaved.name, id],
+    );
+    final attachment = attachments.firstWhere((a) => a.id == id);
+    final path = Uri(path: vault.relativePath(attachment.sourcePath));
+    await writeEntry(attachment, '[${attachment.originalName}]($path)');
+    if (attachments.firstWhere((a) => a.id == id).error != null) {
+      database.execute('UPDATE attachments SET status = ? WHERE id = ?', [
+        AttachmentStatus.exportFailed.name,
+        id,
+      ]);
+    }
+  }
+
   Future<WorkspaceAttachment> attach(
     String noteId,
     File original, {

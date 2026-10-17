@@ -14,7 +14,8 @@ import 'vault_storage.dart';
 import 'sync_policy.dart';
 import 'recordings.dart';
 import 'audio_queue.dart';
-export 'audio_queue.dart' hide WorkspaceAudioQueue;
+export 'audio_queue.dart'
+    hide WorkspaceAudioQueue, AudioQueueCommit, AudioNoteMaterializer;
 import 'document_extraction.dart';
 import 'pdf_extractor.dart';
 export 'document_extraction.dart';
@@ -148,8 +149,18 @@ class NoteWorkspace {
     }
     await _recordings.playSource(id, source.originalPath);
   });
-  Future<void> retryAudioSourceExport(String id) =>
-      _mutate(() => _audioQueue.publish(id));
+  Future<void> retryAudioSourceExport(String id) => _mutate(() async {
+    await _audioQueue.publish(id);
+    final source = _audioQueue.source(id);
+    if (source.publicationStatus == AudioPublicationStatus.published &&
+        notes.any(
+          (n) =>
+              n.id == source.outputNoteId && n.status == NoteStatus.localSaved,
+        ) &&
+        attachments.any((a) => a.id == id)) {
+      await _attachments.acknowledgeAudioPublication(id);
+    }
+  });
 
   Future<void> resumePendingAudioProcessing() =>
       _audioQueue.run(_mutate, _materializeAudioNote);
@@ -847,7 +858,7 @@ class NoteWorkspace {
   String _audioSourceEntry(WorkspaceAudioSource source) =>
       source.publicationStatus == AudioPublicationStatus.published
       ? '[${source.originalName}](${Uri(path: vaultStorage.relativePath(source.sourcePath))})'
-      : '${source.originalName}（原件仅本机保留；${source.publicationError ?? '尚未写入笔记库'}）';
+      : '${source.originalName}（${source.publicationStatus == AudioPublicationStatus.exceedsFileLimit ? '原件仅本机保留' : '原件已保留'}；${source.publicationError ?? '尚未写入笔记库'}）';
 
   String _markdown(WorkspaceNote note) {
     final audio = _audioQueue.sources

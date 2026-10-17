@@ -395,6 +395,167 @@ void main() {
     expect(reopened.audioSources.single.transcript, '重新打开后的完整转写');
     expect(reopened.notes.single.id, source.outputNoteId);
   });
+  test('uncertain Markdown publication replays saved results without an available processor', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'note-agent-audio-publish-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final service = await _ProcessingService.start();
+    addTearDown(service.close);
+    final local = Directory('${root.path}/local');
+    final vault = await Directory('${root.path}/vault').create();
+    var now = DateTime.utc(2026, 10, 17);
+    final workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+      audioProcessor: _LoopbackProcessor(service.uri),
+      filePublisher: _CommitThenFailPublisher(),
+      clock: () => now,
+    );
+    final source = await workspace.importAudio(
+      original: await File('${root.path}/publish.wav').writeAsBytes(wave()),
+      submissionId: 'publish',
+    );
+    await workspace.resumePendingAudioProcessing();
+    expect(workspace.notes.single.status, NoteStatus.exportFailed);
+    expect(workspace.audioSources.single.stage, 'materialize');
+    expect(
+      workspace.audioSources.single.processingStatus,
+      AudioProcessingStatus.pending,
+    );
+    expect(await File(workspace.notes.single.notePath).exists(), isTrue);
+    await workspace.close();
+    now = now.add(const Duration(seconds: 5));
+    final reopened = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+      clock: () => now,
+    );
+    addTearDown(reopened.close);
+    await reopened.resumePendingAudioProcessing();
+    expect(
+      reopened.audioSources.single.processingStatus,
+      AudioProcessingStatus.completed,
+    );
+    expect(reopened.notes.single.id, source.outputNoteId);
+    expect(reopened.notes.single.originalText, '完整原话，不能被整理正文替代。');
+    expect(await vault.list().where((f) => f.path.endsWith('.md')).length, 1);
+  });
+
+  test('an interrupted adapter without replay guarantees stays failed after reopen', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'note-agent-audio-unknown-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final service = await _ProcessingService.start();
+    addTearDown(service.close);
+    final local = Directory('${root.path}/local');
+    final vault = await Directory('${root.path}/vault').create();
+    final workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+      audioProcessor: _LoopbackProcessor(service.uri, safeReplay: false),
+    );
+    await workspace.importAudio(
+      original: await File('${root.path}/unknown.wav').writeAsBytes(wave()),
+      submissionId: 'unknown',
+    );
+    final gate = service.transcriptionGate = Completer<void>();
+    final interrupted = workspace.resumePendingAudioProcessing();
+    await service.transcriptionStarted.future;
+    await workspace.close();
+    final reopened = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
+    addTearDown(reopened.close);
+    expect(
+      reopened.audioSources.single.processingStatus,
+      AudioProcessingStatus.failed,
+    );
+    expect(reopened.audioSources.single.processingReason, contains('结果未确认'));
+    expect(reopened.audioSources.single.nextAttemptAt, isNull);
+    gate.complete();
+    await interrupted;
+    await reopened.resumePendingAudioProcessing();
+    expect(reopened.audioSources.single.attempts, 1);
+    expect(reopened.notes, isEmpty);
+  });
+  test('the real backoff timer resumes a recoverable job without another user action', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'note-agent-audio-timer-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final service = await _ProcessingService.start();
+    addTearDown(service.close);
+    service.organizingFailure = AudioProcessingFailureKind.recoverable;
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: await Directory('${root.path}/vault').create(),
+      audioProcessor: _LoopbackProcessor(service.uri),
+    );
+    addTearDown(workspace.close);
+    await workspace.importAudio(
+      original: await File('${root.path}/timer.wav').writeAsBytes(wave()),
+      submissionId: 'timer',
+    );
+    await workspace.resumePendingAudioProcessing();
+    expect(workspace.audioSources.single.nextAttemptAt, isNotNull);
+    service.organizingFailure = null;
+    final deadline = DateTime.now().add(const Duration(seconds: 8));
+    while (workspace.audioSources.single.processingStatus !=
+            AudioProcessingStatus.completed &&
+        DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    expect(
+      workspace.audioSources.single.processingStatus,
+      AudioProcessingStatus.completed,
+    );
+    expect(workspace.audioSources.single.attempts, 2);
+    expect(workspace.notes, hasLength(1));
+  });
+  test('original publication failure does not block processing and its repaired source link stays truthful', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'note-agent-audio-source-export-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final service = await _ProcessingService.start();
+    addTearDown(service.close);
+    final storage = _BinaryFailureVault(
+      await Directory('${root.path}/vault').create(),
+    );
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultStorage: storage,
+      audioProcessor: _LoopbackProcessor(service.uri),
+    );
+    addTearDown(workspace.close);
+    final source = await workspace.importAudio(
+      original: await File('${root.path}/source.wav').writeAsBytes(wave()),
+      submissionId: 'source',
+    );
+    expect(source.originalSaved, isTrue);
+    expect(source.publicationStatus, AudioPublicationStatus.failed);
+    await workspace.resumePendingAudioProcessing();
+    expect(
+      workspace.audioSources.single.processingStatus,
+      AudioProcessingStatus.completed,
+    );
+    final note = workspace.notes.single;
+    expect(note.status, NoteStatus.localSaved);
+    expect(await File(note.notePath).readAsString(), contains('笔记库写入'));
+    expect(await File(note.notePath).readAsString(), isNot(contains('仅本机保留')));
+    storage.fail = false;
+    await workspace.retryAudioSourceExport(source.id);
+    expect(
+      workspace.audioSources.single.publicationStatus,
+      AudioPublicationStatus.published,
+    );
+    expect(await File(source.sourcePath).readAsBytes(), wave());
+    expect(await File(note.notePath).readAsString(), contains('[source.wav]'));
+    expect(workspace.notes.single.id, note.id);
+  });
 }
 
 List<int> wave({int seconds = 1}) {
@@ -427,10 +588,11 @@ List<int> wave({int seconds = 1}) {
 }
 
 class _LoopbackProcessor implements AudioProcessor {
-  _LoopbackProcessor(this.uri);
+  _LoopbackProcessor(this.uri, {this.safeReplay = true});
+  final bool safeReplay;
   final Uri uri;
   @override
-  bool get canReplayInterruptedRequests => true;
+  bool get canReplayInterruptedRequests => safeReplay;
   Future<Map<String, dynamic>> _post(
     String stage,
     AudioProcessingRequest request,
@@ -545,4 +707,36 @@ class _WaveMicrophone implements AudioPlatform {
   @override
   Future<AudioPlaybackSnapshot> playbackSnapshot() async =>
       const AudioPlaybackSnapshot(isPlaying: false, position: Duration.zero);
+}
+
+class _CommitThenFailPublisher extends AtomicNoteFilePublisher {
+  bool failed = false;
+  @override
+  Future<void> publish({
+    required File destination,
+    required File staging,
+    required String text,
+  }) async {
+    await super.publish(destination: destination, staging: staging, text: text);
+    if (!failed && destination.path.endsWith('.md')) {
+      failed = true;
+      throw const FileSystemException(
+        'Simulated lost Markdown acknowledgement',
+      );
+    }
+  }
+}
+
+class _BinaryFailureVault extends DirectoryVaultStorage {
+  _BinaryFailureVault(super.directory);
+  bool fail = true;
+  @override
+  Future<void> publishFile(
+    String relativePath,
+    File original,
+    String operationId,
+  ) async {
+    if (fail) throw const FileSystemException('原件笔记库写入未确认');
+    return super.publishFile(relativePath, original, operationId);
+  }
 }

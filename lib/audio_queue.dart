@@ -358,7 +358,7 @@ class WorkspaceAudioQueue {
       final metadata = await inspector
           .inspectAudioSource(item.originalPath)
           .timeout(const Duration(seconds: 10));
-      if (metadata.duration <= Duration.zero ||
+      if (metadata.duration.inMilliseconds < 1 ||
           metadata.duration > const Duration(hours: 24) ||
           metadata.sampleRate < 8000 ||
           metadata.sampleRate > 384000 ||
@@ -369,7 +369,7 @@ class WorkspaceAudioQueue {
         throw const AudioInspectionFailure('音频时长或参数超出本机处理范围，原件已保留。');
       }
       database.execute(
-        "UPDATE audio_queue SET metadata = ?, processing_status = ?, processing_reason = NULL, failure_kind = NULL, stage = 'transcribe' WHERE id = ?",
+        "UPDATE audio_queue SET metadata = ?, processing_status = ?, processing_reason = NULL, failure_kind = NULL, stage = CASE WHEN organized IS NOT NULL THEN 'materialize' WHEN transcript IS NOT NULL THEN 'organize' ELSE 'transcribe' END WHERE id = ?",
         [jsonEncode(metadata.toJson()), AudioProcessingStatus.pending.name, id],
       );
     } catch (error) {
@@ -546,6 +546,7 @@ class WorkspaceAudioQueue {
   ) async {
     while (!_stopped) {
       final item = await commit(() async {
+        if (_stopped) return null;
         final candidate = sources
             .where(
               (s) =>
