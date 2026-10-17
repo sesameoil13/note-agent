@@ -117,6 +117,9 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                 label: connection.state.hasKey
                     ? '替换 OpenRouter API Key'
                     : 'OpenRouter API Key',
+                actionLabel: connection.state.hasKey
+                    ? '替换 OpenRouter API Key'
+                    : null,
                 helperText: '仅存入本机系统安全存储；连接检测不调用收费模型。',
               ),
               const SizedBox(height: 16),

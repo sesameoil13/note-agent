@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/main.dart';
 import 'package:note_agent/connection.dart';
@@ -11,13 +11,14 @@ import 'package:note_agent/note_workspace.dart';
 
 void main() {
   testWidgets(
-    'macOS connection secrets use labelled native secure input without Flutter text exposure',
+    'macOS secrets have named actions that open secure sheets and preserve cancelled drafts',
     (tester) async {
       final folder = (await tester.runAsync(
-        () => Directory.systemTemp.createTemp('secure-input-ui-'),
+        () => Directory.systemTemp.createTemp('secure-sheet-ui-'),
       ))!;
       final messenger = tester.binding.defaultBinaryMessenger;
       const credentials = MethodChannel('dev.noteagent/credentials');
+      const secureInput = MethodChannel('dev.noteagent/secure-input');
       messenger.setMockMethodCallHandler(credentials, (call) async => null);
       final workspace = (await tester.runAsync(
         () async => NoteWorkspace.open(
@@ -29,37 +30,35 @@ void main() {
           ),
         ),
       ))!;
-      final nativeFields = <String, int>{};
-      final nativeState = <int, Map<Object?, Object?>>{};
+      Completer<String?>? sheet;
+      Map<Object?, Object?>? request;
+      messenger.setMockMethodCallHandler(secureInput, (call) async {
+        expect(call.method, 'edit');
+        request = call.arguments as Map<Object?, Object?>;
+        sheet = Completer<String?>();
+        return sheet!.future;
+      });
+      // Stub the retired embedding's OS boundary too: a regression must fail
+      // because its named editing action is absent, not because a plugin is absent.
+      final embeddedIds = <int>[];
       messenger.setMockMethodCallHandler(SystemChannels.platform_views, (
         call,
       ) async {
         if (call.method == 'create') {
-          final args = call.arguments as Map<Object?, Object?>;
-          expect(args['viewType'], 'dev.noteagent/secure-input');
-          final bytes = args['params'] as Uint8List;
-          final params = const StandardMessageCodec().decodeMessage(
-            ByteData.sublistView(bytes),
-          ) as Map<Object?, Object?>;
-          final id = args['id'] as int;
-          nativeFields[params['label'] as String] = id;
-          nativeState[id] = params;
+          final id = (call.arguments as Map)['id'] as int;
+          embeddedIds.add(id);
           messenger.setMockMethodCallHandler(
             MethodChannel('dev.noteagent/secure-input/$id'),
-            (update) async {
-              if (update.method == 'update') {
-                nativeState[id] = update.arguments as Map<Object?, Object?>;
-              }
-              return null;
-            },
+            (_) async => null,
           );
         }
         return null;
       });
       addTearDown(() async {
         messenger.setMockMethodCallHandler(credentials, null);
+        messenger.setMockMethodCallHandler(secureInput, null);
         messenger.setMockMethodCallHandler(SystemChannels.platform_views, null);
-        for (final id in nativeFields.values) {
+        for (final id in embeddedIds) {
           messenger.setMockMethodCallHandler(
             MethodChannel('dev.noteagent/secure-input/$id'),
             null,
@@ -80,49 +79,30 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.byTooltip('连接与设备'));
         await tester.pumpAndSettle();
-        expect(nativeFields.keys, containsAll(['OpenRouter API Key', '首次启用码']));
-        for (final id in nativeFields.values) {
-          expect(nativeState[id]!['enabled'], isTrue);
-        }
-        // The macOS bridge must receive a native platform node, never a Flutter
-        // editable node that the engine turns into an ordinary NSTextField.
-        final nodes = <SemanticsNode>[];
-        void collect(SemanticsNode node) {
-          nodes.add(node);
-          node.visitChildren((child) {
-            collect(child);
-            return true;
-          });
+        Future<void> open(String label) async {
+          expect(find.bySemanticsLabel('填写 $label'), findsOneWidget);
+          final node = tester.getSemantics(find.bySemanticsLabel('填写 $label'));
+          final data = node.getSemanticsData();
+          expect(data.flagsCollection.isButton, isTrue);
+          expect(data.flagsCollection.isEnabled, ui.Tristate.isTrue);
+          expect(data.hasAction(ui.SemanticsAction.tap), isTrue);
+          tester.binding.performSemanticsAction(
+            ui.SemanticsActionEvent(
+              type: ui.SemanticsAction.tap,
+              viewId: tester.view.viewId,
+              nodeId: node.id,
+            ),
+          );
+          await tester.pump();
+          expect(request!['label'], label);
         }
 
-        collect(
-          tester
-              .binding
-              .renderViews
-              .single
-              .owner!
-              .semanticsOwner!
-              .rootSemanticsNode!,
-        );
-        expect(
-          nodes.map((node) => node.platformViewId),
-          containsAll(nativeFields.values),
-        );
-        expect(
-          nodes.where(
-            (node) => node.getSemanticsData().flagsCollection.isObscured,
-          ),
-          isEmpty,
-        );
+        await open('OpenRouter API Key');
+        expect(request!['text'], isEmpty);
         const fixture = 'sk-or-v1-accessibility-only-test-key';
-        final keyId = nativeFields['OpenRouter API Key']!;
-        final channel = MethodChannel('dev.noteagent/secure-input/$keyId');
-        tester.binding.channelBuffers.push(
-          channel.name,
-          channel.codec.encodeMethodCall(const MethodCall('changed', fixture)),
-          (_) {},
-        );
+        sheet!.complete(fixture);
         await tester.pumpAndSettle();
+        expect(find.text('已填写，尚未提交。'), findsOneWidget);
         expect(find.text(fixture), findsNothing);
         expect(
           tester
@@ -135,19 +115,25 @@ void main() {
               .toStringDeep(),
           isNot(contains(fixture)),
         );
-        // The real connection action consumes what the native editor entered.
-        // This deliberately invalid short replacement exercises validation without
-        // a model call, HTTP request, or stored credential.
-        tester.binding.channelBuffers.push(
-          channel.name,
-          channel.codec.encodeMethodCall(const MethodCall('changed', 'short')),
-          (_) {},
-        );
-        await tester.pump();
+        await open('OpenRouter API Key');
+        expect(request!['text'], fixture);
+        sheet!.complete(null); // Cancel must keep the previous draft.
+        await tester.pumpAndSettle();
+        await open('OpenRouter API Key');
+        expect(request!['text'], fixture);
+        sheet!.complete(''); // An empty native result cannot replace the draft.
+        await tester.pumpAndSettle();
+        await open('OpenRouter API Key');
+        expect(request!['text'], fixture);
+        sheet!.complete('short');
+        await tester.pumpAndSettle();
         await tester.tap(find.text('检测并安全保存'));
         await tester.pumpAndSettle();
         expect(find.text('请输入完整的 OpenRouter API Key。'), findsWidgets);
-        expect(nativeState[keyId]!['enabled'], isTrue);
+        await open('首次启用码');
+        expect(request!['text'], isEmpty);
+        sheet!.complete(null);
+        await tester.pumpAndSettle();
         await tester.pumpWidget(const SizedBox());
         await tester.pumpAndSettle();
       } finally {

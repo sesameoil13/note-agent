@@ -16,7 +16,7 @@
 
 “连接与设备”在工作区顶部可进入，尚未选择笔记库时也可进入。Key 只在 App 的遮蔽输入框填写；检测只请求 `GET https://openrouter.ai/api/v1/key`，禁止重定向，不发送笔记，不调用模型。管理／Provisioning Key 元数据会被拒绝。凭据错误不自动循环重试，界面不回显 Key 或服务原始错误。
 
-macOS 的 Key 与首次启用码使用 AppKit `NSSecureTextField`，通过 Flutter `AppKitView` 嵌入，保留有名称的原生密码输入、键盘编辑与系统辅助功能。当前 SDK 的 Flutter 遮蔽文本虽已在 Dart semantics 中掩码，macOS 辅助功能桥仍会把正在编辑的原文写入普通 `NSTextField`，因此仅检查界面圆点或 `find.text` 不足以证明保密。公开 App UI 回归检查两个输入确实交给原生节点、编辑能到达原连接动作且 Flutter semantics 不含测试 Key；真实 macOS AX 的密码角色与值仍须由隔离实际 App 验收。其他平台继续使用 Flutter 的遮蔽输入；可见配对码与复制操作不变。参见 [Apple 安全输入](https://developer.apple.com/documentation/appkit/nssecuretextfield) 与 [Flutter macOS 原生视图](https://docs.flutter.dev/platform-integration/macos/platform-views)。
+macOS 的 Key 与首次启用码由有名称、可按下的「填写」动作打开标准 AppKit sheet，以原生 `NSSecureTextField` 编辑并获得初始键盘焦点。空白输入不能确认；取消保留原草稿，确认后只把原文传回既有内存 controller，连接页面只显示「已填写，尚未提交」，仍需用户点击检测保存或启用。当前 SDK 的 Flutter 遮蔽文本虽已在 Dart semantics 中掩码，macOS 辅助功能桥仍会把正在编辑的原文写入普通 `NSTextField`；其 `AppKitView` 又未把嵌入的安全输入加入可发现的原生 AX 子树。因此不能仅检查界面圆点、`find.text`、或消失的 AX 原文来证明保密与可访问性。公开 App UI 回归通过命名辅助功能动作打开系统输入边界，检查取消／空值保留草稿、编辑能到达原连接动作且 Flutter semantics 不含测试 Key；sheet 的真实密码角色、保护值与键盘编辑仍须隔离实际 App 验收。其他平台继续使用 Flutter 的遮蔽输入；可见配对码与复制操作不变。参见 [Apple 安全输入](https://developer.apple.com/documentation/appkit/nssecuretextfield) 与 [AppKit sheet](https://developer.apple.com/documentation/appkit/nsalert)。
 
 整个凭据包（OpenRouter Key、设备随机令牌、未完成配对的随机秘密和恢复状态）只经系统安全存储 Adapter 持久化：
 

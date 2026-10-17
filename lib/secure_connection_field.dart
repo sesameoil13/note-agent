@@ -1,24 +1,23 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// A labelled secret editor. macOS needs AppKit's secure field because Flutter's
-/// native accessibility text editor is an ordinary NSTextField, even when the
-/// Dart semantics value is obscured.
+/// macOS edits secrets in an AppKit sheet: the Flutter text editor exposes its
+/// raw native AX value, while this SDK's embedded AppKit views lack an AX bridge.
 class SecureConnectionField extends StatefulWidget {
   const SecureConnectionField({
     super.key,
     required this.controller,
     required this.enabled,
     required this.label,
+    this.actionLabel,
     this.helperText,
   });
 
   final TextEditingController controller;
   final bool enabled;
   final String label;
+  final String? actionLabel;
   final String? helperText;
 
   @override
@@ -26,9 +25,8 @@ class SecureConnectionField extends StatefulWidget {
 }
 
 class _SecureConnectionFieldState extends State<SecureConnectionField> {
-  MethodChannel? _channel;
-  bool _nativeEdit = false;
-  bool _focused = false;
+  static const _channel = MethodChannel('dev.noteagent/secure-input');
+  bool _editing = false;
 
   @override
   void initState() {
@@ -43,61 +41,41 @@ class _SecureConnectionFieldState extends State<SecureConnectionField> {
       oldWidget.controller.removeListener(_controllerChanged);
       widget.controller.addListener(_controllerChanged);
     }
-    _syncNative();
   }
 
   void _controllerChanged() {
-    if (!mounted) return;
-    setState(() {});
-    if (!_nativeEdit) _syncNative();
+    if (mounted) setState(() {});
   }
 
-  void _syncNative() {
-    unawaited(
-      _channel?.invokeMethod<void>('update', {
-        'text': widget.controller.text,
+  Future<void> _edit() async {
+    if (!widget.enabled || _editing) return;
+    setState(() => _editing = true);
+    try {
+      final text = await _channel.invokeMethod<String>('edit', {
         'label': widget.label,
-        'enabled': widget.enabled,
-      }),
-    );
-  }
-
-  void _created(int id) {
-    _channel = MethodChannel('dev.noteagent/secure-input/$id')
-      ..setMethodCallHandler((call) async {
-        if (!mounted) return;
-        if (call.method == 'changed' && widget.enabled) {
-          final text = call.arguments as String;
-          _nativeEdit = true;
-          try {
-            widget.controller.value = TextEditingValue(
-              text: text,
-              selection: TextSelection.collapsed(offset: text.length),
-            );
-          } finally {
-            _nativeEdit = false;
-          }
-        } else if (call.method == 'focused') {
-          setState(() => _focused = call.arguments as bool);
-        }
+        'text': widget.controller.text,
       });
-    _syncNative();
+      if (mounted && text != null && text.trim().isNotEmpty) {
+        widget.controller.text = text;
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('安全输入暂时不可用，请重试。')));
+      }
+    } finally {
+      if (mounted) setState(() => _editing = false);
+    }
   }
 
   @override
   void dispose() {
     widget.controller.removeListener(_controllerChanged);
-    _channel?.setMethodCallHandler(null);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final decoration = InputDecoration(
-      labelText: widget.label,
-      helperText: widget.helperText,
-      enabled: widget.enabled,
-    );
     if (defaultTargetPlatform != TargetPlatform.macOS) {
       return TextField(
         controller: widget.controller,
@@ -107,22 +85,42 @@ class _SecureConnectionFieldState extends State<SecureConnectionField> {
         enableSuggestions: false,
         autofillHints: const [],
         keyboardType: TextInputType.visiblePassword,
-        decoration: decoration,
+        decoration: InputDecoration(
+          labelText: widget.label,
+          helperText: widget.helperText,
+        ),
       );
     }
-    return InputDecorator(
-      decoration: decoration,
-      isFocused: _focused,
-      isEmpty: widget.controller.text.isEmpty,
-      child: SizedBox(
-        height: 28,
-        child: AppKitView(
-          viewType: 'dev.noteagent/secure-input',
-          creationParams: {'label': widget.label, 'enabled': widget.enabled},
-          creationParamsCodec: const StandardMessageCodec(),
-          onPlatformViewCreated: _created,
+    final enabled = widget.enabled && !_editing;
+    final label = widget.actionLabel ?? '填写 ${widget.label}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          container: true,
+          label: label,
+          button: true,
+          enabled: enabled,
+          onTap: enabled ? _edit : null,
+          excludeSemantics: true,
+          child: OutlinedButton.icon(
+            onPressed: enabled ? _edit : null,
+            icon: const Icon(Icons.lock_outline),
+            label: Text(label),
+          ),
         ),
-      ),
+        if (widget.controller.text.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          const Text('已填写，尚未提交。'),
+        ],
+        if (widget.helperText != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            widget.helperText!,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ],
     );
   }
 }
