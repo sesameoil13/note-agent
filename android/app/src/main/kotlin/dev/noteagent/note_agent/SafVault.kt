@@ -7,6 +7,8 @@ import android.provider.DocumentsContract.Document
 import android.webkit.MimeTypeMap
 import java.util.Locale
 import java.io.IOException
+import java.io.File
+import java.io.InputStream
 import java.security.MessageDigest
 
 /** All external reads/writes stay on provider URIs, never inferred filesystem paths. */
@@ -131,6 +133,38 @@ internal class SafVault(private val resolver: ContentResolver, private val tree:
         check(read(published) == text) { "笔记写入校验失败；原文已保留。" }
         // Only this operation's empty private directory is removed.
         DocumentsContract.deleteDocument(resolver, stageParent)
+    }
+
+    /** Stream the app-private immutable original to SAF; never interpret a URI as a File. */
+    fun publishFile(path: String, source: File, operation: String) {
+        require(source.length() <= 5_000_000) { "来源超过 Standard 单文件 5 MB，原件继续保留在本机。" }
+        fun digest(stream: InputStream): ByteArray = stream.use {
+            val hash = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(65536)
+            while (true) { val count = it.read(buffer); if (count < 0) break; hash.update(buffer, 0, count) }
+            hash.digest()
+        }
+        fun matches(uri: Uri, expected: ByteArray): Boolean = resolver.openInputStream(uri)?.let { digest(it).contentEquals(expected) } ?: false
+        val expected = digest(source.inputStream())
+        val parts = safe(path)
+        val target = directory(parts.dropLast(1), true)!!
+        child(target, parts.last())?.let {
+            check(it.mime != Document.MIME_TYPE_DIR && matches(it.uri, expected)) { "已有不同的来源文件，未覆盖原文件。" }
+            return
+        }
+        safe(operation).also { require(it.size == 1) }
+        val key = MessageDigest.getInstance("SHA-256").digest(path.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        val parent = directory(listOf(".note-agent-staging", operation, key), true)!!
+        val name = parts.last()
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase(Locale.ROOT)) ?: ContentResolver.MIME_TYPE_DEFAULT
+        val staged = child(parent, name)?.uri ?: DocumentsContract.createDocument(resolver, parent, mime, name) ?: throw IOException("无法准备完整来源文件。")
+        check(entry(staged).name == name) { "文档提供方更改了来源文件名。" }
+        resolver.openOutputStream(staged, "wt")?.use { output -> source.inputStream().use { it.copyTo(output, 65536) } } ?: throw IOException("无法写入来源文件。")
+        check(matches(staged, expected)) { "来源文件写入校验未通过，原件继续保留。" }
+        check(child(target, name) == null) { "已有同名来源文件，未覆盖原文件。" }
+        val published = move(staged, parent, target, name)
+        check(matches(published, expected)) { "来源文件写入校验未通过，原件继续保留。" }
+        DocumentsContract.deleteDocument(resolver, parent)
     }
 
     fun listNotePaths(): List<String> {

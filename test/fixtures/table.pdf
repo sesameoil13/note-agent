@@ -1,0 +1,95 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 1 /Kids [6 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type0 /BaseFont /Fixture /Encoding /Identity-H /DescendantFonts [4 0 R] /ToUnicode 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Fixture /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 500 >>
+endobj
+5 0 obj
+<< /Length 733 >>
+stream
+/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Fixture def /CMapType 2 def
+1 begincodespacerange <0000> <FFFF> endcodespacerange
+30 beginbfchar
+<0001> <91c7>
+<0002> <8d2d>
+<0003> <8d44>
+<0004> <6599>
+<0005> <4ea7>
+<0006> <54c1>
+<0007> <6570>
+<0008> <91cf>
+<0009> <5907>
+<000A> <6ce8>
+<000B> <82f9>
+<000C> <679c>
+<000D> <0032>
+<000E> <0041>
+<000F> <0020>
+<0010> <007c>
+<0011> <0042>
+<0012> <8336>
+<0013> <53f6>
+<0014> <7b2c>
+<0015> <4e00>
+<0016> <884c>
+<0017> <4e8c>
+<0018> <8868>
+<0019> <683c>
+<001A> <540e>
+<001B> <7684>
+<001C> <539f>
+<001D> <6587>
+<001E> <3002>
+endbfchar endcmap CMapName currentdict /CMap defineresource pop end end
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >>  >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 659 >>
+stream
+BT /F1 12 Tf 40 730 Td <0001000200030004> Tj ET
+BT /F1 12 Tf 50 660 Td <00050006> Tj ET
+BT /F1 12 Tf 170 660 Td <00070008> Tj ET
+BT /F1 12 Tf 290 660 Td <0009000A> Tj ET
+BT /F1 12 Tf 50 620 Td <000B000C> Tj ET
+BT /F1 12 Tf 170 620 Td <000D> Tj ET
+BT /F1 12 Tf 290 620 Td <000E000F0010000F0011> Tj ET
+BT /F1 12 Tf 50 580 Td <00120013> Tj ET
+BT /F1 12 Tf 290 580 Td <001400150016> Tj ET
+BT /F1 12 Tf 290 568 Td <001400170016> Tj ET
+BT /F1 12 Tf 40 500 Td <00180019001A001B001C001D001E> Tj ET
+40 560 m 40 680 l S
+160 560 m 160 680 l S
+280 560 m 280 680 l S
+400 560 m 400 680 l S
+40 560 m 400 560 l S
+40 600 m 400 600 l S
+40 640 m 400 640 l S
+40 680 m 400 680 l S
+endstream
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000247 00000 n 
+0000000404 00000 n 
+0000001188 00000 n 
+0000001315 00000 n 
+trailer << /Size 8 /Root 1 0 R >>
+startxref
+2025
+%%EOF

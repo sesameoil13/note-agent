@@ -36,12 +36,20 @@ class WorkspacePlatform {
     return result == null ? null : _location(result);
   }
 
-  bool get supportsSourceFiles => Platform.isMacOS || Platform.isWindows;
+  bool get supportsSourceFiles =>
+      Platform.isMacOS || Platform.isWindows || Platform.isAndroid;
 
   /// Selected paths are ephemeral grants. The workspace copies the source
   /// privately before the UI releases the system access.
-  Future<File?> chooseSourceFile() async {
-    final path = await _channel.invokeMethod<String>('chooseSourceFile');
+  Future<File?> chooseSourceFile({
+    bool pdfOnly = false,
+    bool audioOnly = false,
+  }) async {
+    if (pdfOnly && audioOnly) throw ArgumentError('一次只能选择一种来源文件类型。');
+    final path = await _channel.invokeMethod<String>('chooseSourceFile', {
+      'pdfOnly': pdfOnly,
+      'audioOnly': audioOnly,
+    });
     return path == null ? null : File(path);
   }
 
@@ -83,7 +91,7 @@ class WorkspacePlatform {
 }
 
 /// SAF content-tree access stays on Android's ContentResolver boundary.
-class AndroidVaultStorage implements VaultStorage {
+class AndroidVaultStorage implements VaultStorage, BinaryVaultStorage {
   AndroidVaultStorage(this.identity, this.displayName);
   static const _channel = MethodChannel('dev.noteagent/workspace');
   @override
@@ -151,6 +159,16 @@ class AndroidVaultStorage implements VaultStorage {
     String operationId,
   ) => _invoke<void>('vaultPublishText', relativePath, {
     'text': text,
+    'operationId': operationId,
+  });
+
+  @override
+  Future<void> publishFile(
+    String relativePath,
+    File original,
+    String operationId,
+  ) => _invoke<void>('vaultPublishFile', relativePath, {
+    'sourcePath': original.path,
     'operationId': operationId,
   });
   @override
