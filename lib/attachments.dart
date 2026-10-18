@@ -91,6 +91,61 @@ class WorkspaceAttachments {
         ),
   );
 
+  /// An audio collection already owns its durable private original. Reuse it
+  /// and the publication facts rather than making a second copy or identity.
+  void adoptAudio({
+    required String id,
+    required String noteId,
+    required String name,
+    required String originalPath,
+    required int bytes,
+    required String sourcePath,
+    required bool published,
+    required String sourceEntry,
+    String? error,
+  }) {
+    database.execute(
+      '''INSERT OR IGNORE INTO attachments
+      (id,note_id,vault,original_name,original_path,original_bytes,source_path,status,source_entry,
+       vault_copy_published,original_published,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+      [
+        id,
+        noteId,
+        vault.identity,
+        name,
+        originalPath,
+        bytes,
+        sourcePath,
+        (published
+                ? AttachmentStatus.localSaved
+                : bytes > ObsidianSyncStandard.maximumFileBytes
+                ? AttachmentStatus.exceedsFileLimit
+                : AttachmentStatus.exportFailed)
+            .name,
+        sourceEntry,
+        published ? 1 : 0,
+        published ? 1 : 0,
+        error,
+      ],
+    );
+  }
+
+  Future<void> acknowledgeAudioPublication(String id) async {
+    database.execute(
+      'UPDATE attachments SET vault_copy_published = 1, original_published = 1, status = ?, error = NULL WHERE id = ? AND copy_path IS NULL',
+      [AttachmentStatus.localSaved.name, id],
+    );
+    final attachment = attachments.firstWhere((a) => a.id == id);
+    final path = Uri(path: vault.relativePath(attachment.sourcePath));
+    await writeEntry(attachment, '[${attachment.originalName}]($path)');
+    if (attachments.firstWhere((a) => a.id == id).error != null) {
+      database.execute('UPDATE attachments SET status = ? WHERE id = ?', [
+        AttachmentStatus.exportFailed.name,
+        id,
+      ]);
+    }
+  }
+
   Future<WorkspaceAttachment> attach(
     String noteId,
     File original, {

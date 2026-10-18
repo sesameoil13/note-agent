@@ -223,7 +223,7 @@ class MainActivity : FlutterActivity() {
 
     private fun privateSource(path: String): File {
         val source = File(path).canonicalFile
-        val allowed = listOf("originals", "copies", "recordings").any {
+        val allowed = listOf("originals", "copies", "recordings", "audio-sources").any {
             val root = File(filesDir, "workspace/$it").canonicalFile
             source.path.startsWith(root.path + File.separator)
         }

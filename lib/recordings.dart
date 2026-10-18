@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import 'audio_platform.dart';
+import 'audio_sources.dart';
 import 'vault_storage.dart';
 import 'sync_policy.dart';
 
@@ -86,8 +87,9 @@ class WorkspaceRecordings {
     this.vault,
     this.audio,
     this.clock,
-    this.createId,
-  ) {
+    this.createId, {
+    this.onFinalized,
+  }) {
     database.execute('''CREATE TABLE IF NOT EXISTS recordings (
       id TEXT PRIMARY KEY, vault TEXT NOT NULL, created_at TEXT NOT NULL,
       original_path TEXT NOT NULL, source_path TEXT NOT NULL,
@@ -103,6 +105,7 @@ class WorkspaceRecordings {
   final AudioPlatform? audio;
   final DateTime Function() clock;
   final String Function() createId;
+  final Future<void> Function(WorkspaceRecording)? onFinalized;
   RecordingState state = const RecordingState();
   PlaybackState playback = const PlaybackState();
   bool _refreshing = false;
@@ -292,6 +295,7 @@ class WorkspaceRecordings {
       );
       // The original is complete and durable before any vault publication.
       state = const RecordingState();
+      await onFinalized?.call(recordings.firstWhere((item) => item.id == id));
       return await export(id);
     } catch (error) {
       final original = File(
@@ -359,6 +363,17 @@ class WorkspaceRecordings {
     if (!recording.canPlay) throw StateError('此录音没有可回放的原音频。');
     await stopPlayback();
     await _audio.play(recording.originalPath);
+    playback = PlaybackState(recordingId: id, isPlaying: true);
+  }
+
+  Future<void> playSource(String id, String originalPath) async {
+    if (state.isActive) throw StateError('请先结束录音再回放。');
+    final player = audio;
+    if (player is! AudioSourcePlayer) {
+      throw UnsupportedError('此平台尚未接入导入音频回放，可打开原件查看。');
+    }
+    await stopPlayback();
+    await (player as AudioSourcePlayer).playAudioSource(originalPath);
     playback = PlaybackState(recordingId: id, isPlaying: true);
   }
 
