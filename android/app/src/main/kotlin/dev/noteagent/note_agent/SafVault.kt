@@ -98,7 +98,7 @@ internal class SafVault(private val resolver: ContentResolver, private val tree:
         // extension uses octet-stream so the exact requested name is preserved.
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(
             name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-        ) ?: ContentResolver.MIME_TYPE_DEFAULT
+        ) ?: "application/octet-stream"
         val uri = existing?.uri ?: DocumentsContract.createDocument(resolver, parent, mime, name)
             ?: throw IOException("无法准备完整笔记。")
         check(entry(uri).name == name) { "文档提供方更改了文件名，未写入笔记。" }
@@ -156,7 +156,7 @@ internal class SafVault(private val resolver: ContentResolver, private val tree:
         val key = MessageDigest.getInstance("SHA-256").digest(path.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
         val parent = directory(listOf(".note-agent-staging", operation, key), true)!!
         val name = parts.last()
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase(Locale.ROOT)) ?: ContentResolver.MIME_TYPE_DEFAULT
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase(Locale.ROOT)) ?: "application/octet-stream"
         val staged = child(parent, name)?.uri ?: DocumentsContract.createDocument(resolver, parent, mime, name) ?: throw IOException("无法准备完整来源文件。")
         check(entry(staged).name == name) { "文档提供方更改了来源文件名。" }
         resolver.openOutputStream(staged, "wt")?.use { output -> source.inputStream().use { it.copyTo(output, 65536) } } ?: throw IOException("无法写入来源文件。")
