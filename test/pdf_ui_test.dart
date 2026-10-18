@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -29,12 +30,16 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       String? selected;
+      final sourceReleased = Completer<void>();
       const channel = MethodChannel('dev.noteagent/workspace');
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
         call,
       ) async {
         if (call.method == 'chooseSourceFile') return selected;
-        if (call.method == 'releaseSourceFile') return null;
+        if (call.method == 'releaseSourceFile') {
+          sourceReleased.complete();
+          return null;
+        }
         throw PlatformException(code: 'unexpected', message: call.method);
       });
       addTearDown(
@@ -48,19 +53,19 @@ void main() {
       await tester.pumpAndSettle();
       expect(workspace.notes, isEmpty);
       selected = File('test/fixtures/chinese.pdf').absolute.path;
-      await tester.runAsync(() async {
-        await tester.tap(find.text('导入 PDF'));
-        for (var attempt = 0; attempt < 400; attempt++) {
-          if (workspace.notes.firstOrNull?.document?.status ==
-              DocumentImportStatus.ready) {
-            await Future<void>.delayed(const Duration(milliseconds: 20));
-            return;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 10));
+      await tester.runAsync(() => tester.tap(find.text('导入 PDF')));
+      // The grant is released after publication and note selection. Pump the
+      // widget/channel event loop until that boundary, not just DB readiness.
+      final elapsed = Stopwatch()..start();
+      while (!sourceReleased.isCompleted) {
+        if (elapsed.elapsed > const Duration(seconds: 20)) {
+          fail('PDF import did not release its selected source.');
         }
-        fail('PDF import did not finish.');
-      });
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      }
       await tester.pumpAndSettle();
+      expect(find.text('正在导入 PDF…'), findsNothing);
       expect(find.text('正文'), findsOneWidget);
       expect(find.text('关联'), findsOneWidget);
       expect(find.text('来源'), findsOneWidget);

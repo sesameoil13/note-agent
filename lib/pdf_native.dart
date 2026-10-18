@@ -104,6 +104,21 @@ class GuardedPdfium {
     ffi.Pointer<ffi.Double> top,
   );
 
+  @ffi.Native<
+    FPDF_BOOL Function(
+      FPDF_TEXTPAGE,
+      ffi.Int,
+      ffi.Pointer<ffi.Double>,
+      ffi.Pointer<ffi.Double>,
+    )
+  >(assetId: 'package:pdfium_dart/libpdfium', symbol: 'FPDFText_GetCharOrigin')
+  external static int FPDFText_GetCharOrigin(
+    FPDF_TEXTPAGE text_page,
+    int index,
+    ffi.Pointer<ffi.Double> x,
+    ffi.Pointer<ffi.Double> y,
+  );
+
   @ffi.Native<ffi.Int Function(FPDF_PAGE)>(
     assetId: 'package:pdfium_dart/libpdfium',
     symbol: 'FPDFPage_GetRotation',

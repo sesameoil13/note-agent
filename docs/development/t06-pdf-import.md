@@ -29,6 +29,15 @@ preserved. Columns of prose, incomplete/merged grids and rotated tables remain
 text; unsupported geometry is reported rather than guessed. Complex layout
 reconstruction is outside this capability.
 
+Cell lines use PDFium character-origin baselines, not painted glyph bottoms:
+embedded Chinese glyphs such as `一` can have a much higher painted bottom than
+their neighbors while sharing a baseline. Missing character origins make a
+candidate ambiguous and leave its content as text. Adapter provenance is
+`guarded-text-v2`. `test/fixtures/embedded-font-table.pdf` is the independent
+ReportLab/embedded-font acceptance document (SHA-256
+`fc60fb0169aca81eaefc325fd7204edbe32041e380bfc8035a37753a772a0cd5`);
+its final cell must remain exactly `第一行\n第二行`.
+
 Current ceilings, which callers may lower but cannot raise:
 
 | Resource | Ceiling |
