@@ -1,6 +1,6 @@
 # T02 Android text capture and vault authorization
 
-T02/#3 is **not accepted yet**. Android source and host-side behavior coverage are prepared; APK compilation, installation, persisted grants across a real reboot, Xiaomi behavior, and Obsidian handoff have not been run. Mocked OS responses do not establish any phone result.
+T02/#3 is **not accepted yet**. On 2026-10-19 the ARM64 release APK compiled successfully and passed signature/alignment checks. Installation, persisted grants across a real reboot, Xiaomi behavior, and Obsidian handoff remain unverified. Compilation and mocked OS responses do not establish any phone result.
 
 ## Implemented boundary
 
@@ -18,10 +18,10 @@ Obsidian opens with the vault display name and relative note name through its `o
 
 Host tests exercise capture/restart through `NoteWorkspace`, using real SQLite and a mocked **OS method-channel boundary** for SAF. They check the literal ordinary-note template and full original text. The phone-sized app test exercises permission failure, cancelled selection, same-tree reauthorization, and retry of one durable capture while keeping the entered Chinese text. Existing real temporary-directory tests still exercise desktop publication and recovery. These tests do not execute Android Kotlin, a real provider, the system picker, or a device reboot.
 
-- `flutter test`: 7 tests pass on the macOS host.
+- `flutter test`: the current integrated baseline passes 111 tests on the macOS host (2026-10-19), including the Android workspace tests. The local pairing test requires bundled Node on PATH and the pinned `services/pairing` dev dependencies.
 - `flutter analyze`: passes.
-- `flutter build macos --debug --no-pub`: passes as a desktop compatibility compile; no app was launched.
-- Native Android SAF integration test is prepared at `integration_test/android_vault_test.dart`, **not executed**.
+- The earlier T02 `flutter build macos --debug --no-pub` passed as a desktop compatibility compile; this Android continuation did not rebuild or launch the running Mac app.
+- Native Android SAF integration test is prepared at `integration_test/android_vault_test.dart`; its Android APK compilation is checked separately below, and it has **not executed on a device**.
 - Native Mac clipboard/picker acceptance was not rerun for this ticket; prior T01 evidence remains separate.
 
 The prepared Android integration test refuses a vault whose supplied name does not start with `NoteAgent-Test-`. After selecting that new directory in the installed app, run it on the actual connected phone with its exact name:
@@ -33,25 +33,38 @@ flutter test integration_test/android_vault_test.dart -d <actual-device-id> \
 
 It records model, Android release and API read from `Build`, verifies real provider source/Markdown results, and reopens the workspace with the stored grant. It leaves its distinct acceptance note/source in that dedicated vault for inspection. This same-process restore check does not replace the normal-exit/relaunch and physical-reboot steps below.
 
-## Build prerequisites still open
+## Android compilation — 2026-10-19
 
-The user explicitly deferred Android SDK setup/build work. Do not start package installation, license review prompts, or device/build work until that work is resumed.
+The user resumed Android setup and personally completed the interactive SDK agreement/install step. The implementer verified Java 21, the accepted `android-sdk-license` record and all four required installed package manifests before compiling. No license was automatically accepted and no extra SDK package was installed by this implementer.
 
-The Android scaffold was generated from Flutter 3.47.7, not guessed from an old template. It selects Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0, compile/target API 36, minimum API 24, and NDK 28.2.13676358. Java/Kotlin bytecode target is 17; the staged portable JDK 21 is suitable for Gradle. No additional Flutter plugins were added.
+The current project uses Flutter 3.47.7, Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0, compile/target API 36, minimum API 24, and NDK 28.2.13676358. Java/Kotlin bytecode target is 17; the portable JDK is 21.0.12.1. Required packages are platform-tools 37.0.1, platform 36 revision 2, build-tools 36.0.0 and NDK 28.2.13676358. CMake was not required for this build.
 
-At preparation time the portable JDK and command-line tool files were staged, but Android SDK packages and license acceptance were absent. No SDK license was accepted, no `sdkmanager` command was executed, no APK was built, and no phone was connected by this implementer. The responsible user must review the official SDK terms and make the interactive license decision before package installation. Do not pipe automated approval or fabricate accepted-license files.
-
-Required package selection from the actual template and native dependency needs:
+The first actual release compile failed because `ContentResolver.MIME_TYPE_DEFAULT` is absent from Android's public SDK. Both SAF text and binary staging now use the equivalent standard `application/octet-stream` string. The same ARM64 release command then passed:
 
 ```sh
-sdkmanager --sdk_root="$ANDROID_HOME" \
-  "platform-tools" "platforms;android-36" "build-tools;36.0.0" \
-  "ndk;28.2.13676358" "cmake;3.22.1"
 flutter pub get
-flutter build apk --debug
+flutter build apk --release --target-platform android-arm64
 ```
 
-This is the remaining setup recipe, **not an executed or successful build**. Gradle/Maven/pub downloads are also required. The generated release configuration currently uses a development debug key; final release signing/installation belongs to platform delivery, not this source-preparation claim.
+Verified release artifact:
+
+- Package `dev.noteagent.note_agent`, version `0.1.0` / code `1`, ARM64 only; 26,385,737 bytes.
+- SHA-256 `64dd574cd61a847044cde13bb4f83e15b446e0ea78d2cb62a381cc1976e89272`.
+- APK Signature Scheme v2 verification passes. The current generated release configuration uses the **Android Debug development certificate**, so this artifact is for the current device acceptance. Final release signing belongs to T29.
+- `zipalign -P 16 -c -v 4` passes. All packaged ELF load segments have at least 16 KiB alignment: PDFium/SQLite 16 KiB; Flutter/application 64 KiB.
+- The manifest declares Internet access and an internal non-exported-receiver permission; no broad external-storage permission is present.
+
+The real native SAF test entry point also compiles into an ARM64 debug APK without launching a device:
+
+```sh
+flutter build apk --debug --target-platform android-arm64 \
+  --target integration_test/android_vault_test.dart \
+  --dart-define=ANDROID_TEST_VAULT_NAME=NoteAgent-Test-T02
+```
+
+The Android workspace host tests (2) and analyzer pass again after the native compilation fix. The native test APK was compiled only; no integration test has run on an emulator or phone.
+
+The app's actual OS picker, provider writes, device installation, reboot and Obsidian handoff have **not** run. A successful build and valid signature do not satisfy those acceptance gates.
 
 ## Required Xiaomi 17 Pro Max acceptance
 
