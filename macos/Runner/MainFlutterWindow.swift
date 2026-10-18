@@ -3,6 +3,7 @@ import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
   private var secureCredentials: SecureCredentials?
+  private var secureInput: SecureInput?
   private var workspaceChannel: FlutterMethodChannel?
   private var nativeAudio: NativeAudio?
   private var scopedVaultURL: URL?
@@ -17,6 +18,7 @@ class MainFlutterWindow: NSWindow {
     minSize = NSSize(width: 640, height: 640)
     title = "笔记工作区"
     RegisterGeneratedPlugins(registry: controller)
+    secureInput = SecureInput(messenger: controller.engine.binaryMessenger, window: self)
     secureCredentials = SecureCredentials(messenger: controller.engine.binaryMessenger)
     nativeAudio = NativeAudio(messenger: controller.engine.binaryMessenger)
 
