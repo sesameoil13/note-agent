@@ -18,6 +18,7 @@ export 'audio_queue.dart'
     hide WorkspaceAudioQueue, AudioQueueCommit, AudioNoteMaterializer;
 import 'document_extraction.dart';
 import 'pdf_extractor.dart';
+import 'word_extractor.dart';
 export 'document_extraction.dart';
 export 'sync_policy.dart';
 export 'recordings.dart' hide WorkspaceRecordings;
@@ -260,6 +261,7 @@ class NoteWorkspace {
   final Set<Future<void>> _documentOperations = {};
   final Map<String, DocumentExtractor> _activeDocuments = {};
   final Set<String> _retryingDocuments = {};
+  final Set<String> _cancelledDocuments = {};
 
   static Future<NoteWorkspace> open({
     required Directory localDirectory,
@@ -919,6 +921,12 @@ $source
     required File original,
     String? title,
     DocumentExtractionOptions options = const DocumentExtractionOptions(),
+  }) => importDocument(original: original, title: title, options: options);
+
+  Future<WorkspaceNote> importDocument({
+    required File original,
+    String? title,
+    DocumentExtractionOptions options = const DocumentExtractionOptions(),
   }) {
     options.validate();
     return _trackDocument(() async {
@@ -997,14 +1005,14 @@ $source
     options.validate();
     if (_activeDocuments.containsKey(noteId) ||
         !_retryingDocuments.add(noteId)) {
-      return Future.error(StateError('此 PDF 正在提取。'));
+      return Future.error(StateError('此文档正在提取。'));
     }
     return _trackDocument(() async {
       final doc = _document(noteId);
-      if (doc == null) throw ArgumentError('此笔记没有 PDF 来源。');
-      if (_activeDocuments.containsKey(noteId)) throw StateError('此 PDF 正在提取。');
+      if (doc == null) throw ArgumentError('此笔记没有文档来源。');
+      if (_activeDocuments.containsKey(noteId)) throw StateError('此文档正在提取。');
       if (doc.attachmentId == null) {
-        if (original == null) throw StateError('原件未保存完成，请重新选择 PDF。');
+        if (original == null) throw StateError('原件未保存完成，请重新选择文档。');
         await _mutate(() async {
           final source = await _attachments.attach(
             noteId,
@@ -1017,7 +1025,7 @@ $source
           );
         });
       } else if (original != null) {
-        throw ArgumentError('已保留的 PDF 原件不会被替换，请直接重新提取。');
+        throw ArgumentError('已保留的文档原件不会被替换，请直接重新提取。');
       }
       final plan = _database.select(
         'SELECT write_plan FROM document_imports WHERE note_id = ?',
@@ -1041,8 +1049,11 @@ $source
     }).whenComplete(() => _retryingDocuments.remove(noteId));
   }
 
-  void cancelDocumentExtraction(String noteId) =>
-      _activeDocuments[noteId]?.cancel();
+  void cancelDocumentExtraction(String noteId) {
+    if (_document(noteId)?.status != DocumentImportStatus.extracting) return;
+    _cancelledDocuments.add(noteId);
+    _activeDocuments[noteId]?.cancel();
+  }
 
   Future<WorkspaceNote> _trackDocument(
     Future<WorkspaceNote> Function() action,
@@ -1057,15 +1068,34 @@ $source
     return operation;
   }
 
+  Future<bool> _isPdf(File file, String name) async {
+    final handle = await file.open();
+    try {
+      final magic = await handle.read(8);
+      if (String.fromCharCodes(magic.take(5)) == '%PDF-') return true;
+      if (magic.length >= 2 &&
+          (magic[0] == 0x50 && magic[1] == 0x4b ||
+              magic[0] == 0xd0 && magic[1] == 0xcf)) {
+        return false;
+      }
+      return p.extension(name).toLowerCase() == '.pdf';
+    } finally {
+      await handle.close();
+    }
+  }
+
   Future<WorkspaceNote> _extractDocument(
     String id,
     DocumentExtractionOptions options,
   ) async {
     final doc = _document(id)!;
     final source = attachments.firstWhere((a) => a.id == doc.attachmentId);
-    final extractor = LocalPdfExtractor();
+    final DocumentExtractor extractor =
+        await _isPdf(File(source.originalPath), source.originalName)
+        ? LocalPdfExtractor()
+        : LocalWordExtractor();
     _activeDocuments[id] = extractor;
-    if (_closing) extractor.cancel();
+    if (_closing || _cancelledDocuments.remove(id)) extractor.cancel();
     late final DocumentExtraction result;
     try {
       result = await extractor.extract(
@@ -1075,6 +1105,7 @@ $source
       );
     } finally {
       _activeDocuments.remove(id);
+      _cancelledDocuments.remove(id);
     }
     return _mutate(() async {
       final note = notes.firstWhere((n) => n.id == id);
@@ -1110,7 +1141,7 @@ $source
           'UPDATE document_imports SET status = ?, error = ? WHERE note_id = ?',
           [
             DocumentImportStatus.interrupted.name,
-            '无法读取笔记，请恢复原位置或重新授权后再提取；PDF 原件仍保留。',
+            '无法读取笔记，请恢复原位置或重新授权后再提取；文档原件仍保留。',
             id,
           ],
         );

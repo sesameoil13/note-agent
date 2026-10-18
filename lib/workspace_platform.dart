@@ -43,11 +43,15 @@ class WorkspacePlatform {
   /// privately before the UI releases the system access.
   Future<File?> chooseSourceFile({
     bool pdfOnly = false,
+    bool wordOnly = false,
     bool audioOnly = false,
   }) async {
-    if (pdfOnly && audioOnly) throw ArgumentError('一次只能选择一种来源文件类型。');
+    if ([pdfOnly, wordOnly, audioOnly].where((v) => v).length > 1) {
+      throw ArgumentError('一次只能选择一种来源文件类型。');
+    }
     final path = await _channel.invokeMethod<String>('chooseSourceFile', {
       'pdfOnly': pdfOnly,
+      'wordOnly': wordOnly,
       'audioOnly': audioOnly,
     });
     return path == null ? null : File(path);

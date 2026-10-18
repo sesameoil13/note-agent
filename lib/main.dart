@@ -420,9 +420,15 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         ),
         if (_workspace != null) ...[
           if (wide) ...[
-            PdfImportButton(
+            DocumentImportButton(
               workspace: _workspace!,
               onChanged: _documentChanged,
+            ),
+            const SizedBox(width: 8),
+            DocumentImportButton(
+              workspace: _workspace!,
+              onChanged: _documentChanged,
+              word: true,
             ),
             const SizedBox(width: 8),
           ],
@@ -762,9 +768,20 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             if (MediaQuery.sizeOf(context).width < 960) ...[
               Align(
                 alignment: Alignment.centerLeft,
-                child: PdfImportButton(
-                  workspace: _workspace!,
-                  onChanged: _documentChanged,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    DocumentImportButton(
+                      workspace: _workspace!,
+                      onChanged: _documentChanged,
+                    ),
+                    DocumentImportButton(
+                      workspace: _workspace!,
+                      onChanged: _documentChanged,
+                      word: true,
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 24),
@@ -981,7 +998,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   void _showOriginal(WorkspaceNote note) => showDialog<void>(
     context: context,
     builder: (context) => AlertDialog(
-      title: Text(note.document == null ? '收集的原文' : 'PDF 提取结果'),
+      title: Text(
+        note.document == null
+            ? '收集的原文'
+            : note.document?.result?.engine.startsWith('pdfium/') == true
+            ? 'PDF 提取结果'
+            : 'Word 提取结果',
+      ),
       content: SizedBox(
         width: 640,
         child: SingleChildScrollView(

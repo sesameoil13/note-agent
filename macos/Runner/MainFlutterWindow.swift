@@ -109,6 +109,8 @@ class MainFlutterWindow: NSWindow {
     panel.allowsMultipleSelection = false
     if (arguments as? [String: Any])?["pdfOnly"] as? Bool == true {
       panel.allowedContentTypes = [.pdf]
+    } else if (arguments as? [String: Any])?["wordOnly"] as? Bool == true {
+      panel.allowedContentTypes = [UTType(filenameExtension: "docx"), UTType(filenameExtension: "doc")].compactMap { $0 }
     } else if (arguments as? [String: Any])?["audioOnly"] as? Bool == true {
       panel.allowedContentTypes = [.audio]
     }
