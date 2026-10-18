@@ -130,3 +130,26 @@ cased = dict(base)
 cased['_rels/.rels'] = cased['_rels/.rels'].replace(b'word/document.xml', b'WORD/DOCUMENT.XML')
 cased['[Content_Types].xml'] = cased['[Content_Types].xml'].replace(b'word/document.xml', b'Word/Document.Xml')
 package('case-reference.docx', cased.items())
+
+# Merger review regressions: legal content controls and omitted grid positions
+# are not equivalent to a simple rectangular table. These author the same
+# independently observed structures without using the production reader.
+from xml.etree import ElementTree as ET
+word_tag = lambda name: '{' + W + '}' + name
+controlled = ET.fromstring(base['word/document.xml'])
+cell = controlled.find('.//' + word_tag('tc'))
+paragraph = cell.find(word_tag('p'))
+cell.remove(paragraph)
+control = ET.SubElement(cell, word_tag('sdt'))
+ET.SubElement(control, word_tag('sdtContent')).append(paragraph)
+changed_main('cell-content-control.docx', ET.tostring(controlled, encoding='utf-8', xml_declaration=True))
+omitted = ET.fromstring(base['word/document.xml'])
+table = omitted.find('.//' + word_tag('tbl'))
+grid = table.find(word_tag('tblGrid'))
+ET.SubElement(grid, word_tag('gridCol'), {word_tag('w'): '2000'})
+for index, row in enumerate(table.findall(word_tag('tr'))):
+    props = row.find(word_tag('trPr'))
+    if props is None:
+        props = ET.Element(word_tag('trPr')); row.insert(0, props)
+    ET.SubElement(props, word_tag('gridBefore' if index == 0 else 'gridAfter'), {word_tag('val'): '1'})
+changed_main('omitted-grid-cells.docx', ET.tostring(omitted, encoding='utf-8', xml_declaration=True))

@@ -378,6 +378,19 @@ Future<void> _worker(
         processedPages: processed,
       ),
     );
+  } on FileSystemException {
+    output.send(
+      const DocumentExtraction(
+        engine: _engine,
+        completion: DocumentCompletion.failed,
+        problems: [
+          DocumentProblem(
+            'fileUnreadable',
+            '当前来源文件无法读取，可能已缺失或不可访问；请恢复文件或访问权限后重试。',
+          ),
+        ],
+      ),
+    );
   } catch (_) {
     output.send(
       const DocumentExtraction(

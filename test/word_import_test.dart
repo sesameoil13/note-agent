@@ -446,4 +446,106 @@ void main() {
     expect(cased.document!.result!.completion, DocumentCompletion.complete);
     expect(cased.text, contains('表格后的原文。'));
   });
+  test('a Word cell content control preserves its readable text once and discloses an incomplete table', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'word-cell-content-control-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: await Directory('${root.path}/vault').create(),
+    );
+    addTearDown(workspace.close);
+    final file = File('test/fixtures/word/cell-content-control.docx');
+    final note = await workspace.importDocument(original: file);
+    final result = note.document!.result!;
+    expect('产品'.allMatches(note.text), hasLength(1));
+    expect(result.completion, DocumentCompletion.partial);
+    expect(result.tables, isEmpty);
+    expect(result.problems.map((p) => p.code), contains('complexTable'));
+    expect(result.problems.map((p) => p.message).join(), contains('不支持'));
+    expect(result.unprocessed.single.blockIndex, 1);
+    expect(result.unprocessed.single.part, 'word/document.xml');
+    expect(note.text.indexOf('产品'), greaterThan(note.text.indexOf('中文资料')));
+    expect(note.text.indexOf('产品'), lessThan(note.text.indexOf('表格后的原文')));
+    expect(
+      await File(workspace.attachments.single.originalPath).readAsBytes(),
+      await file.readAsBytes(),
+    );
+  });
+  test('omitted Word grid positions preserve text without claiming a complete aligned table', () async {
+    final root = await Directory.systemTemp.createTemp('word-omitted-grid-');
+    addTearDown(() => root.delete(recursive: true));
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: await Directory('${root.path}/vault').create(),
+    );
+    addTearDown(workspace.close);
+    final note = await workspace.importDocument(
+      original: File('test/fixtures/word/omitted-grid-cells.docx'),
+    );
+    final result = note.document!.result!;
+    expect(result.completion, DocumentCompletion.partial);
+    expect(result.tables, isEmpty);
+    for (final expected in ['产品', '苹果', '茶叶', '第一行', '第二行']) {
+      expect(expected.allMatches(note.text), hasLength(1));
+    }
+    expect(result.problems.map((p) => p.code), contains('complexTable'));
+    expect(result.unprocessed.single.blockIndex, 1);
+  });
+
+  for (final sourcePath in [
+    'test/fixtures/word/body-table.docx',
+    'test/fixtures/chinese.pdf',
+  ]) {
+    test(
+      'a missing retained source stops extraction without changing existing text or identity: $sourcePath',
+      () async {
+        final root = await Directory.systemTemp.createTemp(
+          'document-missing-source-',
+        );
+        addTearDown(() => root.delete(recursive: true));
+        final local = Directory('${root.path}/local');
+        final vault = await Directory('${root.path}/vault').create();
+        var workspace = await NoteWorkspace.open(
+          localDirectory: local,
+          vaultDirectory: vault,
+        );
+        addTearDown(() => workspace.close());
+        final file = File(sourcePath);
+        final note = await workspace.importDocument(original: file);
+        final attachment = workspace.attachments.single;
+        final markdown = await File(note.notePath).readAsString();
+        await File(attachment.originalPath).delete();
+        final stopped = await workspace.retryDocumentExtraction(note.id);
+        expect(stopped.document!.status, DocumentImportStatus.interrupted);
+        expect(stopped.document!.error, contains('来源'));
+        expect(stopped.document!.error, isNot(contains('原件已保留')));
+        expect(stopped.text, note.text);
+        expect(stopped.originalText, note.originalText);
+        expect(await File(stopped.notePath).readAsString(), markdown);
+        expect(workspace.attachments.single.id, attachment.id);
+        await workspace.close();
+        workspace = await NoteWorkspace.open(
+          localDirectory: local,
+          vaultDirectory: vault,
+        );
+        expect(
+          workspace.notes.single.document!.status,
+          DocumentImportStatus.interrupted,
+        );
+        expect(workspace.notes.single.id, note.id);
+        expect(workspace.attachments.single.id, attachment.id);
+        await File(attachment.originalPath)
+            .writeAsBytes(await file.readAsBytes(), flush: true);
+        final recovered = await workspace.retryDocumentExtraction(note.id);
+        expect(recovered.id, note.id);
+        expect(recovered.document!.status, DocumentImportStatus.ready);
+        expect(recovered.document!.error, isNull);
+        expect(recovered.text, note.text);
+        expect(workspace.attachments.single.id, attachment.id);
+        expect(workspace.notes, hasLength(1));
+      },
+    );
+  }
 }

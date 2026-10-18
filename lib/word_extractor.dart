@@ -210,6 +210,10 @@ void _extractWord((SendPort, String, String, DocumentExtractionOptions) input) {
       }
     }
     port.send(reader.result());
+  } on FileSystemException {
+    port.send(
+      _failure('fileUnreadable', '当前来源文件无法读取，可能已缺失或不可访问；请恢复文件或访问权限后重试。'),
+    );
   } on _WordProblem catch (e) {
     port.send(_failure(e.code, e.message));
   } catch (_) {
@@ -533,15 +537,23 @@ class _WordReader {
         final complex =
             widths.length != 1 ||
             widths.contains(0) ||
+            _unsupportedTableStructure(e) ||
             e.descendantElements.any(
               (n) =>
                   isWord(n, 'gridSpan') ||
                   isWord(n, 'vMerge') ||
                   isWord(n, 'hMerge') ||
+                  isWord(n, 'gridBefore') ||
+                  isWord(n, 'gridAfter') ||
+                  isWord(n, 'sdt') ||
                   isWord(n, 'tbl'),
             );
         if (complex) {
-          problem('complexTable', '此表格含合并、嵌套或不规则结构；按原顺序保留可提取文字，未重建复杂版式。', loc);
+          problem(
+            'complexTable',
+            '此表格含合并、嵌套、遗漏格位置、内容控件或尚不支持的结构；按原顺序保留可提取文字，未重建完整表格版式。',
+            loc,
+          );
           final text = _plain(e);
           if (!_addBody(text, loc, index)) break;
           continue;
@@ -576,6 +588,40 @@ class _WordReader {
         if (!_addBody(text, loc, index)) break;
       }
     }
+  }
+
+  // Only direct table/row/cell structure can be emitted as a rectangular
+  // table. Unknown structural wrappers are not silently skipped: preserve
+  // their readable paragraph text through the existing explicit fallback.
+  bool _unsupportedTableStructure(XmlElement table) {
+    bool allowed(XmlElement element, List<String> names) =>
+        element.name.namespaceUri == ns && names.contains(element.name.local);
+    if (table.childElements.any((n) => !allowed(n, ['tblPr', 'tblGrid', 'tr']))) {
+      return true;
+    }
+    for (final row in table.childElements.where((n) => isWord(n, 'tr'))) {
+      if (row.childElements.any((n) => !allowed(n, ['trPr', 'tc']))) {
+        return true;
+      }
+      for (final cell in row.childElements.where((n) => isWord(n, 'tc'))) {
+        if (cell.childElements.any((n) => !allowed(n, ['tcPr', 'p']))) {
+          return true;
+        }
+      }
+    }
+    final grid = table.childElements
+        .where((n) => isWord(n, 'tblGrid'))
+        .firstOrNull;
+    final columns =
+        grid?.childElements.where((n) => isWord(n, 'gridCol')).length ?? 0;
+    return columns > 0 &&
+        table.childElements
+            .where((n) => isWord(n, 'tr'))
+            .any(
+              (row) =>
+                  row.childElements.where((n) => isWord(n, 'tc')).length !=
+                  columns,
+            );
   }
 
   bool _reserve(String text, DocumentLocation loc) {

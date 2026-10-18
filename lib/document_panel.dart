@@ -176,10 +176,12 @@ class _DocumentStatusViewState extends State<DocumentStatusView> {
               ? '正在保留原件；尚未提取正文。'
               : active
               ? '原件已保留，正在本机提取；可继续收集文字。'
-              : result?.summary ?? doc.error ?? '尚未提取正文。',
+              : doc.error ?? result?.summary ?? '尚未提取正文。',
         ),
-        if (doc.error != null && result != null) Text(doc.error!),
-        for (final problem in result?.problems ?? <DocumentProblem>[])
+        for (final problem
+            in doc.error == null
+                ? result?.problems ?? <DocumentProblem>[]
+                : <DocumentProblem>[])
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(

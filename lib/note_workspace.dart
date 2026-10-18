@@ -1090,22 +1090,27 @@ $source
   ) async {
     final doc = _document(id)!;
     final source = attachments.firstWhere((a) => a.id == doc.attachmentId);
-    final DocumentExtractor extractor =
-        await _isPdf(File(source.originalPath), source.originalName)
-        ? LocalPdfExtractor()
-        : LocalWordExtractor();
-    _activeDocuments[id] = extractor;
-    if (_closing || _cancelledDocuments.remove(id)) extractor.cancel();
     late final DocumentExtraction result;
     try {
+      final DocumentExtractor extractor =
+          await _isPdf(File(source.originalPath), source.originalName)
+          ? LocalPdfExtractor()
+          : LocalWordExtractor();
+      _activeDocuments[id] = extractor;
+      if (_closing || _cancelledDocuments.remove(id)) extractor.cancel();
       result = await extractor.extract(
         File(source.originalPath),
         source.id,
         options,
       );
+    } on FileSystemException {
+      return _documentSourceUnavailable(id);
     } finally {
       _activeDocuments.remove(id);
       _cancelledDocuments.remove(id);
+    }
+    if (result.problems.any((p) => p.code == 'fileUnreadable')) {
+      return _documentSourceUnavailable(id);
     }
     return _mutate(() async {
       final note = notes.firstWhere((n) => n.id == id);
@@ -1178,6 +1183,19 @@ $source
       return _finishDocumentWrite(id);
     }, accepted: true);
   }
+
+  Future<WorkspaceNote> _documentSourceUnavailable(String id) =>
+      _mutate(() async {
+        _database.execute(
+          'UPDATE document_imports SET status = ?, error = ? WHERE note_id = ?',
+          [
+            DocumentImportStatus.interrupted.name,
+            '当前来源文件无法读取，可能已缺失或不可访问；已有正文与来源身份未改动。请恢复文件或访问权限后重试。',
+            id,
+          ],
+        );
+        return notes.firstWhere((n) => n.id == id);
+      }, accepted: true);
 
   Future<WorkspaceNote> _finishDocumentWrite(String id) async {
     final raw =
