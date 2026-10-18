@@ -14,6 +14,8 @@ dependencies:
   ffi: ^2.2.0
   cryptography: ^2.9.0
   pdfium_flutter: 0.3.1
+  archive: 4.5.2
+  xml: ^7.1.0
 
 dev_dependencies:
   integration_test:

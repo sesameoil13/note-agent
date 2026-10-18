@@ -211,6 +211,10 @@ class MainActivity : FlutterActivity() {
                     call.argument<Boolean>("audioOnly") == true -> "audio/*"
                     else -> "*/*"
                 }
+                if (call.argument<Boolean>("wordOnly") == true) {
+                    type = "*/*"
+                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"))
+                }
                 addCategory(Intent.CATEGORY_OPENABLE)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 putExtra(Intent.EXTRA_LOCAL_ONLY, true)

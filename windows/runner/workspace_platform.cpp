@@ -254,11 +254,17 @@ void WorkspacePlatform::ChooseSourceFile(const EncodableValue* arguments, std::u
   const auto* values = arguments ? std::get_if<EncodableMap>(arguments) : nullptr;
   bool pdf_only = false;
   bool audio_only = false;
+  bool word_only = false;
   if (values) {
     const auto entry = values->find(EncodableValue("pdfOnly"));
     if (entry != values->end()) {
       const auto* value = std::get_if<bool>(&entry->second);
       pdf_only = value && *value;
+    }
+    const auto word = values->find(EncodableValue("wordOnly"));
+    if (word != values->end()) {
+      const auto* value = std::get_if<bool>(&word->second);
+      word_only = value && *value;
     }
     const auto audio = values->find(EncodableValue("audioOnly"));
     if (audio != values->end()) {
@@ -275,8 +281,10 @@ void WorkspacePlatform::ChooseSourceFile(const EncodableValue* arguments, std::u
       FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
   if (SUCCEEDED(status)) status = dialog->SetTitle(L"选择来源文件或精简副本");
   const COMDLG_FILTERSPEC pdf_filter[] = {{L"PDF 文档", L"*.pdf"}};
+  const COMDLG_FILTERSPEC word_filter[] = {{L"Word 文档", L"*.docx;*.doc"}};
   const COMDLG_FILTERSPEC audio_filter[] = {{L"音频文件", L"*.m4a;*.mp3;*.wav;*.aac;*.flac;*.ogg;*.opus;*.aiff;*.aif;*.wma"}};
   if (SUCCEEDED(status) && pdf_only) status = dialog->SetFileTypes(1, pdf_filter);
+  if (SUCCEEDED(status) && word_only) status = dialog->SetFileTypes(1, word_filter);
   if (SUCCEEDED(status) && audio_only) status = dialog->SetFileTypes(1, audio_filter);
   if (SUCCEEDED(status)) status = dialog->Show(window_);
   if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) { result->Success(); return; }

@@ -6,19 +6,21 @@ import 'package:flutter/material.dart';
 import 'note_workspace.dart';
 import 'workspace_platform.dart';
 
-class PdfImportButton extends StatefulWidget {
-  const PdfImportButton({
+class DocumentImportButton extends StatefulWidget {
+  const DocumentImportButton({
     super.key,
     required this.workspace,
     required this.onChanged,
+    this.word = false,
   });
+  final bool word;
   final NoteWorkspace workspace;
   final ValueChanged<String?> onChanged;
   @override
-  State<PdfImportButton> createState() => _PdfImportButtonState();
+  State<DocumentImportButton> createState() => _DocumentImportButtonState();
 }
 
-class _PdfImportButtonState extends State<PdfImportButton> {
+class _DocumentImportButtonState extends State<DocumentImportButton> {
   final _platform = WorkspacePlatform();
   bool _busy = false;
   Timer? _refresh;
@@ -32,7 +34,10 @@ class _PdfImportButtonState extends State<PdfImportButton> {
     setState(() => _busy = true);
     File? selected;
     try {
-      selected = await _platform.chooseSourceFile(pdfOnly: true);
+      selected = await _platform.chooseSourceFile(
+        pdfOnly: !widget.word,
+        wordOnly: widget.word,
+      );
       if (selected == null) return;
       final before = widget.workspace.notes.map((n) => n.id).toSet();
       var selectedNote = false;
@@ -45,7 +50,7 @@ class _PdfImportButtonState extends State<PdfImportButton> {
         if (added != null) selectedNote = true;
       }
 
-      final operation = widget.workspace.importPdf(original: selected);
+      final operation = widget.workspace.importDocument(original: selected);
       _refresh = Timer.periodic(
         const Duration(milliseconds: 250),
         (_) => refresh(),
@@ -59,7 +64,7 @@ class _PdfImportButtonState extends State<PdfImportButton> {
             content: Text(
               error is ArgumentError
                   ? error.message.toString()
-                  : 'PDF 导入未完成，请查看原件保存状态。$error',
+                  : '文档导入未完成，请查看原件保存状态。$error',
             ),
           ),
         );
@@ -83,8 +88,15 @@ class _PdfImportButtonState extends State<PdfImportButton> {
   @override
   Widget build(BuildContext context) => OutlinedButton.icon(
     onPressed: _busy || !_platform.supportsSourceFiles ? null : _import,
-    icon: const Icon(Icons.picture_as_pdf_outlined, size: 16),
-    label: Text(_busy ? '正在导入 PDF…' : '导入 PDF'),
+    icon: Icon(
+      widget.word ? Icons.description_outlined : Icons.picture_as_pdf_outlined,
+      size: 16,
+    ),
+    label: Text(
+      _busy
+          ? '正在导入 ${widget.word ? 'Word' : 'PDF'}…'
+          : '导入 ${widget.word ? 'Word' : 'PDF'}',
+    ),
   );
 }
 
@@ -122,7 +134,7 @@ class _DocumentStatusViewState extends State<DocumentStatusView> {
     File? selected;
     try {
       if (widget.note.document!.attachmentId == null) {
-        selected = await _platform.chooseSourceFile(pdfOnly: true);
+        selected = await _platform.chooseSourceFile();
         if (selected == null) return;
       }
       await widget.workspace.retryDocumentExtraction(
@@ -164,10 +176,12 @@ class _DocumentStatusViewState extends State<DocumentStatusView> {
               ? '正在保留原件；尚未提取正文。'
               : active
               ? '原件已保留，正在本机提取；可继续收集文字。'
-              : result?.summary ?? doc.error ?? '尚未提取正文。',
+              : doc.error ?? result?.summary ?? '尚未提取正文。',
         ),
-        if (doc.error != null && result != null) Text(doc.error!),
-        for (final problem in result?.problems ?? <DocumentProblem>[])
+        for (final problem
+            in doc.error == null
+                ? result?.problems ?? <DocumentProblem>[]
+                : <DocumentProblem>[])
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
@@ -178,17 +192,17 @@ class _DocumentStatusViewState extends State<DocumentStatusView> {
           TextButton(
             onPressed: () =>
                 widget.workspace.cancelDocumentExtraction(widget.note.id),
-            child: const Text('停止后续页面提取'),
+            child: const Text('停止文档提取'),
           ),
         if (!active && !saving)
           OutlinedButton(
             onPressed: _busy ? null : _retry,
             child: Text(
               doc.attachmentId == null
-                  ? '重新选择 PDF'
+                  ? '重新选择文档'
                   : doc.status == DocumentImportStatus.writePending
                   ? '重试写入提取结果'
-                  : '重新提取 PDF',
+                  : '重新提取文档',
             ),
           ),
       ],
