@@ -8,9 +8,12 @@ import 'document_extraction.dart';
 import 'pdf_native.dart';
 
 class PdfGlyph {
-  const PdfGlyph(this.text, this.box);
+  const PdfGlyph(this.text, this.box, {this.baseline});
   final String text;
   final List<double>? box;
+
+  /// Text origin Y, independent of a character's painted shape/descent.
+  final double? baseline;
   bool get visible => text.trim().isNotEmpty;
 }
 
@@ -207,6 +210,10 @@ readPdfLayout(
         }
         continue;
       }
+      if (glyph.baseline == null) {
+        ambiguous = true;
+        break;
+      }
       assignments.putIfAbsent((row, column), () => []).add(glyph);
       indices.add(index);
     }
@@ -331,7 +338,7 @@ String _cellText(List<PdfGlyph> glyphs) {
   final lines = <List<PdfGlyph>>[];
   for (final glyph in glyphs) {
     final line = lines
-        .where((line) => (line.first.box![1] - glyph.box![1]).abs() < 3)
+        .where((line) => (line.first.baseline! - glyph.baseline!).abs() < 3)
         .firstOrNull;
     if (line == null) {
       lines.add([glyph]);
@@ -339,7 +346,7 @@ String _cellText(List<PdfGlyph> glyphs) {
       line.add(glyph);
     }
   }
-  lines.sort((a, b) => b.first.box![1].compareTo(a.first.box![1]));
+  lines.sort((a, b) => b.first.baseline!.compareTo(a.first.baseline!));
   return lines
       .map((line) {
         line.sort((a, b) => a.box![0].compareTo(b.box![0]));

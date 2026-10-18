@@ -4,6 +4,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 void main() {
+  test('embedded Chinese glyph shapes do not split or reorder a multiline table cell', () async {
+    final root = await Directory.systemTemp.createTemp('pdf-embedded-font-');
+    addTearDown(() => root.delete(recursive: true));
+    final vault = await Directory('${root.path}/vault').create();
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: vault,
+    );
+    addTearDown(workspace.close);
+    final note = await workspace.importPdf(
+      original: File('test/fixtures/embedded-font-table.pdf'),
+    );
+    expect(note.document!.result!.tables.single.rows[2][2].text, '第一行\n第二行');
+    expect(note.text, contains('| 茶叶 |  | 第一行<br>第二行 |'));
+  });
   test(
     'a second retry cannot start another extraction of the same PDF note',
     () async {

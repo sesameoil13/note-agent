@@ -10,7 +10,7 @@ import 'document_extraction.dart';
 import 'pdf_native.dart';
 import 'pdf_layout.dart';
 
-const _engine = 'pdfium/7811 guarded-text-v1';
+const _engine = 'pdfium/7811 guarded-text-v2';
 
 /// Owns PDFium on one background isolate at a time. Unlike loadText(), this
 /// adapter checks native handles and character counts BEFORE Dart allocation.
@@ -221,6 +221,8 @@ Future<void> _worker(
           final right = arena<Double>();
           final bottom = arena<Double>();
           final top = arena<Double>();
+          final originX = arena<Double>();
+          final originY = arena<Double>();
           for (var char = 0; char < count; char++) {
             final value = GuardedPdfium.FPDFText_GetUnicode(text, char);
             String character;
@@ -245,10 +247,20 @@ Future<void> _worker(
             final box = validBox
                 ? [left.value, bottom.value, right.value, top.value]
                 : null;
+            final hasOrigin =
+                GuardedPdfium.FPDFText_GetCharOrigin(
+                      text,
+                      char,
+                      originX,
+                      originY,
+                    ) !=
+                    0 &&
+                originY.value.isFinite;
             glyphs.add(
               PdfGlyph(
                 character,
                 box != null && box.every((v) => v.isFinite) ? box : null,
+                baseline: hasOrigin ? originY.value : null,
               ),
             );
           }
