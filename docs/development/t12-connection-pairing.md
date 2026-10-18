@@ -24,6 +24,10 @@ macOS 的 Key 与首次启用码由有名称、可按下的「填写」动作打
 - Android：Android Keystore 生成 AES-256 key，以随机 nonce 和身份 AAD 做 AES-GCM；私有 preferences 仅含密文。既有 `allowBackup=false` 保留。读取丢失／失效的 Keystore key 时拒绝，不静默换 key。
 - Windows：当前登录用户的 DPAPI 加密，`CRYPTPROTECT_UI_FORBIDDEN`；AppData 中仅存原子替换的密文文件。
 
+macOS 的 `SecItemCopyMatching`／更新／新增／删除统一在一个进程内共享的串行后台队列执行，结果只在 OS 返回后交回 Flutter 主线程。方法、槽标识与不超过 16 KiB 的写入值先校验；保留原有 service/account、device-only accessibility 和错误。系统可能等待解锁或授权，App 不通过超时伪装取消，也不修改 ACL 或绕过系统提示。此修复防止连接页因安全存储等待而阻塞整个原生主线程；不保证 OS 会立即返回。参见 [SecItemCopyMatching 的阻塞说明](https://developer.apple.com/documentation/security/secitemcopymatching(_:_:)) 和 [Apple 并发要求](https://developer.apple.com/documentation/security/working-with-concurrency)。
+
+可在已具备本机 FlutterMacOS Debug framework 后执行 `tool/check_credential_channel.sh`：真实 Flutter MethodChannel 编解码穿过生产适配器，只有 OS Keychain 边界与 engine 二进制传输被替代。阻塞的假 OS 读期间主线程仍能处理心跳；后续写删串行完成、每次只回调一次且在主线程，安全存储错误仍上报，越界参数不触及 OS。该探针不访问真实 Keychain、不启动 GUI；它不能替代实际重启后恢复凭据与系统授权提示验收。
+
 普通凭据槽为 `default`。原生测试必须使用 `--dart-define=DEVICE_SLOT=t12-native-probe`，集成测试会校验此值，防止碰用户普通凭据。两实际实例验收可分别编译 `DEVICE_SLOT=t12-owner` 与 `DEVICE_SLOT=t12-member`。槽不是权限或凭据，只隔离本机验收身份。
 
 ## 配对协议与请求边界
