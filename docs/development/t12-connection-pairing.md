@@ -30,6 +30,12 @@ macOS 的 `SecItemCopyMatching`／更新／新增／删除统一在一个进程�
 
 普通凭据槽为 `default`。原生测试必须使用 `--dart-define=DEVICE_SLOT=t12-native-probe`，集成测试会校验此值，防止碰用户普通凭据。两实际实例验收可分别编译 `DEVICE_SLOT=t12-owner` 与 `DEVICE_SLOT=t12-member`。槽不是权限或凭据，只隔离本机验收身份。
 
+## macOS Release 签名边界
+
+Xcode 的默认 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES` 会在构建时注入 `com.apple.security.get-task-allow`，即使 App 的 Release.entitlements 没有该键。实际 e9 Release 曾通过 deep/strict 签名验证，却仍多出这个调试权限；因此签名完整不等于权限符合预期。按照 [Apple 的发行构建说明](https://developer.apple.com/documentation/security/resolving-common-notarization-issues)，Release.xcconfig 显式设置 `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO`，让 Xcode 在正常构建签名时停止注入。Debug/Profile 不改，源 Release.entitlements 不改，不以构建后的人工重签掩盖配置问题。
+
+每次用于真实连接的干净 Release 包除 `codesign --verify --deep --strict` 外，还必须读取实际签名 entitlements，与仓库 Release.entitlements 完全比较，拒绝额外/缺失/不同值，尤其拒绝 get-task-allow。隔离验收使用同一已签名包正常退出重开；不要在保存真实 Key 后重新构建/重签而改变 OS 访问身份。此校验不等于 Developer ID、notarization 或正式分发验收已完成。
+
 ## 配对协议与请求边界
 
 第一台设备已连接 OpenRouter 后，使用产品首次设置提供的一次启用码建立原设备身份。此码是 256-bit 随机的一次授权能力，只允许初始设备登记；它不是 Cloudflare 账户 token。服务仅持有 SHA-256 值，唯一原设备约束和幂等登记防止重复建立原设备。Cloudflare 管理 token 永远只属于制作阶段操作员。
