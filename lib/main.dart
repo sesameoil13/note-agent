@@ -340,6 +340,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           return Column(
             children: [
               _header(wide),
+              if (_workspace != null && constraints.maxWidth < 720)
+                _mobileNavigation(),
               if (_deviceInfo != null)
                 Padding(
                   padding: const EdgeInsets.symmetric(
@@ -464,7 +466,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                 icon: const Icon(Icons.mic, size: 16),
                 label: const Text('录音'),
               )
-            else
+            else if (MediaQuery.sizeOf(context).width >= 720)
               AccessibleIconButton(
                 onPressed: _saving
                     ? null
@@ -474,13 +476,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
               ),
             const SizedBox(width: 8),
           ],
-          if (!wide)
+          if (!wide && MediaQuery.sizeOf(context).width >= 720)
             AccessibleIconButton(
               onPressed: _showRecent,
               label: '最近记录',
               icon: const Icon(Icons.notes),
             ),
-          if (!wide)
+          if (!wide && MediaQuery.sizeOf(context).width >= 720)
             AccessibleIconButton(
               onPressed: _saving
                   ? null
@@ -506,6 +508,46 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
               child: const Text('新建文字'),
             ),
         ],
+      ],
+    ),
+  );
+
+  Widget _mobileNavigation() => Container(
+    alignment: Alignment.centerLeft,
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: ash)),
+    ),
+    child: Wrap(
+      spacing: 16,
+      children: [
+        TextButton(
+          onPressed: _saving
+              ? null
+              : () => setState(() {
+                  _composing = true;
+                  _recordingPage = false;
+                  _selectedId = null;
+                  _error = null;
+                }),
+          child: const Text('新建文字'),
+        ),
+        Tooltip(
+          message: '录音',
+          child: TextButton(
+            onPressed: _saving
+                ? null
+                : () => setState(() => _recordingPage = true),
+            child: const Text('录音'),
+          ),
+        ),
+        Tooltip(
+          message: '最近记录',
+          child: TextButton(
+            onPressed: _saving ? null : _showRecent,
+            child: const Text('历史记录'),
+          ),
+        ),
       ],
     ),
   );
@@ -599,20 +641,51 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
 
   void _showRecent() {
     final notes = _workspace?.notes ?? [];
-    if (notes.isEmpty) return;
     if (MediaQuery.sizeOf(context).width < 720) {
-      showModalBottomSheet<void>(
-        context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, refresh) =>
-              _noteList(refresh: () => refresh(() {})),
+      final workspace = _workspace!;
+      final originalCount =
+          workspace.recordings.length +
+          workspace.audioSources
+              .where(
+                (source) => !workspace.recordings.any(
+                  (recording) => recording.id == source.id,
+                ),
+              )
+              .length;
+      Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => DefaultTabController(
+            length: 2,
+            initialIndex: notes.isEmpty && originalCount > 0 ? 1 : 0,
+            child: Scaffold(
+              appBar: AppBar(
+                title: const Text('历史记录'),
+                bottom: TabBar(
+                  tabs: [
+                    Tab(text: '笔记 ${notes.length}'),
+                    Tab(text: '原始录音 $originalCount'),
+                  ],
+                ),
+              ),
+              body: TabBarView(
+                children: [
+                  StatefulBuilder(
+                    builder: (_, refresh) =>
+                        _noteList(refresh: () => refresh(() {})),
+                  ),
+                  RecordingPanel(workspace: workspace, historyOnly: true),
+                ],
+              ),
+            ),
+          ),
         ),
       );
     } else {
       setState(() {
         _composing = false;
         _recordingPage = false;
-        _selectedId ??= notes.first.id;
+        if (notes.isNotEmpty) _selectedId ??= notes.first.id;
       });
     }
   }
