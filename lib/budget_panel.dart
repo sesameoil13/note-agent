@@ -173,6 +173,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
                   if ([
                     TextProcessingStatus.failed,
                     TextProcessingStatus.queued,
+                    TextProcessingStatus.cancelled,
                   ].contains(job.status))
                     OutlinedButton(
                       onPressed: _busy

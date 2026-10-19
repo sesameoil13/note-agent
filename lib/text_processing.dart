@@ -74,6 +74,11 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   Future<WorkspaceTextJob> _prepareText(String noteId) async {
     final existing = textJobs.where((j) => j.noteId == noteId).firstOrNull;
     if (existing != null) {
+      if (existing.status == TextProcessingStatus.cancelled) {
+        final payload = _textPayload(existing.id);
+        await _reserveNextText(existing.id, noteId, payload);
+        return textJobs.firstWhere((j) => j.id == existing.id);
+      }
       if ([
         TextProcessingStatus.queued,
         TextProcessingStatus.failed,
@@ -202,6 +207,12 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         return textJobs.firstWhere((j) => j.id == id);
       }
     }
+    if (attempts.isNotEmpty) {
+      payload['receipts'] = {
+        ...?payload['receipts'] as Map?,
+        attempts.last: {'settled': true, 'released': true},
+      };
+    }
     await _saveText(
       id,
       TextProcessingStatus.cancelled,
@@ -273,7 +284,14 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
             body: {'generationId': generation, 'usdNanos': cost},
           );
           _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
-          payload['settled'] = (payload['attempts'] as List).length == 1;
+          payload['settled'] =
+              (payload['receipts'] as Map).length ==
+                  (payload['attempts'] as List).length &&
+              (payload['receipts'] as Map).entries.every(
+                (entry) =>
+                    entry.key == attempt ||
+                    (entry.value as Map)['settled'] == true,
+              );
           (payload['receipts'] as Map)[attempt]['settled'] = true;
           await _saveText(job.id, TextProcessingStatus.costPending, payload);
         }
@@ -368,8 +386,9 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   Future<void> _reserveNextText(
     String id,
     String noteId,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    bool refreshed = false,
+  }) async {
     final pending = payload['pendingReservation'];
     if (pending == null) {
       final quoted = await connection.requestSharedBudget(
@@ -387,15 +406,24 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       await _saveText(id, TextProcessingStatus.costPending, payload);
     }
     final next = payload['pendingReservation'] as String;
-    final admitted = await connection.requestSharedBudget(
-      '/v1/budget/reserve',
-      body: {
-        'attemptId': next,
-        'operationId': id,
-        'quoteId': (payload['quote'] as Map)['id'],
-        'inputBytes': utf8.encode(jsonEncode(payload['request'])).length,
-      },
-    );
+    late Map<String, dynamic> admitted;
+    try {
+      admitted = await connection.requestSharedBudget(
+        '/v1/budget/reserve',
+        body: {
+          'attemptId': next,
+          'operationId': id,
+          'quoteId': (payload['quote'] as Map)['id'],
+          'inputBytes': utf8.encode(jsonEncode(payload['request'])).length,
+        },
+      );
+    } on ConnectionFailure catch (e) {
+      if (e.code != 'quote_expired' || refreshed) rethrow;
+      // quote_expired is returned only after confirming no existing attempt.
+      // Reuse the stable next id, never create a second unknown reservation.
+      payload.remove('pendingReservation');
+      return await _reserveNextText(id, noteId, payload, refreshed: true);
+    }
     _readTextBudget((admitted['budget'] as Map).cast<String, dynamic>());
     if ((admitted['attempt'] as Map)['state'] != 'reserved') {
       throw const ConnectionFailure('此重试已发送，不能自动重发；预留保留。');
@@ -478,6 +506,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           _attachments.noteContentsChanged(noteId, plan['after'] as String);
           payload.remove('writePlan');
           payload['applyPhase'] = 'bodyApplied';
+          payload['bodyAppliedAt'] = plan['modifiedAt'];
           _database.execute('UPDATE text_jobs SET payload=? WHERE id=?', [
             jsonEncode(payload),
             id,
@@ -487,6 +516,17 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           _database.execute('ROLLBACK');
           rethrow;
         }
+      }
+      note = notes.firstWhere((n) => n.id == noteId);
+      if (note.text != result['body'] ||
+          (note.modifiedAt.toIso8601String() != payload['bodyAppliedAt'] &&
+              note.title != result['title'])) {
+        _database.execute('UPDATE text_jobs SET status=?,error=? WHERE id=?', [
+          TextProcessingStatus.review.name,
+          '正文应用后笔记再次修改，未覆盖较新的标题或正文。',
+          id,
+        ]);
+        return;
       }
       note = await _renameTextNote(noteId, title: result['title'] as String);
       if (note.status != NoteStatus.localSaved) return;
@@ -536,6 +576,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       }
       for (final entry in receipts.entries) {
         final receipt = (entry.value as Map).cast<String, dynamic>();
+        if (receipt['released'] == true) continue;
         final generation = receipt['generationId'];
         if (generation is! String) {
           throw const ConnectionFailure(

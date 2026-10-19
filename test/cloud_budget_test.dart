@@ -267,4 +267,38 @@ void main() {
     expect(w.notes.single.id, note.id);
     expect(w.notes.single.text, '整理后的普通想法。');
   });
+  test('an explicitly re-prepared cancelled job uses a fresh reservation and can settle without counting its released attempt as unknown', () async {
+    final f = BudgetFixture();
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '重新决定', text: '同一份普通想法。');
+    final before = await w.prepareTextProcessing(note.id);
+    await w.cancelTextProcessing(before.id);
+    final again = await w.prepareTextProcessing(note.id);
+    expect(again.status, TextProcessingStatus.prepared);
+    expect(again.id, before.id);
+    final complete = await w.processTextNote(note.id);
+    expect(complete.status, TextProcessingStatus.completed);
+    expect(w.budget.reservedCnyMicros, 0);
+    expect(f.modelRequests.length, 1);
+    expect(w.notes.length, 1);
+  });
+  test('an expired quote after budget refusal is refreshed without paid dispatch or lost local content', () async {
+    final f = BudgetFixture();
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    await w.setMonthlyBudgetLimit(1);
+    final note = await w.captureText(title: '额度不足', text: '仍然先保存普通原文。');
+    final failed = await w.prepareTextProcessing(note.id);
+    expect(failed.status, TextProcessingStatus.failed);
+    await f.advanceTo(DateTime.now().toUtc().add(const Duration(minutes: 11)));
+    await w.setMonthlyBudgetLimit(30000000);
+    final ready = await w.prepareTextProcessing(note.id);
+    expect(ready.id, failed.id);
+    expect(ready.status, TextProcessingStatus.prepared);
+    expect(f.modelRequests, isEmpty);
+    expect(w.notes.single.originalText, note.text);
+  });
 }
