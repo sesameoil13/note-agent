@@ -11,6 +11,12 @@ abstract interface class AudioPlatform {
   Future<AudioPlaybackSnapshot> playbackSnapshot();
 }
 
+/// Some OS recorders outlive the Flutter activity. Recovery must match this
+/// exact original; null means no trusted live/finalized native session exists.
+abstract interface class AudioRecordingRecovery {
+  Future<AudioCaptureSnapshot?> recoverRecording(String originalPath);
+}
+
 enum AudioCapturePhase { recording, paused, stopped }
 
 class AudioCaptureSnapshot {
