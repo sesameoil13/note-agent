@@ -89,7 +89,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
           ),
           const SizedBox(height: 12),
           Text(
-            '月上限 ${money(budget.limitCnyMicros)}\n本月实际费用 \$${(budget.spentUsdNanos / 1000000000).toStringAsFixed(6)}\n保守折算消耗 ${money(budget.spentCnyMicros)}\n未结算预留 ${money(budget.reservedCnyMicros)}（其中结果未知 ${money(budget.unknownCnyMicros)}）\n剩余额度 ${money(budget.remainingCnyMicros)}',
+            '月上限 ${money(budget.limitCnyMicros)}\n本月已结算费用 \$${(budget.spentUsdNanos / 1000000000).toStringAsFixed(6)}\n保守折算消耗 ${money(budget.spentCnyMicros)}\n未结算预留 ${money(budget.reservedCnyMicros)}（其中结果未知 ${money(budget.unknownCnyMicros)}）\n剩余额度 ${money(budget.remainingCnyMicros)}',
           ),
           if (budget.nearLimit) const Text('接近月上限，新的收费任务可能暂停；本机收集继续。'),
           Text(budget.message),
@@ -157,6 +157,12 @@ class _BudgetPanelState extends State<BudgetPanel> {
               if (job.estimatedCnyMicros > 0)
                 Text('首次尝试预留 ${money(job.estimatedCnyMicros)}；实际按费用回执结算。'),
               Text(job.quoteDescription),
+              if (job.generationIds.isNotEmpty)
+                SelectableText('费用编号：${job.generationIds.join('、')}'),
+              if (job.generationIds.isNotEmpty)
+                Text(
+                  '费用回执金额：${job.knownCostUsdNanos == null ? '未知' : '\$${(job.knownCostUsdNanos! / 1000000000).toStringAsFixed(9)}'}；最后一次输入 ${job.inputTokens ?? '未知'} / 输出 ${job.outputTokens ?? '未知'} token。尚未取得的费用仍按预留计。',
+                ),
               Wrap(
                 spacing: 12,
                 runSpacing: 8,

@@ -260,6 +260,18 @@ export async function budgetRequest(request, env, context) {
       201,
     );
   }
+  const inspection = /^\/v1\/budget\/attempt\/([a-zA-Z0-9_-]{8,80})$/.exec(
+    path,
+  );
+  if (inspection && request.method === "GET") {
+    const attempt = await env.DB.prepare(
+      "SELECT * FROM budget_attempts WHERE id=? AND device_id=?",
+    )
+      .bind(inspection[1], own.id)
+      .first();
+    if (!attempt) fail(404, "attempt_missing");
+    return response({ attempt, budget: await state(env, now) });
+  }
   const match =
     /^\/v1\/budget\/attempt\/([a-zA-Z0-9_-]{8,80})\/(send|uncertain|release|settle)$/.exec(
       path,

@@ -4,7 +4,7 @@
 
 ## 使用路径
 
-工作区或设置的“AI 与共享预算”进入面板。先“预估并预留（不调用模型）”，查看冻结费率，再显式确认发送。首次加最多三次自动重试；重试不是免费撤销，每次先独立申请预算。自动重试耗尽后，无可用结果的失败任务可手动另行预留并重试，同一业务笔记保持相同 ID。刷新/核对费用/页面恢复不会重发模型请求。凭据、余额和预算错误不自动重试。
+工作区或设置的“AI 与共享预算”进入面板。先“预估并预留（不调用模型）”，查看冻结费率，再显式确认发送。完成后可在 App 查看/复制 generation 费用编号、已取得的美元费用与最近一次输入/输出 token；未返回的字段显示未知。首次加最多三次自动重试；重试不是免费撤销，每次先独立申请预算。自动重试耗尽后，无可用结果的失败任务可手动另行预留并重试，同一业务笔记保持相同 ID。刷新/核对费用/页面恢复不会重发模型请求。凭据、余额和预算错误不自动重试。
 
 原文、稳定业务 ID、请求、attempt ID 与冻结报价先写本机 SQLite，再请求共享账本；发送状态在请求模型前写入。正文更新使用已有笔记库受保护的替换/改名日志，原始来源文件保留。普通笔记保持正文、关联、来源顺序，没有摘要或可见属性。模型结果必须来自固定型号、单个完整响应、严格来源 ID/JSON 字段/简短中文标题；不明确或涉及行动的结果停在待确认，不由本票创建待办。文件或笔记在处理期间被人修改时，不覆盖新内容。
 
@@ -24,7 +24,7 @@ ECB 为参考信息，不能保证支付结算汇率；只用于保守预算折�
 
 ## 原子性与未知费用
 
-0002_budget.sql 新增预算表，不改/清除 devices、pairing 或既有 schema。单条 INSERT...SELECT 在 D1 内检查共享已结算+所有未结算预留，唯一 attempt/generation 约束防止重复占款/重复收费；并发设备不能各取一份完整剩余额度。重复 prepare 沿用同一操作和尝试；发送通过 reserved→sent 的条件更新仅允许一次。只有未发送 reserved 能释放；sent/uncertain 不能作为取消退款。
+0002_budget.sql 新增预算表，不改/清除 devices、pairing 或既有 schema。单条 INSERT...SELECT 在 D1 内检查共享已结算+所有未结算预留，唯一 attempt/generation 约束防止重复占款/重复收费；并发设备不能各取一份完整剩余额度。重复 prepare 沿用同一操作和尝试；发送通过 reserved→sent 的条件更新仅允许一次。只有未发送 reserved 能释放；sent/uncertain 不能作为取消退款。费用核对可先读取本设备 attempt：账本明确 reserved/released/未准入时才按未发送释放或关闭任务；若发送与释放并发，以 D1 条件更新返回的最终状态为准。
 
 外部推理与 D1 没有跨服务原子事务。模型可能已收到而本机没收到响应时，保留占款；重启不自动重发。若有 generation ID，手动“核对费用”使用普通 Key 的官方 generation 查询，暂时 404/网络错误保持预留。重复相同回执不重复结算；不同回执/同一 generation 被不同尝试使用会阻止新收费任务，不覆盖原账单。没有 generation ID 的未知请求不能凭空证明免费；提示用户核对官网，保留占款。此票不提供未经核实的“清零未知费用”按钮。后续故障支持/人工对账必须保留审计证据，不能自动退款。
 
@@ -44,3 +44,5 @@ test/cloud_budget_test.dart 从公开 NoteWorkspace 驱动真实本机文件/SQL
 - [Generation 回执](https://openrouter.ai/docs/api/api-reference/generations/get-request-&-usage-metadata-for-a-generation)：按 generation ID 查询 total_cost。
 - [ECB 参考汇率说明](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)与 [XML](https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml)：工作日发布，信息参考，不能宣称真实支付汇率。
 - [D1 Database API](https://developers.cloudflare.com/d1/worker-api/d1-database/)及 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)：本地原子性测试不替代远程 Free CPU/配额验收。
+
+本地检查（2026-10-20，已合入 integration9981 的手机历史修复）：135 项 Flutter 全量测试通过，其中15项预算工作区测试；analyze 无问题；原配对 HTTP 5 项、Prettier 与隔离 Wrangler4.151.0 dry-run 均通过。Worker25.01KiB，gzip6.38KiB。无远程部署和真实推理记录；Mac 同身份更新包另以固定提交归档、源码差异及实际签名清单交付，构建不启动 App。

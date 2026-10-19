@@ -6,33 +6,50 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         .select('SELECT * FROM text_jobs WHERE vault=?', [
           vaultStorage.identity,
         ])
-        .map(
-          (r) => WorkspaceTextJob(
+        .map((r) {
+          final p = (jsonDecode(r['payload'] as String) as Map)
+              .cast<String, dynamic>();
+          final receipts =
+              (p['receipts'] as Map?)?.values.whereType<Map>().toList() ??
+              <Map>[];
+          final costs = receipts
+              .map((receipt) => receipt['usdNanos'])
+              .whereType<int>()
+              .toList();
+          final reply = p['reply'];
+          final usage = reply is Map ? reply['usage'] : null;
+          int? tokens(String key) =>
+              usage is Map && usage[key] is int && (usage[key] as int) >= 0
+              ? usage[key] as int
+              : null;
+          return WorkspaceTextJob(
             id: r['id'] as String,
             noteId: r['note_id'] as String,
             status: TextProcessingStatus.values.byName(r['status'] as String),
             message: r['error'] as String? ?? '',
             canRetry:
                 r['status'] == TextProcessingStatus.costPending.name &&
-                (jsonDecode(r['payload'] as String) as Map)['result'] == null,
-            estimatedCnyMicros:
-                (jsonDecode(r['payload'] as String)
-                        as Map)['estimatedCnyMicros']
-                    as int? ??
-                0,
-            quoteDescription: _textQuoteDescription(
-              (jsonDecode(r['payload'] as String) as Map)['quote'],
+                p['result'] == null,
+            estimatedCnyMicros: p['estimatedCnyMicros'] as int? ?? 0,
+            quoteDescription: _textQuoteDescription(p['quote']),
+            attemptCount: (p['attempts'] as List).length,
+            generationIds: List.unmodifiable(
+              receipts
+                  .map((receipt) => receipt['generationId'])
+                  .whereType<String>(),
             ),
-            attemptCount:
-                ((jsonDecode(r['payload'] as String) as Map)['attempts']
-                        as List)
-                    .length,
-          ),
-        ),
+            knownCostUsdNanos: costs.isEmpty
+                ? null
+                : costs.fold<int>(0, (a, b) => a + b),
+            inputTokens: tokens('prompt_tokens'),
+            outputTokens: tokens('completion_tokens'),
+          );
+        }),
   );
+
   String _textQuoteDescription(dynamic value) {
     if (value is! Map) return '尚未取得费率';
-    return '固定 DeepSeek V4.1 Flash · 路由 ${value['provider']}\n输入 \$${(value['promptNano'] as int) / 1000}/百万 token；输出 \$${(value['completionNano'] as int) / 1000}/百万 token\n汇率日期 ${value['fxDate']}；冻结换算 ¥${(value['fxMicros'] as int) / 1000000}/USD（含 10% 汇率余量）；每次预留另含 25% 余量。最多 1024 输出 token。';
+    return '固定 DeepSeek V4.1 Flash · 报价 ${value['id']} · 路由 ${value['provider']}\n输入 \$${(value['promptNano'] as int) / 1000}/百万 token；输出 \$${(value['completionNano'] as int) / 1000}/百万 token\n汇率日期 ${value['fxDate']}；冻结换算 ¥${(value['fxMicros'] as int) / 1000000}/USD（含 10% 汇率余量）；每次预留另含 25% 余量。最多 1024 输出 token。';
   }
 
   Future<void> _refreshTextBudget() async {
@@ -256,6 +273,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     final payload = _textPayload(job.id);
     for (var retry = 0; retry < 4; retry++) {
       final attempt = (payload['attempts'] as List).last as String;
+      payload.remove('validationError');
       await _saveText(job.id, TextProcessingStatus.sending, payload);
       try {
         final reply = await connection.sendReservedText(
@@ -569,11 +587,67 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         (payload['receipts'] as Map?)?.cast<String, dynamic>() ??
         <String, dynamic>{};
     try {
-      if (receipts.isEmpty) {
-        throw const ConnectionFailure(
-          '本次发送结果未知且没有费用编号，预留不会自动释放，请在 OpenRouter 核对。',
-        );
+      final attempts = <String>{
+        ...(payload['attempts'] as List).cast<String>(),
+        if (payload['pendingReservation'] is String)
+          payload['pendingReservation'] as String,
+      };
+      for (final attempt in attempts) {
+        try {
+          final inspected = await connection.requestSharedBudget(
+            '/v1/budget/attempt/$attempt',
+          );
+          final row = (inspected['attempt'] as Map).cast<String, dynamic>();
+          _readTextBudget((inspected['budget'] as Map).cast<String, dynamic>());
+          if (row['state'] == 'reserved') {
+            final released = await connection.requestSharedBudget(
+              '/v1/budget/attempt/$attempt/release',
+              body: {},
+            );
+            _readTextBudget(
+              (released['budget'] as Map).cast<String, dynamic>(),
+            );
+            if ((released['attempt'] as Map)['state'] != 'released') {
+              throw const ConnectionFailure('发送状态已变化，费用预留保留。');
+            }
+            receipts[attempt] = {'released': true, 'settled': true};
+          } else if (row['state'] == 'released') {
+            receipts[attempt] = {'released': true, 'settled': true};
+          } else if (row['state'] == 'settled' &&
+              row['generation_id'] is String) {
+            receipts[attempt] = {
+              ...?receipts[attempt] as Map?,
+              'generationId': row['generation_id'],
+              'usdNanos': row['usd_nanos'],
+              'settled': true,
+            };
+          } else {
+            receipts.putIfAbsent(attempt, () => {'settled': false});
+          }
+        } on ConnectionFailure catch (e) {
+          if (e.code != 'attempt_missing') rethrow;
+          // A dispatch must first atomically change this persistent admission
+          // from reserved to sent. No attempt means no admitted dispatch.
+          receipts[attempt] = {'released': true, 'settled': true};
+        }
       }
+      payload['receipts'] = receipts;
+      payload['attempts'] = attempts.toList();
+      payload.remove('pendingReservation');
+      if (receipts.isEmpty ||
+          receipts.values.every(
+            (value) => (value as Map)['released'] == true,
+          )) {
+        await _saveText(
+          id,
+          TextProcessingStatus.cancelled,
+          payload,
+          error: '共享账本已确认未发送，预留已释放；原文保留，可重新预估。',
+        );
+        await refreshBudget();
+        return textJobs.firstWhere((j) => j.id == id);
+      }
+      await _saveText(id, TextProcessingStatus.costPending, payload);
       for (final entry in receipts.entries) {
         final receipt = (entry.value as Map).cast<String, dynamic>();
         if (receipt['released'] == true) continue;
@@ -598,7 +672,9 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
             receipts.length == (payload['attempts'] as List).length;
         await _saveText(
           id,
-          payload['settled'] == true && payload['applyPhase'] == 'applied'
+          payload['validationError'] is String
+              ? TextProcessingStatus.review
+              : payload['settled'] == true && payload['applyPhase'] == 'applied'
               ? TextProcessingStatus.completed
               : TextProcessingStatus.costPending,
           payload,

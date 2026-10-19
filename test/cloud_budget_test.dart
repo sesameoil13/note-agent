@@ -94,6 +94,10 @@ void main() {
     final source = await File(note.sourcePath).readAsBytes();
     final job = await w.processTextNote(note.id);
     expect(job.status, TextProcessingStatus.completed);
+    expect(job.generationIds, ['gen-budget-fixture-1']);
+    expect(job.knownCostUsdNanos, 10000);
+    expect(job.inputTokens, 37);
+    expect(job.outputTokens, 22);
     expect(f.modelRequests.single['model'], 'deepseek/deepseek-v4.1-flash');
     expect(f.modelRequests.single['max_tokens'], 1024);
     expect(
@@ -300,5 +304,24 @@ void main() {
     expect(ready.status, TextProcessingStatus.prepared);
     expect(f.modelRequests, isEmpty);
     expect(w.notes.single.originalText, note.text);
+  });
+  test('reconciliation releases a hold only when the shared ledger proves dispatch never occurred', () async {
+    final f = BudgetFixture();
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '凭据移除', text: '保存后再决定是否发送。');
+    final ready = await w.prepareTextProcessing(note.id);
+    await w.connection.disconnectOpenRouter();
+    await w.processTextNote(note.id);
+    expect(w.budget.reservedCnyMicros, greaterThan(0));
+    await f.reopen(0);
+    final reconciled = await f.workspaces.first.reconcileTextProcessing(
+      ready.id,
+    );
+    expect(reconciled.status, TextProcessingStatus.cancelled);
+    expect(f.workspaces.first.budget.reservedCnyMicros, 0);
+    expect(f.modelRequests, isEmpty);
+    expect(f.workspaces.first.notes.single.originalText, note.text);
   });
 }

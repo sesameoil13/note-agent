@@ -50,10 +50,17 @@ class WorkspaceTextJob {
     this.estimatedCnyMicros = 0,
     this.quoteDescription = '尚未取得费率',
     this.canRetry = false,
+    this.generationIds = const [],
+    this.knownCostUsdNanos,
+    this.inputTokens,
+    this.outputTokens,
   });
   final String id, noteId, message;
   final TextProcessingStatus status;
   final int attemptCount, estimatedCnyMicros;
   final String quoteDescription;
   final bool canRetry;
+  final List<String> generationIds;
+  final int? knownCostUsdNanos;
+  final int? inputTokens, outputTokens;
 }

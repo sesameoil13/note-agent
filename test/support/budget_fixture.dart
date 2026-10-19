@@ -71,7 +71,11 @@ class BudgetFixture {
           jsonEncode({
             'id': 'gen-budget-fixture-${modelRequests.length}',
             'model': 'deepseek/deepseek-v4.1-flash',
-            'usage': {if (!omitCost) 'cost': 0.00001},
+            'usage': {
+              if (!omitCost) 'cost': 0.00001,
+              'prompt_tokens': 37,
+              'completion_tokens': 22,
+            },
             'choices': [
               {
                 'finish_reason': 'stop',
