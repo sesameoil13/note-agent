@@ -14,9 +14,11 @@ class RecordingPanel extends StatefulWidget {
     super.key,
     required this.workspace,
     this.onStateChanged,
+    this.historyOnly = false,
   });
   final NoteWorkspace workspace;
   final VoidCallback? onStateChanged;
+  final bool historyOnly;
   @override
   State<RecordingPanel> createState() => _RecordingPanelState();
 }
@@ -155,161 +157,163 @@ class _RecordingPanelState extends State<RecordingPanel> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            '收集录音',
-            style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            '离线也可保存。保留原音频，尚未转写。',
-            style: TextStyle(color: Color(0xFF767C82), height: 1.5),
-          ),
-          const SizedBox(height: 24),
-          if (_platform.supportsSourceFiles)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: OutlinedButton.icon(
-                onPressed: _busy ? null : _importAudio,
-                icon: const Icon(Icons.audio_file),
-                label: const Text('导入已有录音'),
-              ),
+          if (!widget.historyOnly) ...[
+            const Text(
+              '收集录音',
+              style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800),
             ),
-          const SizedBox(height: 24),
-          if (workspace.recordingAvailable)
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1C2024),
-                border: Border(
-                  left: BorderSide(
-                    color: active ? color : const Color(0xFF767C82),
-                    width: 8,
-                  ),
-                  top: const BorderSide(color: Color(0xFF767C82)),
-                  right: const BorderSide(color: Color(0xFF767C82)),
-                  bottom: const BorderSide(color: Color(0xFF767C82)),
+            const SizedBox(height: 8),
+            const Text(
+              '离线也可保存。保留原音频，尚未转写。',
+              style: TextStyle(color: Color(0xFF767C82), height: 1.5),
+            ),
+            const SizedBox(height: 24),
+            if (_platform.supportsSourceFiles)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _importAudio,
+                  icon: const Icon(Icons.audio_file),
+                  label: const Text('导入已有录音'),
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          switch (state.phase) {
-                            RecordingPhase.starting => '等待麦克风权限',
-                            RecordingPhase.recording => '录音中',
-                            RecordingPhase.paused => '已暂停',
-                            RecordingPhase.saving => '正在保存原音频',
-                            RecordingPhase.failed => '录音未完成',
-                            RecordingPhase.idle => '准备录音',
-                          },
+            const SizedBox(height: 24),
+            if (workspace.recordingAvailable)
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C2024),
+                  border: Border(
+                    left: BorderSide(
+                      color: active ? color : const Color(0xFF767C82),
+                      width: 8,
+                    ),
+                    top: const BorderSide(color: Color(0xFF767C82)),
+                    right: const BorderSide(color: Color(0xFF767C82)),
+                    bottom: const BorderSide(color: Color(0xFF767C82)),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            switch (state.phase) {
+                              RecordingPhase.starting => '等待麦克风权限',
+                              RecordingPhase.recording => '录音中',
+                              RecordingPhase.paused => '已暂停',
+                              RecordingPhase.saving => '正在保存原音频',
+                              RecordingPhase.failed => '录音未完成',
+                              RecordingPhase.idle => '准备录音',
+                            },
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          formatRecordingDuration(state.duration),
                           style: const TextStyle(
-                            fontSize: 24,
+                            fontSize: 32,
+                            fontFamily: 'monospace',
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                      ),
-                      Text(
-                        formatRecordingDuration(state.duration),
-                        style: const TextStyle(
-                          fontSize: 32,
-                          fontFamily: 'monospace',
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  Semantics(
-                    label: paused
-                        ? '录音已暂停，计时停止'
-                        : active
-                        ? '麦克风实时音量波形'
-                        : '尚未开始录音',
-                    child: SizedBox(
-                      height: 80,
-                      child: CustomPaint(
-                        painter: _Waveform(
-                          state.levels,
-                          active && !paused ? color : const Color(0xFF767C82),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Wrap(
-                    spacing: 16,
-                    runSpacing: 16,
-                    children: [
-                      if (!active)
-                        FilledButton.icon(
-                          onPressed: working
-                              ? null
-                              : () => _act(workspace.startRecording),
-                          icon: const Icon(Icons.mic),
-                          label: const Text('开始录音'),
-                        ),
-                      if (active) ...[
-                        FilledButton.icon(
-                          onPressed: working
-                              ? null
-                              : () => _act(() async {
-                                  await workspace.stopRecording();
-                                }),
-                          icon: const Icon(Icons.stop),
-                          label: const Text('结束并保存'),
-                        ),
-                        OutlinedButton.icon(
-                          onPressed: working
-                              ? null
-                              : () => _act(
-                                  paused
-                                      ? workspace.resumeRecording
-                                      : workspace.pauseRecording,
-                                ),
-                          icon: Icon(paused ? Icons.mic : Icons.pause),
-                          label: Text(paused ? '继续录音' : '暂停'),
-                        ),
                       ],
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    '支持 15 秒至 10 分钟；达到 10 分钟自动结束保存。',
-                    style: TextStyle(color: Color(0xFF767C82), fontSize: 12),
-                  ),
-                  if (Platform.isAndroid)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Text(
-                        '锁屏或切换应用时由系统录音服务继续；可从通知暂停或保存。'
-                        '从最近任务划掉会结束录音。含暂停总计 30 分钟会自动结束；'
-                        '系统强制停止可能留下不完整原件，重开后请核对。'
-                        '若通知未获准，可回 App 结束录音；后台限制由手机系统决定。',
-                        style: TextStyle(
-                          color: Color(0xFF767C82),
-                          fontSize: 12,
-                          height: 1.5,
+                    ),
+                    const SizedBox(height: 24),
+                    Semantics(
+                      label: paused
+                          ? '录音已暂停，计时停止'
+                          : active
+                          ? '麦克风实时音量波形'
+                          : '尚未开始录音',
+                      child: SizedBox(
+                        height: 80,
+                        child: CustomPaint(
+                          painter: _Waveform(
+                            state.levels,
+                            active && !paused ? color : const Color(0xFF767C82),
+                          ),
                         ),
                       ),
                     ),
-                ],
+                    const SizedBox(height: 24),
+                    Wrap(
+                      spacing: 16,
+                      runSpacing: 16,
+                      children: [
+                        if (!active)
+                          FilledButton.icon(
+                            onPressed: working
+                                ? null
+                                : () => _act(workspace.startRecording),
+                            icon: const Icon(Icons.mic),
+                            label: const Text('开始录音'),
+                          ),
+                        if (active) ...[
+                          FilledButton.icon(
+                            onPressed: working
+                                ? null
+                                : () => _act(() async {
+                                    await workspace.stopRecording();
+                                  }),
+                            icon: const Icon(Icons.stop),
+                            label: const Text('结束并保存'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: working
+                                ? null
+                                : () => _act(
+                                    paused
+                                        ? workspace.resumeRecording
+                                        : workspace.pauseRecording,
+                                  ),
+                            icon: Icon(paused ? Icons.mic : Icons.pause),
+                            label: Text(paused ? '继续录音' : '暂停'),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      '支持 15 秒至 10 分钟；达到 10 分钟自动结束保存。',
+                      style: TextStyle(color: Color(0xFF767C82), fontSize: 12),
+                    ),
+                    if (Platform.isAndroid)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          '锁屏或切换应用时由系统录音服务继续；可从通知暂停或保存。'
+                          '从最近任务划掉会结束录音。含暂停总计 30 分钟会自动结束；'
+                          '系统强制停止可能留下不完整原件，重开后请核对。'
+                          '若通知未获准，可回 App 结束录音；后台限制由手机系统决定。',
+                          style: TextStyle(
+                            color: Color(0xFF767C82),
+                            fontSize: 12,
+                            height: 1.5,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
+            const SizedBox(height: 32),
+          ],
           if (_error != null || state.error != null)
             Padding(
-              padding: const EdgeInsets.only(top: 16),
+              padding: const EdgeInsets.only(bottom: 16),
               child: SelectableText(_error ?? state.error!),
             ),
-          const SizedBox(height: 32),
           const Text(
             '原始录音',
             style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 16),
-          if (workspace.recordings.isEmpty)
+          if (workspace.recordings.isEmpty && workspace.audioSources.isEmpty)
             const Text(
               '保存的原音频会出现在这里。',
               style: TextStyle(color: Color(0xFF767C82)),
