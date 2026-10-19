@@ -62,7 +62,8 @@ microphone/player boundary. TDD skill plus its tests/mocking references were rea
   It now exposes interrupted, the real three-byte original, no vault/AI success,
   and an honest failed playback attempt while preserving those bytes.
 - The existing macOS recording/permission/vault-retry/UI regressions remain in
-  the host suite. All 112 host tests passed with pinned Node and the local Worker
+  the host suite. All 117 host tests passed after merging integration `46ef434`,
+  with pinned Node and the local Worker
   harness dependencies; no external endpoint, API Key or cloud model was used.
 - `flutter analyze --no-pub` passed. Release ARM64 compilation passed. Exact final
   candidate signature/alignment/hash are recorded in the handoff evidence outside

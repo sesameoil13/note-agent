@@ -176,6 +176,8 @@ class RecordingService : Service() {
         "error" to failure,
     )
 
+    fun matches(path: String?): Boolean = path != null && original?.path == path
+
     fun pause() {
         if (phase != "recording") return
         recorder?.pause()

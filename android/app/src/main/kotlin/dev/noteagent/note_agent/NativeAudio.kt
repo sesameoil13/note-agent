@@ -120,7 +120,10 @@ class NativeAudio(private val activity: MainActivity, messenger: BinaryMessenger
                 "pauseRecording" -> { live().pause(); result.success(null) }
                 "resumeRecording" -> { live().resume(); result.success(null) }
                 "recordingSnapshot" -> result.success(snapshot())
-                "stopRecording" -> result.success(RecordingService.current?.finish() ?: snapshot())
+                "stopRecording" -> {
+                    val service = RecordingService.current
+                    result.success(if (service != null && service.matches(recordingPath)) service.finish() else snapshot())
+                }
                 "inspectRecording", "inspectAudioSource" -> {
                     val source = privateFile(path(call))
                     io.execute {
@@ -154,7 +157,8 @@ class NativeAudio(private val activity: MainActivity, messenger: BinaryMessenger
         }
     }
 
-    private fun live(): RecordingService = RecordingService.current ?: error("录音服务已结束，请核对保留的原音频。")
+    private fun live(): RecordingService = RecordingService.current?.takeIf { it.matches(recordingPath) }
+        ?: error("录音服务已结束，请核对保留的原音频。")
     private fun snapshot(): Map<String, Any?> = recordingPath?.let { RecordingService.recovered(activity, it) }
         ?: error("录音已中断，现有原文件已保留；请重新打开后核对。")
 
@@ -167,7 +171,12 @@ class NativeAudio(private val activity: MainActivity, messenger: BinaryMessenger
         val needed = mutableListOf<String>()
         if (activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) needed.add(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) needed.add(Manifest.permission.POST_NOTIFICATIONS)
-        if (needed.isEmpty()) launch() else activity.requestPermissions(needed.toTypedArray(), PERMISSION)
+        try {
+            if (needed.isEmpty()) launch() else activity.requestPermissions(needed.toTypedArray(), PERMISSION)
+        } catch (error: Exception) {
+            pending = null
+            throw error
+        }
     }
 
     fun onPermissionResult(requestCode: Int) {
