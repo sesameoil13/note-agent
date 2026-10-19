@@ -27,24 +27,36 @@ void main() {
     addTearDown(() => root.delete(recursive: true));
     final local = Directory('${root.path}/local');
     final vault = await Directory('${root.path}/new').create();
-    final backup = await File('${root.path}/old-backup.md').writeAsString('旧库原文');
-    var workspace = await NoteWorkspace.open(localDirectory: local, vaultDirectory: vault);
+    final backup = await File('${root.path}/old-backup.md')
+        .writeAsString('旧库原文');
+    var workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
     final note = await workspace.captureText(title: '新想法', text: '保留输入和原文');
     await workspace.reportSetupCheck(SetupCheck.correctVaultOpened, true);
     await workspace.reportSetupCheck(SetupCheck.backupComplete, true);
     await workspace.reportSetupCheck(SetupCheck.localImportCopyRetained, true);
     await workspace.confirmRemoteSlotSwitch();
     await workspace.close();
-    workspace = await NoteWorkspace.open(localDirectory: local, vaultDirectory: vault);
+    workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
     expect(workspace.setup.isReported(SetupCheck.correctVaultOpened), isTrue);
     expect(workspace.setup.remoteSlotConsentAt, isNotNull);
     await workspace.close();
-    final other = await NoteWorkspace.open(localDirectory: local,
-      vaultDirectory: await Directory('${root.path}/other').create());
+    final other = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: await Directory('${root.path}/other').create(),
+    );
     expect(other.setup.reports, isEmpty);
     expect(other.setup.remoteSlotConsentAt, isNull);
     await other.close();
-    workspace = await NoteWorkspace.open(localDirectory: local, vaultDirectory: vault);
+    workspace = await NoteWorkspace.open(
+      localDirectory: local,
+      vaultDirectory: vault,
+    );
     addTearDown(workspace.close);
     await workspace.clearSetupReports();
     expect(workspace.setup.reports, isEmpty);

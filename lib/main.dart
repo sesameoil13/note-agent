@@ -14,6 +14,7 @@ import 'method_channel_audio.dart';
 import 'recording_panel.dart';
 import 'workspace_platform.dart';
 import 'document_panel.dart';
+import 'setup_screen.dart';
 
 void main() => runApp(const NoteAgentApp());
 
@@ -159,6 +160,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     try {
       final location = await _platform.restoreLocation();
       _deviceInfo = location.deviceInfo;
+      _error = location.authorizationError;
       if (location.hasVault) await _open(location);
     } catch (error) {
       _error = _errorMessage(error);
@@ -186,6 +188,18 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       _error = _errorMessage(error);
     }
     if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _showSetup() async {
+    final action = await Navigator.of(context).push<SetupAction>(
+      MaterialPageRoute(
+        builder: (_) =>
+            SetupScreen(workspace: _workspace, connection: _connection),
+      ),
+    );
+    if (!mounted) return;
+    if (action == SetupAction.chooseVault) await _chooseVault();
+    if (action == SetupAction.record) setState(() => _recordingPage = true);
   }
 
   Future<void> _open(WorkspaceLocation location) async {
@@ -392,20 +406,26 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           color: acid,
           child: const Icon(Icons.notes, size: 16, color: graphite),
         ),
-        const SizedBox(width: 16),
-        Text(
-          wide ? 'RIGID BODY' : 'RIGID',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -0.4,
+        SizedBox(width: wide ? 16 : 8),
+        if (wide || MediaQuery.sizeOf(context).width >= 410)
+          Text(
+            wide ? 'RIGID BODY' : 'RIGID',
+            style: TextStyle(
+              fontSize: wide ? 20 : 18,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.4,
+            ),
           ),
-        ),
         if (wide) ...[
           const SizedBox(width: 24),
           const Text('笔记工作区', style: TextStyle(color: ash)),
         ],
         const Spacer(),
+        AccessibleIconButton(
+          onPressed: _saving || _loading ? null : _showSetup,
+          label: '设置与首次引导',
+          icon: const Icon(Icons.tune),
+        ),
         AccessibleIconButton(
           onPressed: _saving
               ? null
@@ -1042,11 +1062,12 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             ),
             const SizedBox(height: 24),
             const Text(
-              '选择一个新的测试笔记库，开始收集文字。\n原文先保存在本机，再写入 Markdown 笔记。',
+              '选择自己的本地笔记库，开始收集。\n在设置与首次引导中连接服务、配对并核对 Obsidian。',
               style: TextStyle(fontSize: 16, height: 1.7, color: ash),
             ),
             const SizedBox(height: 32),
-            FilledButton(onPressed: _chooseVault, child: const Text('选择测试笔记库')),
+            FilledButton(onPressed: _showSetup, child: const Text('开始设置')),
+            TextButton(onPressed: _chooseVault, child: const Text('先选择本地笔记库')),
           ],
         ),
       ),

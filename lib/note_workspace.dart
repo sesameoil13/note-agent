@@ -343,7 +343,11 @@ class NoteWorkspace {
       createId ?? _randomId,
       connection ?? WorkspaceConnection.platform(),
     );
-    workspace._setup = WorkspaceSetup(database, vaultStorage.identity, workspace._clock);
+    workspace._setup = WorkspaceSetup(
+      database,
+      vaultStorage.identity,
+      workspace._clock,
+    );
     workspace._attachments = WorkspaceAttachments(
       database,
       localDirectory,
