@@ -280,6 +280,21 @@ class _RecordingPanelState extends State<RecordingPanel> {
                     '支持 15 秒至 10 分钟；达到 10 分钟自动结束保存。',
                     style: TextStyle(color: Color(0xFF767C82), fontSize: 12),
                   ),
+                  if (Platform.isAndroid)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        '锁屏或切换应用时由系统录音服务继续；可从通知暂停或保存。'
+                        '从最近任务划掉会结束录音。含暂停总计 30 分钟会自动结束；'
+                        '系统强制停止可能留下不完整原件，重开后请核对。'
+                        '若通知未获准，可回 App 结束录音；后台限制由手机系统决定。',
+                        style: TextStyle(
+                          color: Color(0xFF767C82),
+                          fontSize: 12,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

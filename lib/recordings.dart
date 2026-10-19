@@ -140,6 +140,34 @@ class WorkspaceRecordings {
       if (recording.status == RecordingStatus.savePending) {
         await export(recording.id);
       } else if (recording.status == RecordingStatus.capturing) {
+        final platform = audio;
+        if (platform is AudioRecordingRecovery) {
+          try {
+            final snapshot = await (platform as AudioRecordingRecovery)
+                .recoverRecording(recording.originalPath);
+            if (snapshot != null &&
+                snapshot.phase != AudioCapturePhase.stopped &&
+                !state.isActive) {
+              state = RecordingState(
+                phase: snapshot.phase == AudioCapturePhase.paused
+                    ? RecordingPhase.paused
+                    : RecordingPhase.recording,
+                recordingId: recording.id,
+                duration: snapshot.duration,
+                error: snapshot.error,
+              );
+              _startPolling();
+              continue;
+            }
+            if (snapshot?.phase == AudioCapturePhase.stopped &&
+                snapshot?.error == null) {
+              await _finalize(recording.id, snapshot!);
+              continue;
+            }
+          } catch (_) {
+            // No completion claim if the OS cannot confirm its result.
+          }
+        }
         final file = File(recording.originalPath);
         final bytes = await file.exists() ? await file.length() : 0;
         database.execute(
@@ -178,25 +206,18 @@ class WorkspaceRecordings {
     try {
       await _audio.startRecording(original.path);
       state = RecordingState(phase: RecordingPhase.recording, recordingId: id);
-      _timer = Timer.periodic(const Duration(milliseconds: 150), (_) {
-        if (_backgroundRefresh != null) return;
-        _backgroundRefresh = refresh()
-            .catchError((Object error) {
-              state = RecordingState(
-                phase: state.phase,
-                recordingId: state.recordingId,
-                duration: state.duration,
-                levels: state.levels,
-                error: error.toString(),
-              );
-              _timer?.cancel();
-            })
-            .whenComplete(() => _backgroundRefresh = null);
-      });
+      _startPolling();
     } catch (error) {
+      final bytes = await original.exists() ? await original.length() : 0;
       database.execute(
-        'UPDATE recordings SET status = ?, error = ? WHERE id = ?',
-        [RecordingStatus.failed.name, error.toString(), id],
+        'UPDATE recordings SET status = ?, byte_length = ?, error = ? WHERE id = ?',
+        [
+          (bytes > 0 ? RecordingStatus.interrupted : RecordingStatus.failed)
+              .name,
+          bytes,
+          error.toString(),
+          id,
+        ],
       );
       state = RecordingState(
         phase: RecordingPhase.failed,
@@ -205,6 +226,25 @@ class WorkspaceRecordings {
       );
       rethrow;
     }
+  }
+
+  void _startPolling() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(milliseconds: 150), (_) {
+      if (_backgroundRefresh != null) return;
+      _backgroundRefresh = refresh()
+          .catchError((Object error) {
+            state = RecordingState(
+              phase: state.phase,
+              recordingId: state.recordingId,
+              duration: state.duration,
+              levels: state.levels,
+              error: error.toString(),
+            );
+            _timer?.cancel();
+          })
+          .whenComplete(() => _backgroundRefresh = null);
+    });
   }
 
   Future<void> pause() async {
@@ -275,6 +315,20 @@ class WorkspaceRecordings {
     );
     try {
       final snapshot = await _audio.stopRecording();
+      return await _finalize(id, snapshot);
+    } catch (error) {
+      await _markInterrupted(id, error);
+      rethrow;
+    } finally {
+      _stopping = false;
+    }
+  }
+
+  Future<WorkspaceRecording> _finalize(
+    String id,
+    AudioCaptureSnapshot snapshot,
+  ) async {
+    try {
       final recording = recordings.firstWhere((item) => item.id == id);
       final file = File(recording.originalPath);
       final length = await file.length();
@@ -298,30 +352,32 @@ class WorkspaceRecordings {
       await onFinalized?.call(recordings.firstWhere((item) => item.id == id));
       return await export(id);
     } catch (error) {
-      final original = File(
-        recordings.firstWhere((item) => item.id == id).originalPath,
-      );
-      final bytes = await original.exists() ? await original.length() : 0;
-      database.execute(
-        'UPDATE recordings SET status = ?, error = ?, byte_length = ?, duration_ms = ? WHERE id = ? AND status = ?',
-        [
-          RecordingStatus.interrupted.name,
-          error.toString(),
-          bytes,
-          state.duration.inMilliseconds,
-          id,
-          RecordingStatus.capturing.name,
-        ],
-      );
-      state = RecordingState(
-        phase: RecordingPhase.failed,
-        recordingId: id,
-        error: error.toString(),
-      );
+      await _markInterrupted(id, error);
       rethrow;
-    } finally {
-      _stopping = false;
     }
+  }
+
+  Future<void> _markInterrupted(String id, Object error) async {
+    final original = File(
+      recordings.firstWhere((item) => item.id == id).originalPath,
+    );
+    final bytes = await original.exists() ? await original.length() : 0;
+    database.execute(
+      'UPDATE recordings SET status = ?, error = ?, byte_length = ?, duration_ms = ? WHERE id = ? AND status = ?',
+      [
+        RecordingStatus.interrupted.name,
+        error.toString(),
+        bytes,
+        state.duration.inMilliseconds,
+        id,
+        RecordingStatus.capturing.name,
+      ],
+    );
+    state = RecordingState(
+      phase: RecordingPhase.failed,
+      recordingId: id,
+      error: error.toString(),
+    );
   }
 
   Future<WorkspaceRecording> export(String id) async {
