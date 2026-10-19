@@ -161,7 +161,7 @@ void main() {
       await tester.pumpWidget(const NoteAgentApp());
       await tester.pumpAndSettle();
       await tester.runAsync(() async {
-        await tester.tap(find.text('选择测试笔记库'));
+        await tester.tap(find.text('先选择本地笔记库'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
       await tester.pumpAndSettle();

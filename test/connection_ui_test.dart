@@ -171,7 +171,7 @@ void main() {
       try {
         await tester.pumpWidget(const NoteAgentApp());
         await tester.pumpAndSettle();
-        expect(find.text('选择测试笔记库'), findsOneWidget);
+        expect(find.text('先选择本地笔记库'), findsOneWidget);
         final entry = tester.getSemantics(find.byTooltip('连接与设备'));
         final data = entry.getSemanticsData();
         expect(data.label, '连接与设备');
