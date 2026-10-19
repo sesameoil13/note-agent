@@ -24,6 +24,12 @@ class BudgetFixture {
   late Process worker;
   late Uri endpoint;
   late HttpServer router;
+  bool omitCost = false, generationAvailable = false;
+  int generationReads = 0;
+  final modelStatuses = <int>[];
+  bool malformedContent = false;
+  double generationCost = 0.00002;
+  Future<void> Function()? beforeReply;
   final modelRequests = <Map<String, dynamic>>[];
   final workspaces = <NoteWorkspace>[];
   final stores = <BudgetMemoryStore>[];
@@ -50,29 +56,54 @@ class BudgetFixture {
           await utf8.decoder.bind(r).join(),
         ) as Map<String, dynamic>;
         modelRequests.add(request);
+        final status = modelStatuses.isEmpty ? 200 : modelStatuses.removeAt(0);
+        if (status != 200) {
+          r.response.statusCode = status;
+          r.response.write('{}');
+          await r.response.close();
+          return;
+        }
         final input = jsonDecode(
           (request['messages'] as List).last['content'] as String,
         ) as Map;
+        await beforeReply?.call();
         r.response.write(
           jsonEncode({
             'id': 'gen-budget-fixture-${modelRequests.length}',
             'model': 'deepseek/deepseek-v4.1-flash',
-            'usage': {'cost': 0.00001},
+            'usage': {if (!omitCost) 'cost': 0.00001},
             'choices': [
               {
                 'finish_reason': 'stop',
                 'message': {
-                  'content': jsonEncode({
-                    'sourceId': input['sourceId'],
-                    'kind': 'ordinary',
-                    'title': '记录想法',
-                    'body': '整理后的普通想法。',
-                  }),
+                  'content': malformedContent
+                      ? '{broken'
+                      : jsonEncode({
+                          'sourceId': input['sourceId'],
+                          'kind': 'ordinary',
+                          'title': '记录想法',
+                          'body': '整理后的普通想法。',
+                        }),
                 },
               },
             ],
           }),
         );
+      } else if (r.uri.path == '/generation') {
+        generationReads++;
+        if (generationAvailable) {
+          r.response.write(
+            jsonEncode({
+              'data': {
+                'id': r.uri.queryParameters['id'],
+                'total_cost': generationCost,
+              },
+            }),
+          );
+        } else {
+          r.response.statusCode = 404;
+          r.response.write('{}');
+        }
       } else {
         r.response.write('{"data":{"is_management_key":false}}');
       }
@@ -117,6 +148,15 @@ class BudgetFixture {
       await workspace.connection.refreshPairing();
       await owner.refreshPairing();
     }
+  }
+
+  Future<void> advanceTo(DateTime time) async {
+    final client = HttpClient();
+    final request = await client.postUrl(endpoint.resolve('/fixture-clock'));
+    request.write(time.millisecondsSinceEpoch.toString());
+    final response = await request.close();
+    await response.drain<void>();
+    client.close();
   }
 
   Future<void> reopen(int i) async {

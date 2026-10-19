@@ -16,11 +16,25 @@ extension WorkspaceBudgetConnection on WorkspaceConnection {
         code: 'not_paired',
       );
     }
-    return _request(
-      _endpoint(device['endpoint'] as String),
-      path,
-      body: body,
-      bearer: device['token'] as String,
-    );
+    try {
+      return await _request(
+        _endpoint(device['endpoint'] as String),
+        path,
+        body: body,
+        bearer: device['token'] as String,
+      );
+    } on ConnectionFailure catch (e) {
+      final message = switch (e.code) {
+        'quote_unavailable' => '固定模型费率或汇率暂不可核对，已暂停收费任务；请稍后重试。',
+        'quote_expired' => '报价已过期，请重新预估。',
+        'owner_required' => '仅原设备可以修改共享月上限。',
+        'invalid_budget' => '月上限须大于 0 且不超过 30 元，文字输入也可能超出单次上限。',
+        'attempt_not_sendable' => '此尝试已发送或结束，不会重复发送。',
+        'cost_conflict' ||
+        'generation_conflict' => '费用回执不一致，已暂停新收费任务；保留原文与账本，请核对 OpenRouter 记录。',
+        _ => e.message,
+      };
+      throw ConnectionFailure(message, code: e.code);
+    }
   }
 }

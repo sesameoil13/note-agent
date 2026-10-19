@@ -111,30 +111,53 @@ class NoteWorkspace {
   Future<void> refreshBudget() => _refreshTextBudget();
   Future<void> setMonthlyBudgetLimit(int micros) => _setTextBudget(micros);
   final Map<String, Future<WorkspaceTextJob>> _preparingText = {};
-  Future<WorkspaceTextJob> prepareTextProcessing(String noteId) =>
-      _preparingText.putIfAbsent(
-        noteId,
-        () => _prepareText(noteId).whenComplete(() {
-          _preparingText.remove(noteId);
-        }),
-      );
+  Future<WorkspaceTextJob> prepareTextProcessing(String noteId) {
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _preparingText.putIfAbsent(
+      noteId,
+      () => _trackText(_prepareText(noteId)).whenComplete(() {
+        _preparingText.remove(noteId);
+      }),
+    );
+  }
+
+  Future<WorkspaceTextJob> cancelTextProcessing(String id) =>
+      _trackText(_cancelText(id));
   List<WorkspaceTextJob> get textJobs => _textJobs();
+  Future<WorkspaceTextJob> reconcileTextProcessing(String id) =>
+      _trackText(_reconcileText(id));
   final Map<String, Future<WorkspaceTextJob>> _processingText = {};
   final Set<Future<void>> _textOperations = {};
-  Future<WorkspaceTextJob> processTextNote(String noteId) {
+
+  Future<WorkspaceTextJob> processTextNote(String noteId) =>
+      _runTextAction(noteId, () => _processText(noteId));
+  Future<WorkspaceTextJob> retryTextProcessing(String id) {
+    final job = textJobs.firstWhere((j) => j.id == id);
+    return _runTextAction(job.noteId, () => _retryText(id));
+  }
+
+  Future<WorkspaceTextJob> _runTextAction(
+    String noteId,
+    Future<WorkspaceTextJob> Function() action,
+  ) {
     if (_closing) return Future.error(StateError('工作区正在关闭。'));
-    return _processingText.putIfAbsent(noteId, () {
-      final result = _processText(noteId);
-      late Future<void> tracked;
-      tracked = result
-          .then<void>((_) {}, onError: (Object _, StackTrace _) {})
-          .whenComplete(() {
-            _textOperations.remove(tracked);
-            _processingText.remove(noteId);
-          });
-      _textOperations.add(tracked);
-      return result;
-    });
+    return _processingText.putIfAbsent(
+      noteId,
+      () => _trackText(action()).whenComplete(() {
+        _processingText.remove(noteId);
+      }),
+    );
+  }
+
+  Future<T> _trackText<T>(Future<T> result) {
+    late Future<void> tracked;
+    tracked = result
+        .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+        .whenComplete(() {
+          _textOperations.remove(tracked);
+        });
+    _textOperations.add(tracked);
+    return result;
   }
 
   late final WorkspaceRecordings _recordings;

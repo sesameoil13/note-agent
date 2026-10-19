@@ -116,4 +116,155 @@ void main() {
     expect((await f.workspaces.first.processTextNote(note.id)).id, job.id);
     expect(f.modelRequests.length, 1);
   });
+  test('a missing cost keeps its hold across restart and delayed receipt settles once without another model call', () async {
+    final f = BudgetFixture()..omitCost = true;
+    await f.start();
+    addTearDown(f.close);
+    final note = await f.workspaces.first.captureText(
+      title: '账单待核对',
+      text: '普通想法原文。',
+    );
+    final job = await f.workspaces.first.processTextNote(note.id);
+    expect(job.status, TextProcessingStatus.costPending);
+    await f.workspaces.first.refreshBudget();
+    final held = f.workspaces.first.budget.reservedCnyMicros;
+    expect(held, greaterThan(0));
+    await f.reopen(0);
+    await f.workspaces.first.reconcileTextProcessing(job.id);
+    expect(f.workspaces.first.budget.reservedCnyMicros, held);
+    expect(f.workspaces.first.budget.spentCnyMicros, 0);
+    f.generationAvailable = true;
+    await f.workspaces.first.reconcileTextProcessing(job.id);
+    expect(f.workspaces.first.budget.reservedCnyMicros, 0);
+    expect(f.workspaces.first.budget.spentCnyMicros, 154);
+    await f.workspaces.first.reconcileTextProcessing(job.id);
+    expect(f.workspaces.first.budget.spentCnyMicros, 154);
+    expect(f.modelRequests.length, 1);
+    expect(f.workspaces.first.notes.length, 1);
+  });
+  test('recoverable failures use at most four separately reserved attempts and retain unknown charges', () async {
+    final f = BudgetFixture()..modelStatuses.addAll([503, 503, 503, 503, 200]);
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '有限重试', text: '原文不会因重试而丢失。');
+    final job = await w.processTextNote(note.id);
+    expect(f.modelRequests.length, 4);
+    expect(job.attemptCount, 4);
+    expect(job.status, TextProcessingStatus.costPending);
+    expect(w.budget.unknownCnyMicros, greaterThan(0));
+    expect(w.notes.single.text, note.text);
+    await f.reopen(0);
+    await f.workspaces.first.processTextNote(note.id);
+    expect(f.modelRequests.length, 4);
+  });
+  test('authentication rejection does not retry and malformed paid content is retained for review', () async {
+    final f = BudgetFixture()..modelStatuses.add(401);
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final n = await w.captureText(title: '错误原文', text: '仍需保留。');
+    await w.processTextNote(n.id);
+    expect(f.modelRequests.length, 1);
+    f.malformedContent = true;
+    final n2 = await w.captureText(title: '格式原文', text: '格式错误也不覆盖。');
+    final j = await w.processTextNote(n2.id);
+    expect(j.status, TextProcessingStatus.review);
+    expect(w.notes.firstWhere((n) => n.id == n2.id).text, n2.text);
+    expect(w.budget.spentCnyMicros, greaterThan(0));
+    expect(f.modelRequests.length, 2);
+  });
+  test('new month excludes previous settled spending but retains every unknown hold', () async {
+    final f = BudgetFixture();
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final paid = await w.captureText(title: '已结算', text: '普通已结算想法。');
+    await w.processTextNote(paid.id);
+    f.omitCost = true;
+    final pending = await w.captureText(title: '待核对', text: '普通未结算想法。');
+    await w.processTextNote(pending.id);
+    final hold = w.budget.reservedCnyMicros;
+    expect(w.budget.spentCnyMicros, greaterThan(0));
+    final now = DateTime.now().toUtc();
+    await f.advanceTo(DateTime.utc(now.year, now.month + 1, 2));
+    await w.refreshBudget();
+    expect(w.budget.spentCnyMicros, 0);
+    expect(w.budget.reservedCnyMicros, hold);
+    expect(w.budget.unknownCnyMicros, hold);
+  });
+  test('a conflicting final receipt pauses new paid admission and never overwrites the settled total', () async {
+    final f = BudgetFixture();
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '账单冲突', text: '原文仍保留。');
+    final job = await w.processTextNote(note.id);
+    final cost = w.budget.spentCnyMicros;
+    f.generationAvailable = true;
+    await w.reconcileTextProcessing(job.id);
+    expect(w.budget.paused, isTrue);
+    expect(w.budget.spentCnyMicros, cost);
+    final next = await w.captureText(title: '冲突后收集', text: '本机继续收集。');
+    final pending = await w.prepareTextProcessing(next.id);
+    expect(pending.status, TextProcessingStatus.failed);
+    expect(f.modelRequests.length, 1);
+    expect(w.notes.length, 2);
+  });
+  test('cancelling an unsent prepared job releases only its own hold and preserves every original', () async {
+    final f = BudgetFixture();
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final first = await w.captureText(title: '不发送', text: '先保存，取消只影响任务。');
+    final second = await w.captureText(title: '仍预留', text: '另一条仍需保留预留。');
+    final a = await w.prepareTextProcessing(first.id);
+    await w.prepareTextProcessing(second.id);
+    final total = w.budget.reservedCnyMicros;
+    final cancelled = await w.cancelTextProcessing(a.id);
+    expect(cancelled.status, TextProcessingStatus.cancelled);
+    expect(w.budget.reservedCnyMicros, greaterThan(0));
+    expect(w.budget.reservedCnyMicros, lessThan(total));
+    expect(f.modelRequests, isEmpty);
+    await f.reopen(0);
+    expect(f.workspaces.first.notes.length, 2);
+    expect(
+      f.workspaces.first.notes.firstWhere((n) => n.id == first.id).originalText,
+      first.text,
+    );
+  });
+  test(
+    'a human file edit during a paid request is never overwritten',
+    () async {
+      final f = BudgetFixture();
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final note = await w.captureText(title: '人类编辑', text: '收集时原文。');
+      final edited = '${await File(note.notePath).readAsString()}\n人类后来补充。\n';
+      f.beforeReply = () => File(note.notePath).writeAsString(edited);
+      final job = await w.processTextNote(note.id);
+      expect(job.status, TextProcessingStatus.review);
+      expect(await File(note.notePath).readAsString(), edited);
+      expect(await File(note.sourcePath).readAsString(), contains(note.text));
+      expect(w.budget.spentCnyMicros, greaterThan(0));
+    },
+  );
+  test('manual retry after the automatic limit uses the same note and fresh funds while all older unknown holds remain', () async {
+    final f = BudgetFixture()..modelStatuses.addAll([503, 503, 503, 503]);
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '手动重试', text: '同一份原文。');
+    final first = await w.processTextNote(note.id);
+    final held = w.budget.reservedCnyMicros;
+    final last = await w.retryTextProcessing(first.id);
+    expect(last.id, first.id);
+    expect(last.status, TextProcessingStatus.costPending);
+    expect(last.attemptCount, 5);
+    expect(w.budget.reservedCnyMicros, held);
+    expect(w.budget.spentCnyMicros, greaterThan(0));
+    expect(w.notes.single.id, note.id);
+    expect(w.notes.single.text, '整理后的普通想法。');
+  });
 }

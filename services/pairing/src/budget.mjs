@@ -7,6 +7,15 @@ const id = (v) => typeof v === "string" && /^[a-zA-Z0-9_-]{8,80}$/.test(v);
 const ceilRatio = (a, b) => Number((BigInt(a) + BigInt(b) - 1n) / BigInt(b));
 const cny = (usd, fx) => ceilRatio(BigInt(usd) * BigInt(fx), 1000000000);
 const month = (now) => new Date(now + 8 * 3600000).toISOString().slice(0, 7);
+function fixed(value, scale) {
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(String(value));
+  if (!match) throw Error("quote_unavailable");
+  const fraction = match[2] || "";
+  const base =
+    BigInt(match[1]) * 10n ** BigInt(scale) +
+    BigInt(fraction.slice(0, scale).padEnd(scale, "0") || "0");
+  return Number(base + (fraction.slice(scale).replace(/0/g, "") ? 1n : 0n));
+}
 async function sha(value) {
   return [
     ...new Uint8Array(
@@ -59,6 +68,7 @@ async function quote(env, now) {
   const candidates = (catalog.data.endpoints || []).filter(
     (e) =>
       e.status === 0 &&
+      Number(e.pricing?.request ?? 0) === 0 &&
       e.model_id === MODEL &&
       /^[a-z0-9_/-]{1,80}$/.test(e.tag || "") &&
       [
@@ -98,9 +108,12 @@ async function quote(env, now) {
   const q = {
     model: MODEL,
     provider: route.tag,
-    promptNano: Math.ceil(Number(route.pricing.prompt) * 1e9),
-    completionNano: Math.ceil(Number(route.pricing.completion) * 1e9),
-    fxMicros: Math.ceil((yuan / usd) * 1e6 * 1.1),
+    promptNano: fixed(route.pricing.prompt, 9),
+    completionNano: fixed(route.pricing.completion, 9),
+    fxMicros: ceilRatio(
+      BigInt(fixed(String(yuan), 9)) * 1100000n,
+      BigInt(fixed(String(usd), 9)),
+    ),
     fxDate: date,
     fxMarginPercent: 10,
     retryMarginPercent: 25,
@@ -120,11 +133,12 @@ async function state(env, now) {
   const row = await env.DB.prepare(
     `SELECT
     COALESCE(SUM(CASE WHEN month=? AND state='settled' THEN actual_cny ELSE 0 END),0) spent,
+    COALESCE(SUM(CASE WHEN month=? AND state='settled' THEN usd_nanos ELSE 0 END),0) usd,
     COALESCE(SUM(CASE WHEN state IN ('reserved','sent','uncertain') THEN reserve_cny ELSE 0 END),0) held,
     COALESCE(SUM(CASE WHEN state IN ('sent','uncertain') THEN reserve_cny ELSE 0 END),0) uncertain,
-    COALESCE(MAX(disputed),0) disputed FROM budget_attempts`,
+    COALESCE(MAX(disputed),0) disputed FROM budget_attempts WHERE month=? OR state IN ('reserved','sent','uncertain') OR disputed=1`,
   )
-    .bind(month(now))
+    .bind(month(now), month(now), month(now))
     .first();
   const limit = (
     await env.DB.prepare(
@@ -135,6 +149,7 @@ async function state(env, now) {
     month: month(now),
     limitCnyMicros: limit,
     spentCnyMicros: row.spent,
+    spentUsdNanos: row.usd,
     reservedCnyMicros: row.held,
     unknownCnyMicros: row.uncertain,
     disputed: !!row.disputed,
@@ -179,7 +194,12 @@ export async function budgetRequest(request, env, context) {
       .bind(d.attemptId)
       .first();
     if (prior) {
-      if (prior.device_id !== own.id || prior.operation_id !== d.operationId)
+      if (
+        prior.device_id !== own.id ||
+        prior.operation_id !== d.operationId ||
+        prior.quote_id !== d.quoteId ||
+        prior.input_bytes !== d.inputBytes
+      )
         fail(409, "attempt_conflict");
       return response({ attempt: prior, budget: await state(env, now) });
     }
@@ -194,10 +214,10 @@ export async function budgetRequest(request, env, context) {
       (d.inputBytes + 512) * q.promptNano + MAX_OUTPUT * q.completionNano;
     const amount = ceilRatio(BigInt(cny(usd, q.fxMicros)) * 125n, 100);
     const result = await env.DB.prepare(
-      `INSERT INTO budget_attempts(id,operation_id,device_id,month,state,reserve_cny,quote_id,created_at)
-      SELECT ?,?,?,?,'reserved',?,?,? WHERE
-      (SELECT COALESCE(SUM(CASE WHEN state='settled' AND month=? THEN actual_cny WHEN state IN ('reserved','sent','uncertain') THEN reserve_cny ELSE 0 END),0) FROM budget_attempts)+? <= (SELECT limit_cny FROM budget_settings WHERE id=1)
-      AND NOT EXISTS (SELECT 1 FROM budget_attempts WHERE disputed=1)`,
+      `INSERT INTO budget_attempts(id,operation_id,device_id,month,state,reserve_cny,quote_id,created_at,input_bytes)
+      SELECT ?,?,?,?,'reserved',?,?,?,? WHERE
+      (SELECT COALESCE(SUM(CASE WHEN state='settled' AND month=? THEN actual_cny WHEN state IN ('reserved','sent','uncertain') THEN reserve_cny ELSE 0 END),0) FROM budget_attempts WHERE month=? OR state IN ('reserved','sent','uncertain'))+? <= (SELECT limit_cny FROM budget_settings WHERE id=1)
+      AND NOT EXISTS (SELECT 1 FROM budget_attempts WHERE disputed=1) ON CONFLICT(id) DO NOTHING`,
     )
       .bind(
         d.attemptId,
@@ -207,11 +227,27 @@ export async function budgetRequest(request, env, context) {
         amount,
         q.id,
         now,
+        d.inputBytes,
+        month(now),
         month(now),
         amount,
       )
       .run();
-    if (result.meta.changes !== 1) fail(409, "budget_exceeded");
+    if (result.meta.changes !== 1) {
+      const same = await env.DB.prepare(
+        "SELECT * FROM budget_attempts WHERE id=?",
+      )
+        .bind(d.attemptId)
+        .first();
+      if (!same) fail(409, "budget_exceeded");
+      if (
+        same.device_id !== own.id ||
+        same.operation_id !== d.operationId ||
+        same.quote_id !== d.quoteId ||
+        same.input_bytes !== d.inputBytes
+      )
+        fail(409, "attempt_conflict");
+    }
     return response(
       {
         attempt: await env.DB.prepare(
@@ -288,9 +324,30 @@ export async function budgetRequest(request, env, context) {
         } catch {
           fail(409, "generation_conflict");
         }
+        const committed = await env.DB.prepare(
+          "SELECT usd_nanos,generation_id FROM budget_attempts WHERE id=?",
+        )
+          .bind(a.id)
+          .first();
+        if (
+          committed.usd_nanos !== d.usdNanos ||
+          committed.generation_id !== d.generationId
+        ) {
+          await env.DB.prepare(
+            "UPDATE budget_attempts SET disputed=1 WHERE id=?",
+          )
+            .bind(a.id)
+            .run();
+          fail(409, "cost_conflict");
+        }
       }
     }
-    return response({ budget: await state(env, now) });
+    return response({
+      attempt: await env.DB.prepare("SELECT * FROM budget_attempts WHERE id=?")
+        .bind(a.id)
+        .first(),
+      budget: await state(env, now),
+    });
   }
   fail(404, "not_found");
 }

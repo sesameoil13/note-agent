@@ -15,6 +15,7 @@ import 'recording_panel.dart';
 import 'workspace_platform.dart';
 import 'document_panel.dart';
 import 'setup_screen.dart';
+import 'budget_panel.dart';
 
 void main() => runApp(const NoteAgentApp());
 
@@ -423,6 +424,25 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           const Text('笔记工作区', style: TextStyle(color: ash)),
         ],
         const Spacer(),
+        if (_workspace != null && wide)
+          AccessibleIconButton(
+            onPressed: _saving
+                ? null
+                : () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => BudgetPanel(workspace: _workspace!),
+                      ),
+                    );
+                    if (mounted) {
+                      setState(() {
+                        _editingNoteId = null;
+                      });
+                    }
+                  },
+            label: 'AI 与共享预算',
+            icon: const Icon(Icons.account_balance_wallet_outlined),
+          ),
         AccessibleIconButton(
           onPressed: _saving || _loading ? null : _showSetup,
           label: '设置与首次引导',

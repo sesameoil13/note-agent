@@ -38,7 +38,7 @@ mock
   .persist();
 const mf = new Miniflare({
   modules: true,
-  scriptPath: "src/worker.mjs",
+  scriptPath: "tools/budget-worker-fixture.mjs",
   compatibilityDate: "2026-07-30",
   d1Databases: ["DB"],
   bindings: {

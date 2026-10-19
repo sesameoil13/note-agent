@@ -1,5 +1,20 @@
 part of 'connection.dart';
 
+// Parse the JSON number's decimal rendering into integer nano-USD. Binary
+// floating point multiplication must not turn an exact receipt into +1 nano.
+int _usdNanos(num value) {
+  if (value == 0) return 0;
+  final parts = value.toString().toLowerCase().split('e');
+  final mantissa = parts.first.split('.');
+  final fraction = mantissa.length == 2 ? mantissa[1] : '';
+  final digits = BigInt.parse(mantissa.first + fraction);
+  final shift =
+      9 + (parts.length == 2 ? int.parse(parts[1]) : 0) - fraction.length;
+  if (shift >= 0) return (digits * BigInt.from(10).pow(shift)).toInt();
+  final denominator = BigInt.from(10).pow(-shift);
+  return ((digits + denominator - BigInt.one) ~/ denominator).toInt();
+}
+
 const textModelId = 'deepseek/deepseek-v4.1-flash';
 Map<String, dynamic> textModelPayload(
   String sourceId,
@@ -15,6 +30,7 @@ Map<String, dynamic> textModelPayload(
     'allow_fallbacks': false,
     'require_parameters': true,
     'max_price': {
+      'request': 0,
       'prompt': (q['promptNano'] as int) / 1000,
       'completion': (q['completionNano'] as int) / 1000,
     },
@@ -61,7 +77,7 @@ class TextModelReply {
     final usage = data['usage'];
     final cost = usage is Map ? usage['cost'] : null;
     return cost is num && cost.isFinite && cost >= 0 && cost <= 1000
-        ? (cost * 1e9).ceil()
+        ? _usdNanos(cost)
         : null;
   }
 
@@ -76,8 +92,14 @@ class TextModelReply {
         choices.first['finish_reason'] != 'stop') {
       throw const ConnectionFailure('模型结果不完整，原文已保留，费用仍按实际记录。');
     }
-    final content = (choices.first['message'] as Map?)?['content'];
-    final result = content is String ? jsonDecode(content) : null;
+    final message = choices.first['message'];
+    final content = message is Map ? message['content'] : null;
+    dynamic result;
+    try {
+      result = content is String ? jsonDecode(content) : null;
+    } catch (_) {
+      throw const ConnectionFailure('模型结果格式无法核对，原文保留，费用按实际记录。');
+    }
     if (result is! Map<String, dynamic> ||
         result.length != 4 ||
         result['sourceId'] != sourceId ||
@@ -180,6 +202,58 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
       throw const TextNetworkFailure('网络中断，可能已计费，预留未释放。', recoverable: true);
     } catch (_) {
       throw const TextNetworkFailure('模型响应未能确认，费用预留保留。');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<int> lookupTextCost(String generationId) async {
+    if (!RegExp(r'^[a-zA-Z0-9_-]{8,80}$').hasMatch(generationId)) {
+      throw const ConnectionFailure('缺少有效费用记录编号，预留保留。');
+    }
+    await _ensureLoaded();
+    final key = _credentials['openRouterKey'] as String?;
+    if (key == null) throw const ConnectionFailure('请先在 App 连接原账户，费用预留保留。');
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final uri = _textApiBase
+          .resolve('generation')
+          .replace(queryParameters: {'id': generationId});
+      final request = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 15));
+      request.followRedirects = false;
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
+      final response = await request.close().timeout(
+        const Duration(seconds: 20),
+      );
+      if (response.statusCode != 200) {
+        throw const ConnectionFailure('费用记录尚不可用或账户无法核对，预留保留；请稍后手动核对。');
+      }
+      final bytes = <int>[];
+      await for (final chunk in response.timeout(const Duration(seconds: 20))) {
+        bytes.addAll(chunk);
+        if (bytes.length > 65536) {
+          throw const ConnectionFailure('费用记录响应异常，预留保留。');
+        }
+      }
+      final decoded = jsonDecode(utf8.decode(bytes));
+      final data = decoded is Map ? decoded['data'] : null;
+      final cost = data is Map ? data['total_cost'] : null;
+      if (data is! Map ||
+          data['id'] != generationId ||
+          cost is! num ||
+          !cost.isFinite ||
+          cost < 0 ||
+          cost > 1000) {
+        throw const ConnectionFailure('费用记录无法核对，预留保留。');
+      }
+      return _usdNanos(cost);
+    } on ConnectionFailure {
+      rethrow;
+    } catch (_) {
+      throw const ConnectionFailure('费用核对暂时不可用，预留保留；请手动重试。');
     } finally {
       client.close(force: true);
     }

@@ -5,6 +5,7 @@ class WorkspaceBudgetState {
     this.monthLabel = '尚未连接',
     this.limitCnyMicros = 30000000,
     this.spentCnyMicros = 0,
+    this.spentUsdNanos = 0,
     this.reservedCnyMicros = 0,
     this.unknownCnyMicros = 0,
     this.prepaidBalanceUsdMicros,
@@ -14,6 +15,7 @@ class WorkspaceBudgetState {
     this.quoteDescription,
   });
   final String monthLabel;
+  final int spentUsdNanos;
   final int limitCnyMicros, spentCnyMicros, reservedCnyMicros, unknownCnyMicros;
 
   /// Ordinary inference keys cannot read account credits. Null means unknown,
@@ -28,6 +30,7 @@ class WorkspaceBudgetState {
 }
 
 enum TextProcessingStatus {
+  cancelled,
   queued,
   prepared,
   sending,
@@ -44,8 +47,13 @@ class WorkspaceTextJob {
     required this.status,
     this.message = '',
     this.attemptCount = 0,
+    this.estimatedCnyMicros = 0,
+    this.quoteDescription = '尚未取得费率',
+    this.canRetry = false,
   });
   final String id, noteId, message;
   final TextProcessingStatus status;
-  final int attemptCount;
+  final int attemptCount, estimatedCnyMicros;
+  final String quoteDescription;
+  final bool canRetry;
 }

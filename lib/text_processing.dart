@@ -12,6 +12,17 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
             noteId: r['note_id'] as String,
             status: TextProcessingStatus.values.byName(r['status'] as String),
             message: r['error'] as String? ?? '',
+            canRetry:
+                r['status'] == TextProcessingStatus.costPending.name &&
+                (jsonDecode(r['payload'] as String) as Map)['result'] == null,
+            estimatedCnyMicros:
+                (jsonDecode(r['payload'] as String)
+                        as Map)['estimatedCnyMicros']
+                    as int? ??
+                0,
+            quoteDescription: _textQuoteDescription(
+              (jsonDecode(r['payload'] as String) as Map)['quote'],
+            ),
             attemptCount:
                 ((jsonDecode(r['payload'] as String) as Map)['attempts']
                         as List)
@@ -19,6 +30,11 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           ),
         ),
   );
+  String _textQuoteDescription(dynamic value) {
+    if (value is! Map) return '尚未取得费率';
+    return '固定 DeepSeek V4.1 Flash · 路由 ${value['provider']}\n输入 \$${(value['promptNano'] as int) / 1000}/百万 token；输出 \$${(value['completionNano'] as int) / 1000}/百万 token\n汇率日期 ${value['fxDate']}；冻结换算 ¥${(value['fxMicros'] as int) / 1000000}/USD（含 10% 汇率余量）；每次预留另含 25% 余量。最多 1024 输出 token。';
+  }
+
   Future<void> _refreshTextBudget() async {
     try {
       _readTextBudget(await connection.requestSharedBudget('/v1/budget'));
@@ -32,6 +48,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       monthLabel: d['month'] as String,
       limitCnyMicros: d['limitCnyMicros'] as int,
       spentCnyMicros: d['spentCnyMicros'] as int,
+      spentUsdNanos: d['spentUsdNanos'] as int,
       reservedCnyMicros: d['reservedCnyMicros'] as int,
       unknownCnyMicros: d['unknownCnyMicros'] as int,
       connected: true,
@@ -56,7 +73,16 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
 
   Future<WorkspaceTextJob> _prepareText(String noteId) async {
     final existing = textJobs.where((j) => j.noteId == noteId).firstOrNull;
-    if (existing != null) return existing;
+    if (existing != null) {
+      if ([
+        TextProcessingStatus.queued,
+        TextProcessingStatus.failed,
+      ].contains(existing.status)) {
+        await _reserveTextJob(existing.id, noteId, _textPayload(existing.id));
+        return textJobs.firstWhere((j) => j.id == existing.id);
+      }
+      return existing;
+    }
     final note = notes.firstWhere((n) => n.id == noteId);
     if (note.status != NoteStatus.localSaved ||
         note.document != null ||
@@ -81,42 +107,107 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         ],
       );
     });
+    await _reserveTextJob(id, noteId, payload);
+    return textJobs.firstWhere((j) => j.id == id);
+  }
+
+  Future<void> _reserveTextJob(
+    String id,
+    String noteId,
+    Map<String, dynamic> payload, {
+    bool refreshed = false,
+  }) async {
     try {
-      final quoted = await connection.requestSharedBudget(
-        '/v1/budget/quote',
-        body: {},
-      );
-      final q = (quoted['quote'] as Map).cast<String, dynamic>();
-      final attempt = '$id-0';
-      payload['quote'] = q;
-      payload['request'] = textModelPayload(noteId, note.text, q);
-      payload['attempts'] = [attempt];
-      final reserved = await connection.requestSharedBudget(
-        '/v1/budget/reserve',
-        body: {
-          'attemptId': attempt,
-          'operationId': id,
-          'inputBytes': utf8.encode(jsonEncode(payload['request'])).length,
-          'quoteId': q['id'],
-        },
-      );
-      _readTextBudget((reserved['budget'] as Map).cast<String, dynamic>());
-      await _mutate(() async {
-        _database.execute(
-          'UPDATE text_jobs SET status=?,payload=?,error=NULL WHERE id=?',
-          [TextProcessingStatus.prepared.name, jsonEncode(payload), id],
+      if (payload['quote'] == null) {
+        final quoted = await connection.requestSharedBudget(
+          '/v1/budget/quote',
+          body: {},
         );
-      });
+        payload['quote'] = quoted['quote'];
+      }
+      final q = (payload['quote'] as Map).cast<String, dynamic>();
+      final attempt = '$id-0';
+      payload['request'] = textModelPayload(
+        noteId,
+        payload['original'] as String,
+        q,
+      );
+      payload['attempts'] = [attempt];
+      await _saveText(id, TextProcessingStatus.queued, payload);
+      Map<String, dynamic> reserved;
+      try {
+        reserved = await connection.requestSharedBudget(
+          '/v1/budget/reserve',
+          body: {
+            'attemptId': attempt,
+            'operationId': id,
+            'inputBytes': utf8.encode(jsonEncode(payload['request'])).length,
+            'quoteId': q['id'],
+          },
+        );
+      } on ConnectionFailure catch (e) {
+        if (e.code != 'quote_expired' || refreshed) rethrow;
+        payload.remove('quote');
+        return await _reserveTextJob(id, noteId, payload, refreshed: true);
+      }
+      _readTextBudget((reserved['budget'] as Map).cast<String, dynamic>());
+      final state = (reserved['attempt'] as Map)['state'];
+      payload['estimatedCnyMicros'] =
+          (reserved['attempt'] as Map)['reserve_cny'];
+      await _saveText(
+        id,
+        state == 'reserved'
+            ? TextProcessingStatus.prepared
+            : TextProcessingStatus.costPending,
+        payload,
+        error: state == 'reserved' ? null : '已存在发送或结束记录，不会自动重新发送。',
+      );
     } on ConnectionFailure catch (e) {
-      await _mutate(() async {
-        _database.execute('UPDATE text_jobs SET status=?,error=? WHERE id=?', [
-          TextProcessingStatus.failed.name,
-          e.code == 'budget_exceeded' ? '预计费用超过共享剩余额度，已暂停；本机原文保留。' : e.message,
-          id,
-        ]);
-      });
+      await _saveText(
+        id,
+        TextProcessingStatus.failed,
+        payload,
+        error: e.code == 'budget_exceeded'
+            ? '预计费用超过共享剩余额度，已暂停；本机原文保留。'
+            : e.message,
+      );
       await refreshBudget();
     }
+  }
+
+  Future<WorkspaceTextJob> _cancelText(String id) async {
+    final job = textJobs.firstWhere((j) => j.id == id);
+    if (![
+      TextProcessingStatus.prepared,
+      TextProcessingStatus.queued,
+      TextProcessingStatus.failed,
+    ].contains(job.status)) {
+      throw StateError('已发送任务可能计费，不能作为未发送取消。');
+    }
+    final payload = _textPayload(id);
+    final attempts = payload['attempts'] as List;
+    if (attempts.isNotEmpty) {
+      final reply = await connection.requestSharedBudget(
+        '/v1/budget/attempt/${attempts.last}/release',
+        body: {},
+      );
+      _readTextBudget((reply['budget'] as Map).cast<String, dynamic>());
+      if ((reply['attempt'] as Map)['state'] != 'released') {
+        await _saveText(
+          id,
+          TextProcessingStatus.costPending,
+          payload,
+          error: '任务已发送，费用预留保留，不能取消实际请求。',
+        );
+        return textJobs.firstWhere((j) => j.id == id);
+      }
+    }
+    await _saveText(
+      id,
+      TextProcessingStatus.cancelled,
+      payload,
+      error: '已取消未发送任务，原文保留。',
+    );
     return textJobs.firstWhere((j) => j.id == id);
   }
 
@@ -152,60 +243,166 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     final job = await prepareTextProcessing(noteId);
     if (job.status != TextProcessingStatus.prepared) return job;
     final payload = _textPayload(job.id);
-    final attempt = (payload['attempts'] as List).last as String;
-    await _saveText(job.id, TextProcessingStatus.sending, payload);
-    try {
-      final reply = await connection.sendReservedText(
-        attempt,
-        (payload['request'] as Map).cast<String, dynamic>(),
-      );
-      payload['reply'] = reply.data;
-      await _saveText(job.id, TextProcessingStatus.costPending, payload);
-      final generation = reply.generationId, cost = reply.usdNanos;
-      if (generation != null && cost != null) {
-        final settled = await connection.requestSharedBudget(
-          '/v1/budget/attempt/$attempt/settle',
-          body: {'generationId': generation, 'usdNanos': cost},
+    for (var retry = 0; retry < 4; retry++) {
+      final attempt = (payload['attempts'] as List).last as String;
+      await _saveText(job.id, TextProcessingStatus.sending, payload);
+      try {
+        final reply = await connection.sendReservedText(
+          attempt,
+          (payload['request'] as Map).cast<String, dynamic>(),
         );
-        _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
-        payload['settled'] = true;
+        payload['reply'] = reply.data;
+        payload['receipts'] = {
+          ...?payload['receipts'] as Map?,
+          attempt: {
+            'generationId': reply.generationId,
+            'usdNanos': reply.usdNanos,
+            'settled': false,
+          },
+        };
+        try {
+          payload['result'] = reply.validated(noteId);
+        } on ConnectionFailure catch (e) {
+          payload['validationError'] = e.message;
+        }
         await _saveText(job.id, TextProcessingStatus.costPending, payload);
+        final generation = reply.generationId, cost = reply.usdNanos;
+        if (generation != null && cost != null) {
+          final settled = await connection.requestSharedBudget(
+            '/v1/budget/attempt/$attempt/settle',
+            body: {'generationId': generation, 'usdNanos': cost},
+          );
+          _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
+          payload['settled'] = (payload['attempts'] as List).length == 1;
+          (payload['receipts'] as Map)[attempt]['settled'] = true;
+          await _saveText(job.id, TextProcessingStatus.costPending, payload);
+        }
+        if (payload['validationError'] is String) {
+          throw ConnectionFailure(payload['validationError'] as String);
+        }
+        await _saveText(job.id, TextProcessingStatus.costPending, payload);
+        await _applyText(job.id, payload);
+        break;
+      } on ConnectionFailure catch (e) {
+        await _saveText(
+          job.id,
+          payload['result'] is Map
+              ? TextProcessingStatus.costPending
+              : TextProcessingStatus.review,
+          payload,
+          error: e.message,
+        );
+        await refreshBudget();
+        break;
+      } on TextNetworkFailure catch (e) {
+        await connection
+            .requestSharedBudget(
+              '/v1/budget/attempt/$attempt/uncertain',
+              body: {},
+            )
+            .catchError((_) => <String, dynamic>{});
+        await _saveText(
+          job.id,
+          TextProcessingStatus.costPending,
+          payload,
+          error: e.message,
+        );
+        await refreshBudget();
+        if (!e.recoverable || retry == 3) break;
+        // A prior send may already have incurred a charge. Its hold is never
+        // recycled into a retry: every attempt needs another atomic admission.
+        await Future<void>.delayed(Duration(seconds: 1 << retry));
+        try {
+          await _reserveNextText(job.id, noteId, payload);
+          continue;
+        } on ConnectionFailure catch (failure) {
+          await _saveText(
+            job.id,
+            TextProcessingStatus.costPending,
+            payload,
+            error: failure.code == 'budget_exceeded'
+                ? '重试需要另行预留，剩余额度不足，已暂停；原文保留。'
+                : failure.message,
+          );
+          await refreshBudget();
+          break;
+        }
+      } catch (_) {
+        await _saveText(
+          job.id,
+          TextProcessingStatus.costPending,
+          payload,
+          error: '处理未能确认，原文与费用预留保留，请核对。',
+        );
+        await refreshBudget();
+        break;
       }
-      payload['result'] = reply.validated(noteId);
-      await _saveText(job.id, TextProcessingStatus.costPending, payload);
-      await _applyText(job.id, payload);
-    } on ConnectionFailure catch (e) {
-      await _saveText(
-        job.id,
-        TextProcessingStatus.review,
-        payload,
-        error: e.message,
-      );
-      await refreshBudget();
-    } on TextNetworkFailure catch (e) {
-      await connection
-          .requestSharedBudget(
-            '/v1/budget/attempt/$attempt/uncertain',
-            body: {},
-          )
-          .catchError((_) => <String, dynamic>{});
-      await _saveText(
-        job.id,
-        TextProcessingStatus.costPending,
-        payload,
-        error: e.message,
-      );
-      await refreshBudget();
-    } catch (_) {
-      await _saveText(
-        job.id,
-        TextProcessingStatus.costPending,
-        payload,
-        error: '处理未能确认，原文与费用预留保留，请核对。',
-      );
-      await refreshBudget();
     }
     return textJobs.firstWhere((j) => j.id == job.id);
+  }
+
+  Future<WorkspaceTextJob> _retryText(String id) async {
+    final job = textJobs.firstWhere((j) => j.id == id);
+    final payload = _textPayload(id);
+    if (job.status != TextProcessingStatus.costPending ||
+        payload['result'] != null) {
+      throw StateError('仅发送失败且没有可用结果的任务可再次付费重试。');
+    }
+    try {
+      await _reserveNextText(id, job.noteId, payload);
+      return await _processText(job.noteId);
+    } on ConnectionFailure catch (e) {
+      await _saveText(
+        id,
+        TextProcessingStatus.costPending,
+        payload,
+        error: e.code == 'budget_exceeded'
+            ? '重试需要另行预留，剩余额度不足，已暂停；原文保留。'
+            : e.message,
+      );
+      await refreshBudget();
+      return textJobs.firstWhere((j) => j.id == id);
+    }
+  }
+
+  Future<void> _reserveNextText(
+    String id,
+    String noteId,
+    Map<String, dynamic> payload,
+  ) async {
+    final pending = payload['pendingReservation'];
+    if (pending == null) {
+      final quoted = await connection.requestSharedBudget(
+        '/v1/budget/quote',
+        body: {},
+      );
+      payload['quote'] = quoted['quote'];
+      payload['request'] = textModelPayload(
+        noteId,
+        payload['original'] as String,
+        (payload['quote'] as Map).cast<String, dynamic>(),
+      );
+      payload['pendingReservation'] =
+          '$id-${(payload['attempts'] as List).length}';
+      await _saveText(id, TextProcessingStatus.costPending, payload);
+    }
+    final next = payload['pendingReservation'] as String;
+    final admitted = await connection.requestSharedBudget(
+      '/v1/budget/reserve',
+      body: {
+        'attemptId': next,
+        'operationId': id,
+        'quoteId': (payload['quote'] as Map)['id'],
+        'inputBytes': utf8.encode(jsonEncode(payload['request'])).length,
+      },
+    );
+    _readTextBudget((admitted['budget'] as Map).cast<String, dynamic>());
+    if ((admitted['attempt'] as Map)['state'] != 'reserved') {
+      throw const ConnectionFailure('此重试已发送，不能自动重发；预留保留。');
+    }
+    (payload['attempts'] as List).add(next);
+    payload.remove('pendingReservation');
+    await _saveText(id, TextProcessingStatus.prepared, payload);
   }
 
   Future<void> _applyText(String id, Map<String, dynamic> payload) => _mutate(
@@ -311,9 +508,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   Future<void> _recoverText() async {
     for (final job in textJobs) {
       final payload = _textPayload(job.id);
-      if (payload['result'] is Map &&
-          (payload['writePlan'] != null ||
-              payload['applyPhase'] == 'bodyApplied')) {
+      if (payload['result'] is Map && payload['applyPhase'] != 'applied') {
         await _applyText(job.id, payload);
         continue;
       }
@@ -326,5 +521,60 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         );
       }
     }
+  }
+
+  Future<WorkspaceTextJob> _reconcileText(String id) async {
+    final payload = _textPayload(id);
+    final receipts =
+        (payload['receipts'] as Map?)?.cast<String, dynamic>() ??
+        <String, dynamic>{};
+    try {
+      if (receipts.isEmpty) {
+        throw const ConnectionFailure(
+          '本次发送结果未知且没有费用编号，预留不会自动释放，请在 OpenRouter 核对。',
+        );
+      }
+      for (final entry in receipts.entries) {
+        final receipt = (entry.value as Map).cast<String, dynamic>();
+        final generation = receipt['generationId'];
+        if (generation is! String) {
+          throw const ConnectionFailure(
+            '本次发送没有可核对的费用编号；请在 OpenRouter 核对，预留不会自动释放。',
+          );
+        }
+        final cost = await connection.lookupTextCost(generation);
+        final settled = await connection.requestSharedBudget(
+          '/v1/budget/attempt/${entry.key}/settle',
+          body: {'generationId': generation, 'usdNanos': cost},
+        );
+        _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
+        receipt['usdNanos'] = cost;
+        receipt['settled'] = true;
+        receipts[entry.key] = receipt;
+        payload['receipts'] = receipts;
+        payload['settled'] =
+            receipts.values.every((v) => (v as Map)['settled'] == true) &&
+            receipts.length == (payload['attempts'] as List).length;
+        await _saveText(
+          id,
+          payload['settled'] == true && payload['applyPhase'] == 'applied'
+              ? TextProcessingStatus.completed
+              : TextProcessingStatus.costPending,
+          payload,
+        );
+      }
+    } on ConnectionFailure catch (e) {
+      await _saveText(
+        id,
+        TextProcessingStatus.costPending,
+        payload,
+        error: e.message,
+      );
+    }
+    if (payload['result'] is Map && payload['applyPhase'] != 'applied') {
+      await _applyText(id, payload);
+    }
+    await refreshBudget();
+    return textJobs.firstWhere((j) => j.id == id);
   }
 }

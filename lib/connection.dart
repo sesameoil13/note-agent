@@ -117,7 +117,21 @@ class WorkspaceConnection {
        _openRouter = openRouter ?? OpenRouterKeyCheck(),
        _textApiBase = textApiBase ?? Uri.parse('https://openrouter.ai/api/v1/'),
        _configuredEndpoint = pairingEndpoint,
-       _allowLocalPairing = allowLocalPairingForTests;
+       _allowLocalPairing = allowLocalPairingForTests {
+    final production = Uri.parse('https://openrouter.ai/api/v1/');
+    final loopback =
+        allowLocalPairingForTests &&
+        _textApiBase.scheme == 'http' &&
+        ['127.0.0.1', 'localhost', '::1'].contains(_textApiBase.host) &&
+        _textApiBase.userInfo.isEmpty &&
+        !_textApiBase.hasQuery &&
+        !_textApiBase.hasFragment;
+    if (_textApiBase != production && !loopback) {
+      throw ArgumentError(
+        'Text API endpoint must be the fixed HTTPS production endpoint.',
+      );
+    }
+  }
   factory WorkspaceConnection.platform() {
     const endpoint = String.fromEnvironment('PAIRING_ENDPOINT');
     return WorkspaceConnection(
