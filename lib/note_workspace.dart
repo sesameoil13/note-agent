@@ -6,7 +6,11 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
 import 'note_files.dart';
+import 'workspace_setup.dart';
+export 'workspace_setup.dart' hide WorkspaceSetup;
 import 'connection.dart';
+import 'cloud_budget.dart';
+export 'cloud_budget.dart';
 import 'attachments.dart';
 import 'note_links.dart';
 export 'attachments.dart' hide WorkspaceAttachments;
@@ -100,7 +104,16 @@ class NoteWorkspace {
     this.connection,
   );
 
+  WorkspaceBudgetState get budget => const WorkspaceBudgetState();
+
   late final WorkspaceRecordings _recordings;
+  late final WorkspaceSetup _setup;
+  WorkspaceSetupState get setup => _setup.state;
+  Future<void> reportSetupCheck(SetupCheck check, bool checked) =>
+      _mutate(() async => _setup.report(check, checked));
+  Future<void> confirmRemoteSlotSwitch() =>
+      _mutate(() async => _setup.consent());
+  Future<void> clearSetupReports() => _mutate(() async => _setup.clear());
   late final WorkspaceAudioQueue _audioQueue;
 
   String newAudioSubmissionId() => _randomId();
@@ -329,6 +342,11 @@ class NoteWorkspace {
       clock ?? DateTime.now,
       createId ?? _randomId,
       connection ?? WorkspaceConnection.platform(),
+    );
+    workspace._setup = WorkspaceSetup(
+      database,
+      vaultStorage.identity,
+      workspace._clock,
     );
     workspace._attachments = WorkspaceAttachments(
       database,
