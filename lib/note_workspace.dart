@@ -9,6 +9,8 @@ import 'note_files.dart';
 import 'workspace_setup.dart';
 export 'workspace_setup.dart' hide WorkspaceSetup;
 import 'connection.dart';
+import 'cloud_budget.dart';
+export 'cloud_budget.dart';
 import 'attachments.dart';
 import 'note_links.dart';
 export 'attachments.dart' hide WorkspaceAttachments;
@@ -101,6 +103,8 @@ class NoteWorkspace {
     this._createId,
     this.connection,
   );
+
+  WorkspaceBudgetState get budget => const WorkspaceBudgetState();
 
   late final WorkspaceRecordings _recordings;
   late final WorkspaceSetup _setup;
