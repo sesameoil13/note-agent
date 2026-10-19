@@ -1,5 +1,2 @@
 #include "../../Flutter/Flutter-Release.xcconfig"
 #include "Warnings.xcconfig"
-
-// Distribution build: prevent Xcode injecting debugger access.
-CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
