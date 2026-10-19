@@ -1,3 +1,4 @@
+import { budgetRequest } from "./budget.mjs";
 const response = (data, status = 200) =>
   Response.json(data, {
     status,
@@ -103,6 +104,16 @@ export default {
       if (url.pathname === "/v1/health" && request.method === "GET")
         return response({ service: "note-agent-pairing", version: 1 });
       await limit(request, env, now, "requests", 120);
+      if (url.pathname.startsWith("/v1/budget")) {
+        const own = await device(request, env);
+        return await budgetRequest(request, env, {
+          own,
+          now,
+          body,
+          fail,
+          response,
+        });
+      }
       if (url.pathname === "/v1/enroll" && request.method === "POST") {
         await limit(request, env, now, "enroll", 5);
         const data = await body(request);

@@ -27,6 +27,8 @@ export 'recordings.dart' hide WorkspaceRecordings;
 export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
+part 'text_processing.dart';
+
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
   exportPending,
@@ -102,7 +104,19 @@ class NoteWorkspace {
     this.connection,
   );
 
-  WorkspaceBudgetState get budget => const WorkspaceBudgetState();
+  WorkspaceBudgetState _budget = const WorkspaceBudgetState();
+  WorkspaceBudgetState get budget => _budget;
+  Future<void> refreshBudget() => _refreshTextBudget();
+  Future<void> setMonthlyBudgetLimit(int micros) => _setTextBudget(micros);
+  final Map<String, Future<WorkspaceTextJob>> _preparingText = {};
+  Future<WorkspaceTextJob> prepareTextProcessing(String noteId) =>
+      _preparingText.putIfAbsent(
+        noteId,
+        () =>
+            _prepareText(noteId)
+                .whenComplete(() => _preparingText.remove(noteId)),
+      );
+  List<WorkspaceTextJob> get textJobs => _textJobs();
 
   late final WorkspaceRecordings _recordings;
   late final WorkspaceAudioQueue _audioQueue;
@@ -326,6 +340,10 @@ class NoteWorkspace {
     database.execute('''CREATE TABLE IF NOT EXISTS document_imports (
       note_id TEXT PRIMARY KEY, vault TEXT NOT NULL, attachment_id TEXT,
       status TEXT NOT NULL, result TEXT, error TEXT, write_plan TEXT
+    )''');
+    database.execute('''CREATE TABLE IF NOT EXISTS text_jobs (
+      id TEXT PRIMARY KEY,note_id TEXT NOT NULL,vault TEXT NOT NULL,status TEXT NOT NULL,
+      payload TEXT NOT NULL,error TEXT
     )''');
     final workspace = NoteWorkspace._(
       database,

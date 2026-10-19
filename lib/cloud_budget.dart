@@ -26,3 +26,26 @@ class WorkspaceBudgetState {
       limitCnyMicros - spentCnyMicros - reservedCnyMicros;
   bool get nearLimit => connected && remainingCnyMicros <= limitCnyMicros ~/ 10;
 }
+
+enum TextProcessingStatus {
+  queued,
+  prepared,
+  sending,
+  costPending,
+  completed,
+  failed,
+  review,
+}
+
+class WorkspaceTextJob {
+  const WorkspaceTextJob({
+    required this.id,
+    required this.noteId,
+    required this.status,
+    this.message = '',
+    this.attemptCount = 0,
+  });
+  final String id, noteId, message;
+  final TextProcessingStatus status;
+  final int attemptCount;
+}
