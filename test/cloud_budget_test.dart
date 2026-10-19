@@ -43,7 +43,7 @@ void main() {
         for (final w in f.workspaces)
           w.captureText(
             title: '预算并发',
-            text: '普通想法' + List.filled(400, '内容').join(),
+            text: '普通想法${List.filled(400, '内容').join()}',
           ),
       ]);
       final jobs = await Future.wait([
@@ -85,4 +85,35 @@ void main() {
       expect(f.workspaces.first.textJobs.length, 1);
     },
   );
+  test('budgeted exact-model completion updates one ordinary note and preserves its original across restart', () async {
+    final f = BudgetFixture();
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '原始记录', text: '原文：给自己留一段普通想法。');
+    final source = await File(note.sourcePath).readAsBytes();
+    final job = await w.processTextNote(note.id);
+    expect(job.status, TextProcessingStatus.completed);
+    expect(f.modelRequests.single['model'], 'deepseek/deepseek-v4.1-flash');
+    expect(f.modelRequests.single['max_tokens'], 1024);
+    expect(
+      (f.modelRequests.single['provider'] as Map)['allow_fallbacks'],
+      isFalse,
+    );
+    final result = w.notes.single;
+    expect(result.id, note.id);
+    expect(result.title, '记录想法');
+    expect(result.text, '整理后的普通想法。');
+    final markdown = await File(result.notePath).readAsString();
+    expect(markdown, contains('## 正文'));
+    expect(markdown, contains('## 来源'));
+    expect(markdown, isNot(contains('## 摘要')));
+    expect(await File(note.sourcePath).readAsBytes(), source);
+    expect(w.budget.spentCnyMicros, greaterThan(0));
+    expect(w.budget.reservedCnyMicros, 0);
+    await f.reopen(0);
+    expect(f.workspaces.first.notes.single.originalText, '原文：给自己留一段普通想法。');
+    expect((await f.workspaces.first.processTextNote(note.id)).id, job.id);
+    expect(f.modelRequests.length, 1);
+  });
 }

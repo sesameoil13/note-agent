@@ -24,6 +24,7 @@ class BudgetFixture {
   late Process worker;
   late Uri endpoint;
   late HttpServer router;
+  final modelRequests = <Map<String, dynamic>>[];
   final workspaces = <NoteWorkspace>[];
   final stores = <BudgetMemoryStore>[];
   late Directory root;
@@ -44,7 +45,37 @@ class BudgetFixture {
     );
     router = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     router.listen((r) async {
-      r.response.write('{"data":{"is_management_key":false}}');
+      if (r.uri.path == '/chat/completions') {
+        final request = jsonDecode(
+          await utf8.decoder.bind(r).join(),
+        ) as Map<String, dynamic>;
+        modelRequests.add(request);
+        final input = jsonDecode(
+          (request['messages'] as List).last['content'] as String,
+        ) as Map;
+        r.response.write(
+          jsonEncode({
+            'id': 'gen-budget-fixture-${modelRequests.length}',
+            'model': 'deepseek/deepseek-v4.1-flash',
+            'usage': {'cost': 0.00001},
+            'choices': [
+              {
+                'finish_reason': 'stop',
+                'message': {
+                  'content': jsonEncode({
+                    'sourceId': input['sourceId'],
+                    'kind': 'ordinary',
+                    'title': '记录想法',
+                    'body': '整理后的普通想法。',
+                  }),
+                },
+              },
+            ],
+          }),
+        );
+      } else {
+        r.response.write('{"data":{"is_management_key":false}}');
+      }
       await r.response.close();
     });
     for (var i = 0; i < 3; i++) {
@@ -57,6 +88,7 @@ class BudgetFixture {
           vaultDirectory: vault,
           connection: WorkspaceConnection(
             secureStore: store,
+            textApiBase: Uri.parse('http://127.0.0.1:${router.port}/'),
             openRouter: OpenRouterKeyCheck(
               endpoint: Uri.parse('http://127.0.0.1:${router.port}/key'),
             ),
@@ -94,6 +126,7 @@ class BudgetFixture {
       vaultDirectory: Directory('${root.path}/vault$i'),
       connection: WorkspaceConnection(
         secureStore: stores[i],
+        textApiBase: Uri.parse('http://127.0.0.1:${router.port}/'),
         openRouter: OpenRouterKeyCheck(
           endpoint: Uri.parse('http://127.0.0.1:${router.port}/key'),
         ),
@@ -104,7 +137,9 @@ class BudgetFixture {
   }
 
   Future<void> close() async {
-    for (final w in workspaces) await w.close();
+    for (final w in workspaces) {
+      await w.close();
+    }
     await router.close(force: true);
     worker.kill(ProcessSignal.sigterm);
     await worker.exitCode;

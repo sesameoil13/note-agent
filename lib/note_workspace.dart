@@ -119,6 +119,23 @@ class NoteWorkspace {
         }),
       );
   List<WorkspaceTextJob> get textJobs => _textJobs();
+  final Map<String, Future<WorkspaceTextJob>> _processingText = {};
+  final Set<Future<void>> _textOperations = {};
+  Future<WorkspaceTextJob> processTextNote(String noteId) {
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _processingText.putIfAbsent(noteId, () {
+      final result = _processText(noteId);
+      late Future<void> tracked;
+      tracked = result
+          .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+          .whenComplete(() {
+            _textOperations.remove(tracked);
+            _processingText.remove(noteId);
+          });
+      _textOperations.add(tracked);
+      return result;
+    });
+  }
 
   late final WorkspaceRecordings _recordings;
   late final WorkspaceSetup _setup;
@@ -418,6 +435,7 @@ class NoteWorkspace {
       await workspace._finishRename(row['note_id'] as String);
     }
     await workspace._attachments.recover();
+    await workspace._recoverText();
     return workspace;
   }
 
@@ -599,7 +617,19 @@ class NoteWorkspace {
     String id, {
     required String title,
     List<String> semanticTitleCandidates = const [],
-  }) => _mutate(() async {
+  }) => _mutate(
+    () => _renameTextNote(
+      id,
+      title: title,
+      semanticTitleCandidates: semanticTitleCandidates,
+    ),
+  );
+
+  Future<WorkspaceNote> _renameTextNote(
+    String id, {
+    required String title,
+    List<String> semanticTitleCandidates = const [],
+  }) async {
     if (_renamePlan(id) != null) {
       final recovered = await _finishRename(id);
       if (recovered.status != NoteStatus.localSaved) return recovered;
@@ -660,7 +690,7 @@ class NoteWorkspace {
       rethrow;
     }
     return _finishRename(id);
-  });
+  }
 
   Map<String, dynamic>? _renamePlan(String id) {
     final rows = _database.select(
@@ -795,7 +825,7 @@ class NoteWorkspace {
                 .where((s) => s.outputNoteId == note.id)
                 .firstOrNull
                 ?.transcript ??
-            note.text,
+            note.originalText,
         note.id,
       );
       await vaultStorage.publishText(
@@ -857,29 +887,33 @@ class NoteWorkspace {
     }
     if (_pendingMutations == 0 &&
         !_recordings.needsClosing &&
-        _documentOperations.isEmpty) {
+        _documentOperations.isEmpty &&
+        _textOperations.isEmpty) {
       _database.close();
       return _closeFuture = Future<void>.value();
     }
-    return _closeFuture = Future.wait(_documentOperations.toList())
-        .then((_) => _mutations)
-        .then((_) async {
-          try {
-            await _recordings.close();
-          } finally {
-            _database.close();
-          }
-        });
+    return _closeFuture =
+        Future.wait([..._documentOperations, ..._textOperations])
+            .then((_) => _mutations)
+            .then((_) async {
+              try {
+                await _recordings.close();
+              } finally {
+                _database.close();
+              }
+            });
   }
 
   WorkspaceNote _noteFromRow(Row row) => WorkspaceNote(
     id: row['id'] as String,
     title: row['title'] as String,
     text: row['body'] as String,
-    sourceText: _audioQueue.sources
-        .where((s) => s.outputNoteId == row['id'])
-        .firstOrNull
-        ?.transcript,
+    sourceText:
+        _originalTextFor(row['id'] as String) ??
+        _audioQueue.sources
+            .where((s) => s.outputNoteId == row['id'])
+            .firstOrNull
+            ?.transcript,
     createdAt: DateTime.parse(row['created_at'] as String),
     modifiedAt: DateTime.parse(row['modified_at'] as String),
     notePath: row['note_path'] as String,

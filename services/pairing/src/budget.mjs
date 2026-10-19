@@ -224,5 +224,73 @@ export async function budgetRequest(request, env, context) {
       201,
     );
   }
+  const match =
+    /^\/v1\/budget\/attempt\/([a-zA-Z0-9_-]{8,80})\/(send|uncertain|release|settle)$/.exec(
+      path,
+    );
+  if (match && request.method === "POST") {
+    const a = await env.DB.prepare(
+      "SELECT * FROM budget_attempts WHERE id=? AND device_id=?",
+    )
+      .bind(match[1], own.id)
+      .first();
+    if (!a) fail(404, "attempt_missing");
+    const action = match[2];
+    if (action === "send") {
+      if (a.state !== "reserved") fail(409, "attempt_not_sendable");
+      const r = await env.DB.prepare(
+        "UPDATE budget_attempts SET state='sent' WHERE id=? AND state='reserved'",
+      )
+        .bind(a.id)
+        .run();
+      if (r.meta.changes !== 1) fail(409, "attempt_not_sendable");
+    } else if (action === "release") {
+      await env.DB.prepare(
+        "UPDATE budget_attempts SET state='released' WHERE id=? AND state='reserved'",
+      )
+        .bind(a.id)
+        .run();
+    } else if (action === "uncertain") {
+      await env.DB.prepare(
+        "UPDATE budget_attempts SET state='uncertain' WHERE id=? AND state='sent'",
+      )
+        .bind(a.id)
+        .run();
+    } else {
+      const d = await body(request);
+      if (!integer(d.usdNanos) || !id(d.generationId))
+        fail(400, "invalid_cost");
+      if (a.state === "settled") {
+        if (a.usd_nanos !== d.usdNanos || a.generation_id !== d.generationId) {
+          await env.DB.prepare(
+            "UPDATE budget_attempts SET disputed=1 WHERE id=?",
+          )
+            .bind(a.id)
+            .run();
+          fail(409, "cost_conflict");
+        }
+      } else {
+        if (!["sent", "uncertain"].includes(a.state))
+          fail(409, "attempt_not_sent");
+        const q = JSON.parse(
+          (
+            await env.DB.prepare("SELECT payload FROM budget_quotes WHERE id=?")
+              .bind(a.quote_id)
+              .first()
+          ).payload,
+        );
+        try {
+          await env.DB.prepare(
+            "UPDATE budget_attempts SET state='settled',usd_nanos=?,actual_cny=?,generation_id=? WHERE id=? AND state IN ('sent','uncertain')",
+          )
+            .bind(d.usdNanos, cny(d.usdNanos, q.fxMicros), d.generationId, a.id)
+            .run();
+        } catch {
+          fail(409, "generation_conflict");
+        }
+      }
+    }
+    return response({ budget: await state(env, now) });
+  }
   fail(404, "not_found");
 }
