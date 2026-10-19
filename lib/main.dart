@@ -208,7 +208,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       vaultDirectory: location.vaultDirectory,
       vaultStorage: location.vaultStorage,
       connection: _connection,
-      audioPlatform: Platform.isMacOS && location.vaultDirectory != null
+      audioPlatform:
+          (Platform.isMacOS && location.vaultDirectory != null) ||
+              Platform.isAndroid
           ? MethodChannelAudioPlatform()
           : null,
     );

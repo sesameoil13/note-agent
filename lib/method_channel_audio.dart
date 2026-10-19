@@ -1,11 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 
 import 'audio_platform.dart';
 import 'audio_sources.dart';
 
-/// macOS AVFoundation bridge. Other platforms explicitly report unavailable.
+/// Native macOS / Android recorder and player boundary.
 class MethodChannelAudioPlatform
-    implements AudioPlatform, AudioSourceInspector, AudioSourcePlayer {
+    implements
+        AudioPlatform,
+        AudioSourceInspector,
+        AudioSourcePlayer,
+        AudioRecordingRecovery {
   static const _channel = MethodChannel('dev.noteagent/audio');
 
   Future<T?> _invoke<T>(String method, [Object? arguments]) async {
@@ -20,6 +26,18 @@ class MethodChannelAudioPlatform
 
   Future<Map<String, dynamic>> _map(String method) async =>
       ((await _invoke<Object?>(method)) as Map).cast<String, dynamic>();
+
+  @override
+  Future<AudioCaptureSnapshot?> recoverRecording(String originalPath) async {
+    // macOS does not keep recording outside its application process.
+    if (!Platform.isAndroid) return null;
+    final value = await _invoke<Object?>('recoverRecording', {
+      'path': originalPath,
+    });
+    return value == null
+        ? null
+        : _capture((value as Map).cast<String, dynamic>());
+  }
 
   @override
   Future<AudioSourceMetadata> inspectAudioSource(String privatePath) async {
