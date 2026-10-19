@@ -26,6 +26,7 @@ extension WorkspaceBudgetConnection on WorkspaceConnection {
     } on ConnectionFailure catch (e) {
       final message = switch (e.code) {
         'quote_unavailable' => '固定模型费率或汇率暂不可核对，已暂停收费任务；请稍后重试。',
+        'budget_unavailable' => '共享账本暂时不可核对，费用预留保留，请稍后核对。',
         'quote_expired' => '报价已过期，请重新预估。',
         'owner_required' => '仅原设备可以修改共享月上限。',
         'invalid_budget' => '月上限须大于 0 且不超过 30 元，文字输入也可能超出单次上限。',

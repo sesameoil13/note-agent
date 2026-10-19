@@ -14,14 +14,17 @@ class BudgetPanel extends StatefulWidget {
 class _BudgetPanelState extends State<BudgetPanel> {
   bool _busy = false;
   String? _error;
+  bool _limitEdited = false;
   final _limit = TextEditingController();
   NoteWorkspace get w => widget.workspace;
   String money(int micros) => '¥${(micros / 1000000).toStringAsFixed(4)}';
   @override
   void initState() {
     super.initState();
-    _limit.text = (w.budget.limitCnyMicros / 1000000).toStringAsFixed(2);
-    _run(w.refreshBudget);
+    _limit.text = w.budget.connected
+        ? (w.budget.limitCnyMicros / 1000000).toStringAsFixed(2)
+        : '';
+    _run(_refresh);
   }
 
   @override
@@ -45,6 +48,13 @@ class _BudgetPanelState extends State<BudgetPanel> {
       setState(() {
         _busy = false;
       });
+    }
+  }
+
+  Future<void> _refresh() async {
+    await w.refreshBudget();
+    if (w.budget.connected && !_limitEdited) {
+      _limit.text = (w.budget.limitCnyMicros / 1000000).toStringAsFixed(2);
     }
   }
 
@@ -74,7 +84,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
         title: const Text('AI 与共享预算'),
         actions: [
           IconButton(
-            onPressed: _busy ? null : () => _run(w.refreshBudget),
+            onPressed: _busy ? null : () => _run(_refresh),
             tooltip: '刷新账本（不调用模型）',
             icon: const Icon(Icons.refresh),
           ),
@@ -89,7 +99,9 @@ class _BudgetPanelState extends State<BudgetPanel> {
           ),
           const SizedBox(height: 12),
           Text(
-            '月上限 ${money(budget.limitCnyMicros)}\n本月已结算费用 \$${(budget.spentUsdNanos / 1000000000).toStringAsFixed(6)}\n保守折算消耗 ${money(budget.spentCnyMicros)}\n未结算预留 ${money(budget.reservedCnyMicros)}（其中结果未知 ${money(budget.unknownCnyMicros)}）\n剩余额度 ${money(budget.remainingCnyMicros)}',
+            budget.connected
+                ? '月上限 ${money(budget.limitCnyMicros)}\n本月已结算费用 \$${(budget.spentUsdNanos / 1000000000).toStringAsFixed(6)}\n保守折算消耗 ${money(budget.spentCnyMicros)}\n未结算预留 ${money(budget.reservedCnyMicros)}（其中结果未知 ${money(budget.unknownCnyMicros)}）\n剩余额度 ${money(budget.remainingCnyMicros)}'
+                : '共享月上限 尚未核对（政策最多 30 元）\n本月已结算费用 未知\n保守折算消耗 未知\n未结算预留 未知\n其中结果未知费用 未知\n剩余额度 未知',
           ),
           if (budget.nearLimit) const Text('接近月上限，新的收费任务可能暂停；本机收集继续。'),
           Text(budget.message),
@@ -103,7 +115,10 @@ class _BudgetPanelState extends State<BudgetPanel> {
           const SizedBox(height: 16),
           TextField(
             controller: _limit,
-            enabled: !_busy,
+            enabled: !_busy && budget.connected,
+            onChanged: (_) {
+              _limitEdited = true;
+            },
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: const InputDecoration(
               labelText: '共享月上限（人民币，最多 30 元；仅原设备可修改）',
@@ -112,7 +127,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
           Align(
             alignment: Alignment.centerLeft,
             child: OutlinedButton(
-              onPressed: _busy
+              onPressed: _busy || !budget.connected
                   ? null
                   : () => _run(() async {
                       final value = double.tryParse(_limit.text);
@@ -126,6 +141,8 @@ class _BudgetPanelState extends State<BudgetPanel> {
                         return;
                       }
                       await w.setMonthlyBudgetLimit((value * 1000000).round());
+                      _limitEdited = false;
+                      await _refresh();
                     }),
               child: const Text('确认修改月上限'),
             ),

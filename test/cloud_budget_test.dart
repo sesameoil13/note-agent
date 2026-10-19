@@ -324,4 +324,33 @@ void main() {
     expect(f.modelRequests, isEmpty);
     expect(f.workspaces.first.notes.single.originalText, note.text);
   });
+  test('a generation collision retains the old charge and the unresolved new hold and pauses all devices across restart', () async {
+    final f = BudgetFixture()..reuseGenerationId = true;
+    await f.start();
+    addTearDown(f.close);
+    final owner = f.workspaces.first;
+    final first = await owner.captureText(title: '第一笔回执', text: '普通想法一。');
+    await owner.processTextNote(first.id);
+    final charged = owner.budget.spentCnyMicros;
+    final second = await owner.captureText(title: '重复费用编号', text: '普通想法二。');
+    await owner.processTextNote(second.id);
+    final held = owner.budget.reservedCnyMicros;
+    expect(held, greaterThan(0));
+    expect(owner.budget.spentCnyMicros, charged);
+    expect(owner.budget.paused, isTrue);
+    await f.reopen(0);
+    await f.workspaces.last.refreshBudget();
+    expect(f.workspaces.last.budget.paused, isTrue);
+    expect(f.workspaces.last.budget.reservedCnyMicros, held);
+    expect(f.workspaces.last.budget.spentCnyMicros, charged);
+    final local = await f.workspaces.last.captureText(
+      title: '冲突后继续收集',
+      text: '仍可本地保存。',
+    );
+    expect(
+      (await f.workspaces.last.prepareTextProcessing(local.id)).status,
+      TextProcessingStatus.failed,
+    );
+    expect(f.modelRequests.length, 2);
+  });
 }

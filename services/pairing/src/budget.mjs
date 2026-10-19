@@ -334,6 +334,19 @@ export async function budgetRequest(request, env, context) {
             .bind(d.usdNanos, cny(d.usdNanos, q.fxMicros), d.generationId, a.id)
             .run();
         } catch {
+          const collision = await env.DB.prepare(
+            "SELECT id FROM budget_attempts WHERE generation_id=? AND id<>?",
+          )
+            .bind(d.generationId, a.id)
+            .first();
+          if (!collision) fail(503, "budget_unavailable");
+          // Preserve the existing receipt and this unresolved hold. A unique
+          // receipt collision must durably block all later paid admission.
+          await env.DB.prepare(
+            "UPDATE budget_attempts SET disputed=1 WHERE id=?",
+          )
+            .bind(a.id)
+            .run();
           fail(409, "generation_conflict");
         }
         const committed = await env.DB.prepare(

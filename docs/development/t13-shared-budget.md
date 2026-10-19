@@ -45,4 +45,6 @@ test/cloud_budget_test.dart 从公开 NoteWorkspace 驱动真实本机文件/SQL
 - [ECB 参考汇率说明](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)与 [XML](https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml)：工作日发布，信息参考，不能宣称真实支付汇率。
 - [D1 Database API](https://developers.cloudflare.com/d1/worker-api/d1-database/)及 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)：本地原子性测试不替代远程 Free CPU/配额验收。
 
-本地检查（2026-10-20，已合入 integration9981 的手机历史修复）：135 项 Flutter 全量测试通过，其中15项预算工作区测试；analyze 无问题；原配对 HTTP 5 项、Prettier 与隔离 Wrangler4.151.0 dry-run 均通过。Worker25.01KiB，gzip6.38KiB。无远程部署和真实推理记录；Mac 同身份更新包另以固定提交归档、源码差异及实际签名清单交付，构建不启动 App。
+本地检查（2026-10-20，已合入 integration9981 的手机历史修复）：137 项 Flutter 全量测试通过，其中16项预算工作区测试及1项预算页面回归；analyze 无问题；原配对 HTTP 5 项、Prettier 与隔离 Wrangler4.151.0 dry-run 均通过。Worker25.01KiB，gzip6.38KiB。无远程部署和真实推理记录；Mac 同身份更新包另以固定提交归档、源码差异及实际签名清单交付，构建不启动 App。
+
+独立审查修复：未连接共享账本时金额全部显示未知，不将默认 30 元/零花费当成已核实余额；月上限输入只从核实后的账本填值。generation 唯一编号被不同发送尝试复用时，保留已有费用与新未知预留，持久标记争议并阻断所有设备后续收费准入，重启不解除。普通 D1 暂时异常单独提示账本暂不可用，不假称已持久暂停。两项均由公开 UI/工作区红→绿回归覆盖。

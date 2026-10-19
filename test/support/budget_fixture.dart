@@ -28,6 +28,7 @@ class BudgetFixture {
   int generationReads = 0;
   final modelStatuses = <int>[];
   bool malformedContent = false;
+  bool reuseGenerationId = false;
   double generationCost = 0.00002;
   Future<void> Function()? beforeReply;
   final modelRequests = <Map<String, dynamic>>[];
@@ -69,7 +70,9 @@ class BudgetFixture {
         await beforeReply?.call();
         r.response.write(
           jsonEncode({
-            'id': 'gen-budget-fixture-${modelRequests.length}',
+            'id': reuseGenerationId
+                ? 'gen-reused-receipt'
+                : 'gen-budget-fixture-${modelRequests.length}',
             'model': 'deepseek/deepseek-v4.1-flash',
             'usage': {
               if (!omitCost) 'cost': 0.00001,
