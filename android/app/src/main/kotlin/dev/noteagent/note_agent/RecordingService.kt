@@ -260,8 +260,9 @@ class RecordingService : Service() {
             .setContentText("原音频只保留本机；结束后保存。点此返回。")
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
-            .addAction(Notification.Action.Builder(null, if (phase == "paused") "继续" else "暂停", action(TOGGLE, 901)).build())
-            .addAction(Notification.Action.Builder(null, "结束并保存", action(STOP, 902)).build())
+            .addAction(Notification.Action.Builder(if (phase == "paused") android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
+                if (phase == "paused") "继续" else "暂停", action(TOGGLE, 901)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_save, "结束并保存", action(STOP, 902)).build())
             .build()
     }
 
