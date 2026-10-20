@@ -102,20 +102,29 @@ preserving prior notes and grants. The user owns microphone/notification dialogs
    Flutter recorder screen. Keep timing/bytes/decode evidence honest, including
    any platform limitation. Normal reopen must retain saved originals and grant.
 
-An optional checked-in real-microphone integration run validates the short
-pause/save/native-inspection/play/reopen path through `NoteWorkspace`:
+The checked-in `integration_test/android_recording_test.dart` validates the
+short pause/save/native-inspection/play/reopen path through `NoteWorkspace`.
+Its guards require `ALLOW_ANDROID_MICROPHONE_TEST=true`, an explicit
+`ANDROID_TEST_VAULT_NAME` starting with `NoteAgent-Test-`, and an exact match with
+the restored vault display name. Those guards protect test execution and vault
+selection; they do not protect private data from the Flutter tool's installer or
+cleanup.
 
-```sh
-flutter test integration_test/android_recording_test.dart -d DEVICE \
-  --dart-define=ANDROID_TEST_VAULT_NAME=NoteAgent-Test-T02 \
-  --dart-define=ALLOW_ANDROID_MICROPHONE_TEST=true
-```
+**The previously documented same-identity phone framework command is withdrawn.**
+Follow the [Android framework-test installation safety correction](t02-validation.md#android-framework-test-installation-safety--correction-2026-10-20).
+Flutter 3.47.7 defaults to uninstalling after a framework run. `--no-uninstall`
+suppresses that cleanup but does not disable uninstall/reinstall after a failed
+replacement installation. Do not run this harness against the retained ordinary
+App on the user's phone. No disposable separate-identity framework workflow is
+currently provided; continue through the ordinary App with human-operated
+permission dialogs and explicitly authorized local microphone tests. An ordinary
+APK update must stop if `adb install -r` fails, with no destructive fallback.
 
-The two guards prevent generic test discovery from recording or writing a
-personal vault. This run requests real microphone access; only root may run it
-after authorization. It does not establish lock screen, notification controls,
-process death, physical denial or human audibility. Restore the ordinary Release
-APK after any framework harness run. Do not close #10 until actual gates pass.
+The earlier short native run does not establish lock screen, notification
+controls, process death, physical denial or human audibility. Its same-process
+reopen assertion does not establish retention after framework cleanup or an
+ordinary App restart. Exported vault audio and private recording history are
+separate. Do not close #10 until actual gates pass.
 
 Build sequentially after host tests with `flutter build apk --release
 --target-platform android-arm64` (normal pub resolution, unchanged lockfile).
