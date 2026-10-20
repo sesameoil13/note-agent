@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'connection.dart';
 import 'connection_screen.dart';
+import 'budget_panel.dart';
 import 'note_workspace.dart';
 import 'workspace_platform.dart';
 
@@ -229,10 +230,23 @@ class _SetupScreenState extends State<SetupScreen> {
                 ),
                 Text(
                   budget!.connected
-                      ? '本月预算：¥${(budget.limitCnyMicros / 1000000).toStringAsFixed(2)} · 本月已消耗：¥${(budget.spentCnyMicros / 1000000).toStringAsFixed(2)}'
+                      ? '本月预算：¥${(budget.limitCnyMicros / 1000000).toStringAsFixed(2)} · 保守折算消耗：¥${(budget.spentCnyMicros / 1000000).toStringAsFixed(2)}'
                       : '月预算：¥${(budget.limitCnyMicros / 1000000).toStringAsFixed(2)} · 本月实际消耗：尚未连接，未知',
                 ),
                 Text(budget.message),
+                OutlinedButton(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => BudgetPanel(workspace: workspace),
+                            ),
+                          );
+                          if (mounted) setState(() {});
+                        },
+                  child: const Text('打开 AI 与共享预算'),
+                ),
                 const Text('预付款以美元计价，可跨月使用；人民币月消耗按独立预算控制，预付有余额不代表本月可继续使用。'),
                 const SizedBox(height: 24),
                 TextButton(

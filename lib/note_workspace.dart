@@ -29,6 +29,8 @@ export 'recordings.dart' hide WorkspaceRecordings;
 export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
+part 'text_processing.dart';
+
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
   exportPending,
@@ -104,7 +106,59 @@ class NoteWorkspace {
     this.connection,
   );
 
-  WorkspaceBudgetState get budget => const WorkspaceBudgetState();
+  WorkspaceBudgetState _budget = const WorkspaceBudgetState();
+  WorkspaceBudgetState get budget => _budget;
+  Future<void> refreshBudget() => _refreshTextBudget();
+  Future<void> setMonthlyBudgetLimit(int micros) => _setTextBudget(micros);
+  final Map<String, Future<WorkspaceTextJob>> _preparingText = {};
+  Future<WorkspaceTextJob> prepareTextProcessing(String noteId) {
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _preparingText.putIfAbsent(
+      noteId,
+      () => _trackText(_prepareText(noteId)).whenComplete(() {
+        _preparingText.remove(noteId);
+      }),
+    );
+  }
+
+  Future<WorkspaceTextJob> cancelTextProcessing(String id) =>
+      _trackText(_cancelText(id));
+  List<WorkspaceTextJob> get textJobs => _textJobs();
+  Future<WorkspaceTextJob> reconcileTextProcessing(String id) =>
+      _trackText(_reconcileText(id));
+  final Map<String, Future<WorkspaceTextJob>> _processingText = {};
+  final Set<Future<void>> _textOperations = {};
+
+  Future<WorkspaceTextJob> processTextNote(String noteId) =>
+      _runTextAction(noteId, () => _processText(noteId));
+  Future<WorkspaceTextJob> retryTextProcessing(String id) {
+    final job = textJobs.firstWhere((j) => j.id == id);
+    return _runTextAction(job.noteId, () => _retryText(id));
+  }
+
+  Future<WorkspaceTextJob> _runTextAction(
+    String noteId,
+    Future<WorkspaceTextJob> Function() action,
+  ) {
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _processingText.putIfAbsent(
+      noteId,
+      () => _trackText(action()).whenComplete(() {
+        _processingText.remove(noteId);
+      }),
+    );
+  }
+
+  Future<T> _trackText<T>(Future<T> result) {
+    late Future<void> tracked;
+    tracked = result
+        .then<void>((_) {}, onError: (Object _, StackTrace _) {})
+        .whenComplete(() {
+          _textOperations.remove(tracked);
+        });
+    _textOperations.add(tracked);
+    return result;
+  }
 
   late final WorkspaceRecordings _recordings;
   late final WorkspaceSetup _setup;
@@ -336,6 +390,10 @@ class NoteWorkspace {
       note_id TEXT PRIMARY KEY, vault TEXT NOT NULL, attachment_id TEXT,
       status TEXT NOT NULL, result TEXT, error TEXT, write_plan TEXT
     )''');
+    database.execute('''CREATE TABLE IF NOT EXISTS text_jobs (
+      id TEXT PRIMARY KEY,note_id TEXT NOT NULL,vault TEXT NOT NULL,status TEXT NOT NULL,
+      payload TEXT NOT NULL,error TEXT
+    )''');
     final workspace = NoteWorkspace._(
       database,
       vaultStorage,
@@ -400,6 +458,7 @@ class NoteWorkspace {
       await workspace._finishRename(row['note_id'] as String);
     }
     await workspace._attachments.recover();
+    await workspace._recoverText();
     return workspace;
   }
 
@@ -581,7 +640,19 @@ class NoteWorkspace {
     String id, {
     required String title,
     List<String> semanticTitleCandidates = const [],
-  }) => _mutate(() async {
+  }) => _mutate(
+    () => _renameTextNote(
+      id,
+      title: title,
+      semanticTitleCandidates: semanticTitleCandidates,
+    ),
+  );
+
+  Future<WorkspaceNote> _renameTextNote(
+    String id, {
+    required String title,
+    List<String> semanticTitleCandidates = const [],
+  }) async {
     if (_renamePlan(id) != null) {
       final recovered = await _finishRename(id);
       if (recovered.status != NoteStatus.localSaved) return recovered;
@@ -642,7 +713,7 @@ class NoteWorkspace {
       rethrow;
     }
     return _finishRename(id);
-  });
+  }
 
   Map<String, dynamic>? _renamePlan(String id) {
     final rows = _database.select(
@@ -777,7 +848,7 @@ class NoteWorkspace {
                 .where((s) => s.outputNoteId == note.id)
                 .firstOrNull
                 ?.transcript ??
-            note.text,
+            note.originalText,
         note.id,
       );
       await vaultStorage.publishText(
@@ -839,29 +910,33 @@ class NoteWorkspace {
     }
     if (_pendingMutations == 0 &&
         !_recordings.needsClosing &&
-        _documentOperations.isEmpty) {
+        _documentOperations.isEmpty &&
+        _textOperations.isEmpty) {
       _database.close();
       return _closeFuture = Future<void>.value();
     }
-    return _closeFuture = Future.wait(_documentOperations.toList())
-        .then((_) => _mutations)
-        .then((_) async {
-          try {
-            await _recordings.close();
-          } finally {
-            _database.close();
-          }
-        });
+    return _closeFuture =
+        Future.wait([..._documentOperations, ..._textOperations])
+            .then((_) => _mutations)
+            .then((_) async {
+              try {
+                await _recordings.close();
+              } finally {
+                _database.close();
+              }
+            });
   }
 
   WorkspaceNote _noteFromRow(Row row) => WorkspaceNote(
     id: row['id'] as String,
     title: row['title'] as String,
     text: row['body'] as String,
-    sourceText: _audioQueue.sources
-        .where((s) => s.outputNoteId == row['id'])
-        .firstOrNull
-        ?.transcript,
+    sourceText:
+        _originalTextFor(row['id'] as String) ??
+        _audioQueue.sources
+            .where((s) => s.outputNoteId == row['id'])
+            .firstOrNull
+            ?.transcript,
     createdAt: DateTime.parse(row['created_at'] as String),
     modifiedAt: DateTime.parse(row['modified_at'] as String),
     notePath: row['note_path'] as String,
