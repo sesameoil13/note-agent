@@ -107,14 +107,29 @@ void main() {
     );
     expect(w.notes.single.kind, NoteKind.ordinary);
     expect(w.notes.single.actionSavePending, isTrue);
+    storage.fail = false;
+    await expectLater(
+      w.renameNote(n.id, title: '改名会移动待恢复文件'),
+      throwsA(isA<StateError>()),
+    );
+    expect(w.notes.single.notePath, n.notePath);
+    expect(await File(n.sourcePath).readAsString(), n.text);
+    storage.fail = true;
     await w.close();
     w = await NoteWorkspace.open(localDirectory: local, vaultStorage: storage);
     expect(w.notes.single.actionSavePending, isTrue);
+    await expectLater(
+      w.renameNote(n.id, title: '重启后仍须先恢复'),
+      throwsA(isA<StateError>()),
+    );
     storage.fail = false;
     await w.retryNoteActionSave(n.id);
     expect(w.notes.single.actionSavePending, isFalse);
     expect(w.notes.single.actions.single.id, 'stable-action');
     expect(w.notes.single.originalText, n.text);
+    await w.renameNote(n.id, title: '恢复后可正常改名');
+    expect(w.notes.single.title, '恢复后可正常改名');
+    expect(w.notes.single.id, n.id);
     await w.close();
     w = await NoteWorkspace.open(localDirectory: local, vaultStorage: storage);
     expect(w.notes.single.actions.length, 1);

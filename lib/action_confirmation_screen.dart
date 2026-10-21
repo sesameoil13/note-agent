@@ -94,7 +94,8 @@ class _ActionEdit {
 }
 
 class _ActionConfirmationScreenState extends State<ActionConfirmationScreen> {
-  late final WorkspaceNote note;
+  WorkspaceNote get note =>
+      widget.workspace.notes.firstWhere((n) => n.id == widget.noteId);
   late final TextEditingController body;
   final edits = <_ActionEdit>[];
   bool busy = false;
@@ -103,7 +104,6 @@ class _ActionConfirmationScreenState extends State<ActionConfirmationScreen> {
   @override
   void initState() {
     super.initState();
-    note = widget.workspace.notes.firstWhere((n) => n.id == widget.noteId);
     body = TextEditingController(text: note.text);
     edits.addAll(note.actions.map(_ActionEdit.new));
     if (edits.isEmpty) edits.add(_ActionEdit(const WorkspaceAction(text: '')));

@@ -693,6 +693,9 @@ class NoteWorkspace {
     required String title,
     List<String> semanticTitleCandidates = const [],
   }) async {
+    if (_hasActionChange(id)) {
+      throw StateError('行动修正尚未写入，请先重试保存修正，再修改标题。');
+    }
     if (_renamePlan(id) != null) {
       final recovered = await _finishRename(id);
       if (recovered.status != NoteStatus.localSaved) return recovered;
