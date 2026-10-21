@@ -30,6 +30,7 @@ export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
 part 'text_processing.dart';
+part 'note_actions.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -63,6 +64,8 @@ class WorkspaceNote {
     this.attachments = const [],
     this.sourceText,
     this.document,
+    this.presentation = const NotePresentation(),
+    this.actionSavePending = false,
   });
 
   final String id;
@@ -82,6 +85,10 @@ class WorkspaceNote {
 
   final List<WorkspaceAttachment> attachments;
   final WorkspaceDocument? document;
+  final NotePresentation presentation;
+  final bool actionSavePending;
+  NoteKind get kind => presentation.kind;
+  List<WorkspaceAction> get actions => presentation.actions;
 
   NoteSyncStatus get syncStatus {
     if (attachments.any((item) => item.hasLocalOnlyOriginal)) {
@@ -124,6 +131,30 @@ class NoteWorkspace {
   Future<WorkspaceTextJob> cancelTextProcessing(String id) =>
       _trackText(_cancelText(id));
   List<WorkspaceTextJob> get textJobs => _textJobs();
+  List<WorkspaceNote> get pendingActionNotes => List.unmodifiable(
+    notes.where(
+      (n) =>
+          n.presentation.needsConfirmation ||
+          (!n.presentation.userDecided &&
+              textJobs.any(
+                (j) =>
+                    j.noteId == n.id && j.status == TextProcessingStatus.review,
+              )),
+    ),
+  );
+
+  /// Explicit local user decision. This never requests a model or changes a
+  /// paid attempt, receipt or unknown shared-budget hold.
+  Future<WorkspaceNote> resolveNoteActions(
+    String noteId, {
+    required NoteKind kind,
+    required List<WorkspaceAction> actions,
+    String? body,
+  }) => _mutate(
+    () => _resolveActions(noteId, kind: kind, actions: actions, body: body),
+  );
+  Future<void> retryNoteActionSave(String noteId) =>
+      _mutate(() => _finishActionChange(noteId));
   Future<WorkspaceTextJob> reconcileTextProcessing(String id) =>
       _trackText(_reconcileText(id));
   final Map<String, Future<WorkspaceTextJob>> _processingText = {};
@@ -394,6 +425,14 @@ class NoteWorkspace {
       id TEXT PRIMARY KEY,note_id TEXT NOT NULL,vault TEXT NOT NULL,status TEXT NOT NULL,
       payload TEXT NOT NULL,error TEXT
     )''');
+    if (!database
+        .select('PRAGMA table_info(notes)')
+        .any((row) => row['name'] == 'presentation')) {
+      database.execute('ALTER TABLE notes ADD COLUMN presentation TEXT');
+    }
+    database.execute('''CREATE TABLE IF NOT EXISTS note_action_changes (
+      note_id TEXT PRIMARY KEY, vault TEXT NOT NULL, payload TEXT NOT NULL
+    )''');
     final workspace = NoteWorkspace._(
       database,
       vaultStorage,
@@ -458,6 +497,7 @@ class NoteWorkspace {
       await workspace._finishRename(row['note_id'] as String);
     }
     await workspace._attachments.recover();
+    await workspace._recoverActionChanges();
     await workspace._recoverText();
     return workspace;
   }
@@ -933,6 +973,7 @@ class NoteWorkspace {
     text: row['body'] as String,
     sourceText:
         _originalTextFor(row['id'] as String) ??
+        _presentation(row['presentation'] as String?).original ??
         _audioQueue.sources
             .where((s) => s.outputNoteId == row['id'])
             .firstOrNull
@@ -948,6 +989,8 @@ class NoteWorkspace {
       _attachments.attachments.where((item) => item.noteId == row['id']),
     ),
     document: _document(row['id'] as String),
+    presentation: _presentation(row['presentation'] as String?),
+    actionSavePending: _hasActionChange(row['id'] as String),
   );
 
   String _audioSourceEntry(WorkspaceAudioSource source) =>
@@ -962,9 +1005,10 @@ class NoteWorkspace {
     final source = audio == null
         ? '[${note.document == null ? '原始文字' : '提取结果'}](attachments/note-agent/${note.id}.txt)${note.document == null ? '' : '\n\n${_documentSummary(note.document!.result)}'}'
         : '[完整转写](attachments/note-agent/${note.id}.txt)\n\n${_audioSourceEntry(audio)}';
-    return '''## 正文
-
-${note.text.trimRight()}
+    final content = note.kind == NoteKind.ordinary
+        ? '## 正文\n\n${note.text.trimRight()}'
+        : '## 待办\n\n${note.actions.map((a) => '- [ ] ${_actionMarkdown(a.text)}${a.decision == ActionDecision.pending ? '（待确认）' : ''}').join('\n')}\n\n## 摘要\n\n${_summaryMarkdown(note.text.trimRight())}';
+    return '''$content
 
 ## 关联
 

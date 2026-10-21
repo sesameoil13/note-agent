@@ -29,6 +29,7 @@ class BudgetFixture {
   final modelStatuses = <int>[];
   bool malformedContent = false;
   bool reuseGenerationId = false;
+  Map<String, dynamic>? modelResult;
   double generationCost = 0.00002;
   Future<void> Function()? beforeReply;
   final modelRequests = <Map<String, dynamic>>[];
@@ -85,12 +86,19 @@ class BudgetFixture {
                 'message': {
                   'content': malformedContent
                       ? '{broken'
-                      : jsonEncode({
-                          'sourceId': input['sourceId'],
-                          'kind': 'ordinary',
-                          'title': '记录想法',
-                          'body': '整理后的普通想法。',
-                        }),
+                      : jsonEncode(
+                          modelResult == null
+                              ? {
+                                  'sourceId': input['sourceId'],
+                                  'kind': 'ordinary',
+                                  'title': '记录想法',
+                                  'body': '整理后的普通想法。',
+                                }
+                              : {
+                                  'sourceId': input['sourceId'],
+                                  ...modelResult!,
+                                },
+                        ),
                 },
               },
             ],
