@@ -38,7 +38,6 @@ void main() {
       final f = BudgetFixture();
       await f.start();
       addTearDown(f.close);
-      await f.workspaces.first.setMonthlyBudgetLimit(100000);
       final notes = await Future.wait([
         for (final w in f.workspaces)
           w.captureText(
@@ -46,6 +45,17 @@ void main() {
             text: '普通想法${List.filled(400, '内容').join()}',
           ),
       ]);
+      // Set up a balance that can cover exactly two of this version's full
+      // requests. The action schema is part of the paid input, so a historical
+      // hard-coded balance no longer describes the same concurrency scenario.
+      final estimate = await f.workspaces.first.prepareTextProcessing(
+        notes.first.id,
+      );
+      expect(estimate.status, TextProcessingStatus.prepared);
+      await f.workspaces.first.cancelTextProcessing(estimate.id);
+      await f.workspaces.first.setMonthlyBudgetLimit(
+        estimate.estimatedCnyMicros * 2,
+      );
       final jobs = await Future.wait([
         for (var i = 0; i < 3; i++)
           f.workspaces[i].prepareTextProcessing(notes[i].id),
@@ -57,7 +67,7 @@ void main() {
       );
       await f.workspaces.last.refreshBudget();
       expect(f.workspaces.last.budget.reservedCnyMicros, greaterThan(0));
-      expect(f.workspaces.last.budget.remainingCnyMicros, lessThan(50000));
+      expect(f.workspaces.last.budget.remainingCnyMicros, 0);
       expect(f.workspaces.last.budget.prepaidBalanceUsdMicros, isNull);
       expect(f.workspaces.every((w) => w.notes.length == 1), isTrue);
     },

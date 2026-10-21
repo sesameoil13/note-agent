@@ -16,6 +16,7 @@ import 'workspace_platform.dart';
 import 'document_panel.dart';
 import 'setup_screen.dart';
 import 'budget_panel.dart';
+import 'action_confirmation_screen.dart';
 
 void main() => runApp(const NoteAgentApp());
 
@@ -341,6 +342,26 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           return Column(
             children: [
               _header(wide),
+              if (_workspace != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.rule),
+                    label: Text('待确认 ${_workspace!.pendingActionNotes.length}'),
+                    onPressed: _saving
+                        ? null
+                        : () async {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => PendingActionsScreen(
+                                  workspace: _workspace!,
+                                ),
+                              ),
+                            );
+                            if (mounted) setState(() {});
+                          },
+                  ),
+                ),
               if (_workspace != null && constraints.maxWidth < 720)
                 _mobileNavigation(),
               if (_deviceInfo != null)
@@ -966,7 +987,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('普通笔记', style: TextStyle(color: ash, fontSize: 12)),
+              Text(
+                note.kind == NoteKind.todo ? '待办笔记' : '普通笔记',
+                style: const TextStyle(color: ash, fontSize: 12),
+              ),
               const SizedBox(height: 8),
               TextField(
                 controller: _editTitle,
@@ -1029,6 +1053,25 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
               ),
               const SizedBox(height: 8),
               NoteSyncSummary(note: note),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: _saving || note.status != NoteStatus.localSaved
+                      ? null
+                      : () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ActionConfirmationScreen(
+                                workspace: _workspace!,
+                                noteId: note.id,
+                              ),
+                            ),
+                          );
+                          if (mounted) setState(() {});
+                        },
+                  child: const Text('修正类型与行动'),
+                ),
+              ),
               if (note.status != NoteStatus.localSaved) ...[
                 const SizedBox(height: 16),
                 Text(
@@ -1045,7 +1088,32 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                 ),
               ],
               const SizedBox(height: 32),
-              _sectionTitle('正文'),
+              if (note.kind == NoteKind.todo) ...[
+                _sectionTitle('待办'),
+                for (final a in note.actions)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '□ ${a.text}',
+                          style: const TextStyle(fontSize: 16),
+                        ),
+                        Text(
+                          '${a.actionConfirmed ? '行动已确认' : '待确认 · ${actionReasonLabel(a.reason)}'} · ${actionTimeLabel(a)}',
+                          style: const TextStyle(color: ash),
+                        ),
+                        const Text(
+                          '尚未排程提醒',
+                          style: TextStyle(color: ash, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 16),
+              ],
+              _sectionTitle(note.kind == NoteKind.todo ? '摘要' : '正文'),
               const SizedBox(height: 16),
               SelectableText(
                 note.text.trimRight(),

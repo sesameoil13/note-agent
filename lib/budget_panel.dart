@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'note_workspace.dart';
+import 'action_confirmation_screen.dart';
 
 /// All paid actions are explicit. Refreshing this page only reads the ledger.
 class BudgetPanel extends StatefulWidget {
@@ -171,6 +172,23 @@ class _BudgetPanelState extends State<BudgetPanel> {
             for (final job in jobs.where((j) => j.noteId == note.id)) ...[
               Text('${status(job.status)} · 已准备 ${job.attemptCount} 次尝试'),
               if (job.message.isNotEmpty) Text(job.message),
+              if (w.pendingActionNotes.any((n) => n.id == note.id))
+                OutlinedButton(
+                  onPressed: _busy
+                      ? null
+                      : () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ActionConfirmationScreen(
+                                workspace: w,
+                                noteId: note.id,
+                              ),
+                            ),
+                          );
+                          if (mounted) setState(() {});
+                        },
+                  child: const Text('核对行动（不调用模型）'),
+                ),
               if (job.estimatedCnyMicros > 0)
                 Text('首次尝试预留 ${money(job.estimatedCnyMicros)}；实际按费用回执结算。'),
               Text(job.quoteDescription),

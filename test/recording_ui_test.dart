@@ -239,6 +239,8 @@ Future<void> _tapAndWait(
   String label,
   bool Function() done,
 ) async {
+  await tester.ensureVisible(find.text(label));
+  await tester.pumpAndSettle();
   await tester.runAsync(() async {
     await tester.tap(find.text(label));
     for (var attempt = 0; attempt < 200; attempt++) {

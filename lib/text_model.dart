@@ -38,7 +38,7 @@ Map<String, dynamic> textModelPayload(
   'messages': [
     {
       'role': 'system',
-      'content': '将输入整理为简体中文笔记，保留原意，不添加事实或褒贬。kind 必须选择 ordinary 或 review。内容为事实、观察、感受、回忆、知识或想法，且不包含需要采取的行动安排时，kind=ordinary；内容简短、没有日期或没有行动安排，本身不构成不确定。涉及行动安排，或不能确定是否要求用户采取行动时，kind=review。两种情况均返回简短中文标题与忠实正文；不得创建待办、建立链接、添加日期或执行额外操作。来源ID必须原样返回。',
+      'content': '将输入整理为简体中文笔记，保留原意，不添加事实或褒贬。sourceId 原样返回；title 为简短中文标题，不附日期时间。纯事实、观察、感受、回忆、知识或想法且无行动安排选 kind=ordinary，body 为忠实正文，actions 为空；简短、无日期本身不构成不确定。涉及明确由用户执行的有效行动选 kind=todo，body 为简短忠实摘要，actions 逐项提取。引用、假设、否定、责任不明或不确定行动是否成立选 kind=review，行动 reason 分别为 quote/hypothesis/negated/unclearResponsibility/unclearAction；有效行动 reason=none。混合内容逐项判断：明确行动 reason=none，其他项保留相应不确定原因，存在不确定项时整体 kind=review。行动是否成立与时间是否明确分开：无时间为 absent，不能确定为 unresolved，有明确时间表达为 explicit；timeExpression 只保留原文的时间表达，不推算日期。没有可提取行动但内容含义不明时 review 且 actions 为空。不得创建链接、执行提醒、删除文件或进行额外操作。',
     },
     {
       'role': 'user',
@@ -48,20 +48,48 @@ Map<String, dynamic> textModelPayload(
   'response_format': {
     'type': 'json_schema',
     'json_schema': {
-      'name': 'ordinary_note',
+      'name': 'note_actions_v2',
       'strict': true,
       'schema': {
         'type': 'object',
         'additionalProperties': false,
-        'required': ['sourceId', 'kind', 'title', 'body'],
+        'required': ['sourceId', 'kind', 'title', 'body', 'actions'],
         'properties': {
           'sourceId': {'type': 'string'},
           'kind': {
             'type': 'string',
-            'enum': ['ordinary', 'review'],
+            'enum': ['ordinary', 'todo', 'review'],
           },
           'title': {'type': 'string'},
           'body': {'type': 'string'},
+          'actions': {
+            'type': 'array',
+            'maxItems': 20,
+            'items': {
+              'type': 'object',
+              'additionalProperties': false,
+              'required': ['text', 'reason', 'timeExpression', 'timeStatus'],
+              'properties': {
+                'text': {'type': 'string'},
+                'reason': {
+                  'type': 'string',
+                  'enum': [
+                    'none',
+                    'quote',
+                    'hypothesis',
+                    'negated',
+                    'unclearResponsibility',
+                    'unclearAction',
+                  ],
+                },
+                'timeExpression': {'type': 'string'},
+                'timeStatus': {
+                  'type': 'string',
+                  'enum': ['absent', 'unresolved', 'explicit'],
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -81,7 +109,7 @@ class TextModelReply {
         : null;
   }
 
-  Map<String, dynamic> validated(String sourceId) {
+  Map<String, dynamic> validated(String sourceId, {String? original}) {
     if (data['model'] != textModelId) {
       throw const ConnectionFailure('返回模型与固定型号不符，结果未应用。');
     }
@@ -101,12 +129,57 @@ class TextModelReply {
       throw const ConnectionFailure('模型结果格式无法核对，原文保留，费用按实际记录。');
     }
     if (result is! Map<String, dynamic> ||
-        result.length != 4 ||
+        ![4, 5].contains(result.length) ||
         result['sourceId'] != sourceId ||
-        !['ordinary', 'review'].contains(result['kind']) ||
+        !['ordinary', 'todo', 'review'].contains(result['kind']) ||
         result['title'] is! String ||
         result['body'] is! String) {
       throw const ConnectionFailure('模型结果无法核对来源或格式，未改写笔记。');
+    }
+    final legacy = result.length == 4 && !result.containsKey('actions');
+    final actions = result['actions'];
+    if ((legacy && result['kind'] == 'todo') ||
+        (!legacy &&
+            (actions is! List ||
+                actions.length > 20 ||
+                (result['kind'] == 'ordinary' && actions.isNotEmpty) ||
+                (result['kind'] == 'todo' && actions.isEmpty)))) {
+      throw const ConnectionFailure('行动结果无法核对，原文保留。');
+    }
+    if (!legacy) {
+      for (final a in actions as List) {
+        if (a is! Map ||
+            a.length != 4 ||
+            a['text'] is! String ||
+            (a['text'] as String).trim().isEmpty ||
+            (a['text'] as String).length > 500 ||
+            RegExp(r'[\x00-\x1f]').hasMatch(a['text'] as String) ||
+            ![
+              'none',
+              'quote',
+              'hypothesis',
+              'negated',
+              'unclearResponsibility',
+              'unclearAction',
+            ].contains(a['reason']) ||
+            !['absent', 'unresolved', 'explicit'].contains(a['timeStatus']) ||
+            a['timeExpression'] is! String ||
+            (a['timeExpression'] as String).length > 200 ||
+            RegExp(r'[\x00-\x1f]').hasMatch(a['timeExpression'] as String) ||
+            (a['timeStatus'] == 'explicit' &&
+                (a['timeExpression'] as String).trim().isEmpty) ||
+            (a['timeStatus'] == 'absent' && a['timeExpression'] != '') ||
+            (original != null &&
+                (a['timeExpression'] as String).isNotEmpty &&
+                !original.contains(a['timeExpression'] as String))) {
+          throw const ConnectionFailure('行动或时间解释格式无法核对，原文保留。');
+        }
+      }
+      if (result['kind'] == 'review' &&
+          actions.isNotEmpty &&
+          actions.every((a) => a['reason'] == 'none')) {
+        throw const ConnectionFailure('行动待确认原因不一致，原文保留。');
+      }
     }
     final title = result['title'] as String, body = result['body'] as String;
     if (title.trim().isEmpty ||
