@@ -3,10 +3,76 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:note_agent/connection.dart';
 import 'package:note_agent/main.dart';
 import 'package:note_agent/note_workspace.dart';
+import 'package:note_agent/setup_screen.dart';
+
+import 'support/budget_fixture.dart';
+
+// Allow the existing synthetic ledger fixture's loopback HTTP transport in a
+// widget test; no production endpoints or real credentials are involved.
+class _LoopbackHttpOverrides extends HttpOverrides {}
 
 void main() {
+  testWidgets(
+    'setup leaves the shared monthly limit and spending unknown before ledger verification',
+    (tester) async {
+      final workspace = (await tester.runAsync(() async {
+        final root = await Directory.systemTemp.createTemp('setup-budget-');
+        addTearDown(() => root.delete(recursive: true));
+        return NoteWorkspace.open(
+          localDirectory: Directory('${root.path}/local'),
+          vaultDirectory: await Directory('${root.path}/vault').create(),
+          connection: WorkspaceConnection(secureStore: BudgetMemoryStore()),
+        );
+      }))!;
+      addTearDown(() => tester.runAsync(workspace.close));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SetupScreen(
+            workspace: workspace,
+            connection: workspace.connection,
+          ),
+        ),
+      );
+      await tester.scrollUntilVisible(find.text('5 / 预付与月消耗'), 400);
+      expect(find.textContaining('月预算：¥30.00'), findsNothing);
+      expect(find.textContaining('共享月上限 尚未核对'), findsOneWidget);
+      expect(find.textContaining('本月实际消耗 未知'), findsOneWidget);
+      expect(find.textContaining('政策最多 30 元'), findsOneWidget);
+      expect(find.textContaining('预付余额：未知'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
+    'setup displays the verified shared monthly limit separately from prepaid balance',
+    (tester) async {
+      final fixture = BudgetFixture();
+      await tester.runAsync(
+        () => HttpOverrides.runWithHttpOverrides(() async {
+          await fixture.start();
+          await fixture.workspaces.first.setMonthlyBudgetLimit(100000);
+        }, _LoopbackHttpOverrides()),
+      );
+      addTearDown(() => tester.runAsync(fixture.close));
+      final workspace = fixture.workspaces.first;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SetupScreen(
+            workspace: workspace,
+            connection: workspace.connection,
+          ),
+        ),
+      );
+      await tester.scrollUntilVisible(find.text('5 / 预付与月消耗'), 400);
+      expect(find.textContaining('本月预算：¥0.10'), findsOneWidget);
+      expect(find.textContaining('保守折算消耗：¥0.00'), findsOneWidget);
+      expect(find.textContaining('共享月上限 尚未核对'), findsNothing);
+      expect(find.textContaining('预付余额：未知'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   testWidgets(
     'expired vault authorization remains visible and recoverable before first setup',
     (tester) async {

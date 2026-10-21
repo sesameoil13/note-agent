@@ -231,7 +231,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 Text(
                   budget!.connected
                       ? '本月预算：¥${(budget.limitCnyMicros / 1000000).toStringAsFixed(2)} · 保守折算消耗：¥${(budget.spentCnyMicros / 1000000).toStringAsFixed(2)}'
-                      : '月预算：¥${(budget.limitCnyMicros / 1000000).toStringAsFixed(2)} · 本月实际消耗：尚未连接，未知',
+                      : '共享月上限 尚未核对（政策最多 30 元） · 本月实际消耗 未知',
                 ),
                 Text(budget.message),
                 OutlinedButton(
