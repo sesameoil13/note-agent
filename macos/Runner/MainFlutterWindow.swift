@@ -7,6 +7,7 @@ class MainFlutterWindow: NSWindow {
   private var secureInput: SecureInput?
   private var workspaceChannel: FlutterMethodChannel?
   private var nativeAudio: NativeAudio?
+  private var nativeNotifications: NativeNotifications?
   private var scopedVaultURL: URL?
   private var scopedSourceURLs: [String: URL] = [:]
   private let bookmarkKey = "noteAgent.vaultBookmark"
@@ -22,6 +23,7 @@ class MainFlutterWindow: NSWindow {
     secureInput = SecureInput(messenger: controller.engine.binaryMessenger, window: self)
     secureCredentials = SecureCredentials(messenger: controller.engine.binaryMessenger)
     nativeAudio = NativeAudio(messenger: controller.engine.binaryMessenger)
+    nativeNotifications = NativeNotifications(messenger: controller.engine.binaryMessenger)
 
     let channel = FlutterMethodChannel(
       name: "dev.noteagent/workspace",

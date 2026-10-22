@@ -170,7 +170,9 @@ class _ActionConfirmationScreenState extends State<ActionConfirmationScreen> {
         Text(note.title, style: Theme.of(context).textTheme.titleLarge),
         if (note.actionSavePending) const Text('上次修正尚未写入。先重试完成保存，再继续修改。'),
         const SizedBox(height: 12),
-        const Text('本页决定仅在本机保存，不调用模型。确认行动与确认时间分开；本版本尚未接入提醒排程。'),
+        const Text(
+          '本页决定仅在本机保存，不调用模型。确认行动与确认时间分开；行动确认后按明确时间或默认时间安排提醒，可在“提醒与默认时间”调整。',
+        ),
         OutlinedButton(
           onPressed: locked ? null : () => save(NoteKind.ordinary),
           child: const Text('仅保留为普通笔记'),
