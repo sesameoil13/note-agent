@@ -206,6 +206,7 @@ test("STT binding and conservative budget; above-reserve actual pauses admission
         409,
       );
     } finally {
+      await mf.dispatchFetch("https://fixture.test/fixture-release-write");
       receipt = await settling;
     }
     assert.equal(receipt.data.budget.disputed, true);

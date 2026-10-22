@@ -47,6 +47,16 @@ void main() {
     expect(f.lastAudioRequest!.containsKey('provider'), false);
     final note = w.notes.single;
     expect(note.kind, NoteKind.todo);
+    final reminder = w.reminders.single;
+    expect(reminder.noteId, note.id);
+    expect(reminder.actionId, note.actions.single.id);
+    expect(reminder.explicitTime, true);
+    final collected = note.createdAt.toLocal();
+    expect(
+      reminder.time,
+      DateTime(collected.year, collected.month, collected.day + 1, 14),
+    );
+    expect(reminder.status, ReminderStatus.blocked);
     expect(note.originalText, f.transcript);
     expect(await File(note.sourcePath).readAsString(), f.transcript);
     final md = await File(note.notePath).readAsString();
@@ -60,6 +70,9 @@ void main() {
     expect(f.audioRequests, 1);
     expect(f.modelRequests, hasLength(1));
     expect(f.workspaces.first.notes.single.originalText, f.transcript);
+    expect(f.workspaces.first.reminders.single.id, reminder.id);
+    await f.workspaces.first.reconcileReminders();
+    expect(f.workspaces.first.reminders.single.id, reminder.id);
   });
   test('missing STT receipt preserves full transcript and unknown hold, without organizing or replay', () async {
     final f = BudgetFixture();

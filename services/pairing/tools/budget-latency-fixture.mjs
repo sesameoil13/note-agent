@@ -2,12 +2,19 @@
 // inspecting SQL or exposing a production endpoint. Assertions remain HTTP-only.
 import production from "../src/worker.mjs";
 let reached = false;
+let released = false;
 export default {
   async fetch(request, env, context) {
     const path = new URL(request.url).pathname;
     if (path === "/fixture-write-status") return Response.json({ reached });
+    if (path === "/fixture-release-write") {
+      released = true;
+      return new Response("released");
+    }
     if (request.headers.get("x-fixture-write-latency") !== "first-write")
       return production.fetch(request, env, context);
+    reached = false;
+    released = false;
     let first = true;
     const wrap = (statement) =>
       new Proxy(statement, {
@@ -19,7 +26,9 @@ export default {
               if (first) {
                 first = false;
                 reached = true;
-                await new Promise((resolve) => setTimeout(resolve, 750));
+                while (!released) {
+                  await new Promise((resolve) => setTimeout(resolve, 10));
+                }
               }
               return result;
             };
