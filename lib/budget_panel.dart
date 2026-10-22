@@ -42,8 +42,10 @@ class _BudgetPanelState extends State<BudgetPanel> {
     });
     try {
       await action();
-    } catch (_) {
-      _error = '操作未能确认。原文保留；费用预留不会因出错而自动清除。';
+    } catch (e) {
+      _error = e is StateError
+          ? e.message.toString()
+          : '操作未能确认。原文保留；费用预留不会因出错而自动清除。';
     }
     if (mounted) {
       setState(() {
@@ -154,6 +156,123 @@ class _BudgetPanelState extends State<BudgetPanel> {
           ),
           if (_busy) const LinearProgressIndicator(),
           if (_error != null) Text(_error!),
+          if (widget.noteId == null) ...[
+            const Divider(height: 32),
+            const Text('录音转写与整理'),
+            for (final source in w.audioSources) ...[
+              const SizedBox(height: 16),
+              Text(
+                source.originalName,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              if (!w.audioJobs.any((j) => j.sourceId == source.id))
+                OutlinedButton(
+                  onPressed: _busy
+                      ? null
+                      : () => _run(() async {
+                          await w.prepareAudioProcessing(source.id);
+                        }),
+                  child: const Text('预估转写及整理（不上传）'),
+                ),
+              for (final job in w.audioJobs.where(
+                (j) => j.sourceId == source.id,
+              )) ...[
+                Text(switch (job.status) {
+                  AudioJobStatus.preparing => '等待两阶段预留核对',
+                  AudioJobStatus.prepared => '已预留，音频尚未上传',
+                  AudioJobStatus.sending => '正在转写，可能产生费用',
+                  AudioJobStatus.transcribed => '完整转写已保存',
+                  AudioJobStatus.organizing => '正在整理转写',
+                  AudioJobStatus.completed => '处理结束，原音与完整转写保留',
+                  AudioJobStatus.paused => '已暂停，请核对原因和费用',
+                  AudioJobStatus.cancelled => '未发送任务已取消',
+                }),
+                if (job.message.isNotEmpty) Text(job.message),
+                Text('两阶段首次合计预留 ${money(job.estimatedCnyMicros)}'),
+                Text(job.description),
+                if (job.transcript != null)
+                  ExpansionTile(
+                    title: const Text('查看完整转写'),
+                    children: [SelectableText(job.transcript!)],
+                  ),
+                if (job.generationId != null)
+                  SelectableText('转写费用编号：${job.generationId}'),
+                Text(
+                  '转写费用：${job.knownCostUsdNanos == null ? '未知' : '\$${(job.knownCostUsdNanos! / 1000000000).toStringAsFixed(9)}'}',
+                ),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    if (job.status == AudioJobStatus.prepared)
+                      FilledButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() async {
+                                await w.confirmAudioProcessing(source.id);
+                              }),
+                        child: const Text('确认上传并转写整理（两阶段可能计费）'),
+                      ),
+                    if (job.canCancel &&
+                        [
+                          AudioJobStatus.prepared,
+                          AudioJobStatus.preparing,
+                          AudioJobStatus.paused,
+                        ].contains(job.status))
+                      TextButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() async {
+                                await w.cancelAudioProcessing(source.id);
+                              }),
+                        child: const Text('取消未上传任务'),
+                      ),
+                    if (job.status == AudioJobStatus.paused &&
+                        job.transcript == null)
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() async {
+                                await w.prepareAudioRetry(source.id);
+                              }),
+                        child: const Text('另行预估上传重试（原尝试可能已计费）'),
+                      ),
+                    if (job.status == AudioJobStatus.paused &&
+                        job.transcript != null)
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() async {
+                                await w.prepareAudioOrganization(source.id);
+                              }),
+                        child: const Text('仅重新预估整理（不重传音频）'),
+                      ),
+                    if (job.status == AudioJobStatus.cancelled)
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() async {
+                                await w.prepareAudioProcessing(source.id);
+                              }),
+                        child: const Text('重新预估转写及整理'),
+                      ),
+                    if ([
+                      AudioJobStatus.paused,
+                      AudioJobStatus.completed,
+                    ].contains(job.status))
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => _run(() async {
+                                await w.reconcileAudioProcessing(source.id);
+                              }),
+                        child: const Text('核对转写和整理费用（不重传）'),
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ],
           for (final note in notes) ...[
             const SizedBox(height: 20),
             Text(note.title, style: Theme.of(context).textTheme.titleMedium),

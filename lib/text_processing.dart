@@ -274,11 +274,14 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       [status.name, jsonEncode(payload), error, id],
     );
   }, accepted: true);
-  Future<WorkspaceTextJob> _processText(String noteId) async {
+  Future<WorkspaceTextJob> _processText(
+    String noteId, {
+    int maxRetries = 3,
+  }) async {
     final job = await prepareTextProcessing(noteId);
     if (job.status != TextProcessingStatus.prepared) return job;
     final payload = _textPayload(job.id);
-    for (var retry = 0; retry < 4; retry++) {
+    for (var retry = 0; retry <= maxRetries; retry++) {
       final attempt = (payload['attempts'] as List).last as String;
       payload.remove('validationError');
       await _saveText(job.id, TextProcessingStatus.sending, payload);
@@ -357,7 +360,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           error: e.message,
         );
         await refreshBudget();
-        if (!e.recoverable || retry == 3) break;
+        if (!e.recoverable || retry == maxRetries) break;
         // A prior send may already have incurred a charge. Its hold is never
         // recycled into a retry: every attempt needs another atomic admission.
         await Future<void>.delayed(Duration(seconds: 1 << retry));
@@ -431,14 +434,29 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         noteId,
         payload['original'] as String,
       );
-      payload['request'] = textModelPayload(
-        noteId,
-        payload['original'] as String,
-        (payload['quote'] as Map).cast<String, dynamic>(),
-        associationCandidates: (payload['associationCandidates'] as List)
-            .map((c) => (c as Map).cast<String, dynamic>())
-            .toList(),
-      );
+      if (payload['audioPipeline'] is String) {
+        final audioContext = <String, dynamic>{
+          'noteId': noteId,
+          'transcript': payload['original'],
+          'textQuote': payload['quote'],
+          'associationCandidates': payload['associationCandidates'],
+        };
+        payload['request'] = await _audioTextRequest(audioContext);
+        payload['associationCandidates'] =
+            audioContext['associationCandidates'];
+        if (utf8.encode(jsonEncode(payload['request'])).length > 20000) {
+          throw const ConnectionFailure('完整转写超过整理上限，未发送或截断。');
+        }
+      } else {
+        payload['request'] = textModelPayload(
+          noteId,
+          payload['original'] as String,
+          (payload['quote'] as Map).cast<String, dynamic>(),
+          associationCandidates: (payload['associationCandidates'] as List)
+              .map((c) => (c as Map).cast<String, dynamic>())
+              .toList(),
+        );
+      }
       payload['pendingReservation'] =
           '$id-${(payload['attempts'] as List).length}';
       await _saveText(id, TextProcessingStatus.costPending, payload);
