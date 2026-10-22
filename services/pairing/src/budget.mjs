@@ -49,7 +49,7 @@ async function limited(url, max) {
 }
 async function quote(env, now) {
   const cached = await env.DB.prepare(
-    "SELECT payload FROM budget_quotes WHERE expires_at>? ORDER BY expires_at DESC LIMIT 1",
+    "SELECT payload FROM budget_quotes WHERE expires_at>? AND json_extract(payload,'$.purpose') IS NULL ORDER BY expires_at DESC LIMIT 1",
   )
     .bind(now)
     .first();
@@ -129,6 +129,86 @@ async function quote(env, now) {
     .run();
   return q;
 }
+const STT_MODEL = "openai/whisper-large-v3-turbo";
+async function audioQuote(env, now) {
+  const base = await quote(env, now);
+  const catalog = JSON.parse(
+    await limited(
+      `https://openrouter.ai/api/v1/models/${STT_MODEL}/endpoints`,
+      262144,
+    ),
+  );
+  const routes = catalog.data?.endpoints;
+  if (
+    catalog.data?.id !== STT_MODEL ||
+    !Array.isArray(routes) ||
+    !routes.length
+  )
+    throw Error("quote_unavailable");
+  // The trusted local decoder proves duration. The Worker binds that duration,
+  // derives the price itself, and never receives private audio or a client rate.
+  const prices = [];
+  for (const e of routes) {
+    if (e.status !== 0) continue;
+    if (
+      e.model_id !== STT_MODEL ||
+      !["deepinfra/us", "groq"].includes(e.tag) ||
+      !e.pricing ||
+      !(Number(e.pricing.prompt) > 0) ||
+      Number(e.pricing.prompt) > 0.000012 ||
+      Object.entries(e.pricing).some(
+        ([key, value]) => key !== "prompt" && Number(value) !== 0,
+      )
+    )
+      throw Error("quote_unavailable");
+    prices.push(fixed(e.pricing.prompt, 9));
+  }
+  if (!prices.length) throw Error("quote_unavailable");
+  const q = {
+    purpose: "transcription",
+    model: STT_MODEL,
+    routes: routes
+      .filter((e) => e.status === 0)
+      .map((e) => e.tag)
+      .sort(),
+    secondNano: Math.max(...prices),
+    minimumSeconds: 10,
+    durationMarginPercent: 25,
+    fxMicros: base.fxMicros,
+    fxDate: base.fxDate,
+    retryMarginPercent: 25,
+    maxDurationMs: 600000,
+    maxInput: 25000000,
+    remotePriceCap: false,
+  };
+  q.id = await sha(JSON.stringify(q));
+  q.expiresAt = now + 600000;
+  await env.DB.prepare(
+    "INSERT INTO budget_quotes(id,payload,expires_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,expires_at=excluded.expires_at",
+  )
+    .bind(q.id, JSON.stringify(q), q.expiresAt)
+    .run();
+  return q;
+}
+function sourceBinding(d) {
+  if (d.purpose !== "transcription") return null;
+  const s = d.source;
+  if (
+    !s ||
+    !id(s.sourceId) ||
+    !/^[a-f0-9]{64}$/.test(s.digest || "") ||
+    !["wav", "mp3", "m4a", "aac"].includes(s.format) ||
+    !integer(s.durationMs, 1, 600000)
+  )
+    throw Error("invalid_budget");
+  return JSON.stringify({
+    purpose: "transcription",
+    sourceId: s.sourceId,
+    digest: s.digest,
+    format: s.format,
+    durationMs: s.durationMs,
+  });
+}
 async function state(env, now) {
   const row = await env.DB.prepare(
     `SELECT
@@ -163,7 +243,10 @@ export async function budgetRequest(request, env, context) {
   if (path === "/v1/budget/quote" && request.method === "POST") {
     try {
       return response({
-        quote: await quote(env, now),
+        quote:
+          (await body(request)).purpose === "transcription"
+            ? await audioQuote(env, now)
+            : await quote(env, now),
         budget: await state(env, now),
       });
     } catch {
@@ -184,10 +267,20 @@ export async function budgetRequest(request, env, context) {
     if (
       !id(d.attemptId) ||
       !id(d.operationId) ||
-      !integer(d.inputBytes, 1, MAX_INPUT) ||
+      !integer(
+        d.inputBytes,
+        1,
+        d.purpose === "transcription" ? 25000000 : MAX_INPUT,
+      ) ||
       typeof d.quoteId !== "string"
     )
       fail(400, "invalid_budget");
+    let binding;
+    try {
+      binding = sourceBinding(d);
+    } catch {
+      fail(400, "invalid_budget");
+    }
     const prior = await env.DB.prepare(
       "SELECT * FROM budget_attempts WHERE id=?",
     )
@@ -198,7 +291,8 @@ export async function budgetRequest(request, env, context) {
         prior.device_id !== own.id ||
         prior.operation_id !== d.operationId ||
         prior.quote_id !== d.quoteId ||
-        prior.input_bytes !== d.inputBytes
+        prior.input_bytes !== d.inputBytes ||
+        prior.source_binding !== binding
       )
         fail(409, "attempt_conflict");
       return response({ attempt: prior, budget: await state(env, now) });
@@ -210,12 +304,21 @@ export async function budgetRequest(request, env, context) {
       .first();
     if (!row) fail(409, "quote_expired");
     const q = JSON.parse(row.payload);
+    if ((q.purpose || null) !== (d.purpose || null))
+      fail(409, "attempt_conflict");
     const usd =
-      (d.inputBytes + 512) * q.promptNano + MAX_OUTPUT * q.completionNano;
+      q.purpose === "transcription"
+        ? ceilRatio(
+            BigInt(
+              Math.max(q.minimumSeconds, Math.ceil(d.source.durationMs / 1000)),
+            ) * 125n,
+            100,
+          ) * q.secondNano
+        : (d.inputBytes + 512) * q.promptNano + MAX_OUTPUT * q.completionNano;
     const amount = ceilRatio(BigInt(cny(usd, q.fxMicros)) * 125n, 100);
     const result = await env.DB.prepare(
-      `INSERT INTO budget_attempts(id,operation_id,device_id,month,state,reserve_cny,quote_id,created_at,input_bytes)
-      SELECT ?,?,?,?,'reserved',?,?,?,? WHERE
+      `INSERT INTO budget_attempts(id,operation_id,device_id,month,state,reserve_cny,quote_id,created_at,input_bytes,source_binding)
+      SELECT ?,?,?,?,'reserved',?,?,?,?,? WHERE
       (SELECT COALESCE(SUM(CASE WHEN state='settled' AND month=? THEN actual_cny WHEN state IN ('reserved','sent','uncertain') THEN reserve_cny ELSE 0 END),0) FROM budget_attempts WHERE month=? OR state IN ('reserved','sent','uncertain'))+? <= (SELECT limit_cny FROM budget_settings WHERE id=1)
       AND NOT EXISTS (SELECT 1 FROM budget_attempts WHERE disputed=1) ON CONFLICT(id) DO NOTHING`,
     )
@@ -228,6 +331,7 @@ export async function budgetRequest(request, env, context) {
         q.id,
         now,
         d.inputBytes,
+        binding,
         month(now),
         month(now),
         amount,
@@ -244,7 +348,8 @@ export async function budgetRequest(request, env, context) {
         same.device_id !== own.id ||
         same.operation_id !== d.operationId ||
         same.quote_id !== d.quoteId ||
-        same.input_bytes !== d.inputBytes
+        same.input_bytes !== d.inputBytes ||
+        same.source_binding !== binding
       )
         fail(409, "attempt_conflict");
     }
@@ -286,8 +391,14 @@ export async function budgetRequest(request, env, context) {
     const action = match[2];
     if (action === "send") {
       if (a.state !== "reserved") fail(409, "attempt_not_sendable");
+      if (
+        await env.DB.prepare(
+          "SELECT 1 FROM budget_attempts WHERE disputed=1 LIMIT 1",
+        ).first()
+      )
+        fail(409, "cost_conflict");
       const r = await env.DB.prepare(
-        "UPDATE budget_attempts SET state='sent' WHERE id=? AND state='reserved'",
+        "UPDATE budget_attempts SET state='sent' WHERE id=? AND state='reserved' AND NOT EXISTS (SELECT 1 FROM budget_attempts WHERE disputed=1)",
       )
         .bind(a.id)
         .run();
@@ -329,9 +440,15 @@ export async function budgetRequest(request, env, context) {
         );
         try {
           await env.DB.prepare(
-            "UPDATE budget_attempts SET state='settled',usd_nanos=?,actual_cny=?,generation_id=? WHERE id=? AND state IN ('sent','uncertain')",
+            "UPDATE budget_attempts SET state='settled',usd_nanos=?,actual_cny=?,generation_id=?,disputed=CASE WHEN ?>reserve_cny THEN 1 ELSE disputed END WHERE id=? AND state IN ('sent','uncertain')",
           )
-            .bind(d.usdNanos, cny(d.usdNanos, q.fxMicros), d.generationId, a.id)
+            .bind(
+              d.usdNanos,
+              cny(d.usdNanos, q.fxMicros),
+              d.generationId,
+              cny(d.usdNanos, q.fxMicros),
+              a.id,
+            )
             .run();
         } catch {
           const collision = await env.DB.prepare(
