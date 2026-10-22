@@ -149,10 +149,17 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       }
       final q = (payload['quote'] as Map).cast<String, dynamic>();
       final attempt = '$id-0';
+      payload['associationCandidates'] ??= await _associationCandidates(
+        noteId,
+        payload['original'] as String,
+      );
       payload['request'] = textModelPayload(
         noteId,
         payload['original'] as String,
         q,
+        associationCandidates: (payload['associationCandidates'] as List)
+            .map((c) => (c as Map).cast<String, dynamic>())
+            .toList(),
       );
       payload['attempts'] = [attempt];
       await _saveText(id, TextProcessingStatus.queued, payload);
@@ -296,6 +303,9 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           payload['result'] = reply.validated(
             noteId,
             original: payload['original'] as String,
+            candidateIds: ((payload['associationCandidates'] as List?) ?? [])
+                .map((c) => c['noteId'] as String)
+                .toSet(),
           );
         } on ConnectionFailure catch (e) {
           payload['validationError'] = e.message;
@@ -420,10 +430,17 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         body: {},
       );
       payload['quote'] = quoted['quote'];
+      payload['associationCandidates'] ??= await _associationCandidates(
+        noteId,
+        payload['original'] as String,
+      );
       payload['request'] = textModelPayload(
         noteId,
         payload['original'] as String,
         (payload['quote'] as Map).cast<String, dynamic>(),
+        associationCandidates: (payload['associationCandidates'] as List)
+            .map((c) => (c as Map).cast<String, dynamic>())
+            .toList(),
       );
       payload['pendingReservation'] =
           '$id-${(payload['attempts'] as List).length}';
@@ -465,6 +482,18 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       id,
     ]).single;
     final noteId = row['note_id'] as String;
+    if (_hasAssociationChange(noteId)) {
+      try {
+        await _finishAssociationChange(noteId);
+      } on FileSystemException {
+        _database.execute('UPDATE text_jobs SET status=?,error=? WHERE id=?', [
+          TextProcessingStatus.review.name,
+          '关联尚未写入，原文与模型结果保留；请重试保存关联。',
+          id,
+        ]);
+        return;
+      }
+    }
     if (_hasActionChange(noteId)) {
       _database.execute('UPDATE text_jobs SET status=?,error=? WHERE id=?', [
         TextProcessingStatus.review.name,
@@ -498,6 +527,11 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     final result = (payload['result'] as Map).cast<String, dynamic>();
     if (result['kind'] == 'review' &&
         ((result['actions'] as List?)?.isEmpty ?? true)) {
+      if (!await _tryApplyModelAssociations(id, noteId, payload)) return;
+      _database.execute('UPDATE text_jobs SET payload=? WHERE id=?', [
+        jsonEncode(payload),
+        id,
+      ]);
       _database.execute('UPDATE text_jobs SET status=?,error=? WHERE id=?', [
         TextProcessingStatus.review.name,
         '此内容涉及行动或含义不明确，保留原文，待后续待办确认。',
@@ -595,8 +629,20 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       ]);
       return;
     }
+    if (_database.select(
+      'SELECT note_id FROM note_association_changes WHERE vault=?',
+      [vaultStorage.identity],
+    ).isNotEmpty) {
+      _database.execute('UPDATE text_jobs SET status=?,error=? WHERE id=?', [
+        TextProcessingStatus.review.name,
+        '请先重试尚未写入的关联，再应用标题与结果。',
+        id,
+      ]);
+      return;
+    }
     note = await _renameTextNote(noteId, title: result['title'] as String);
     if (note.status != NoteStatus.localSaved) return;
+    if (!await _tryApplyModelAssociations(id, noteId, payload)) return;
     payload['applyPhase'] = 'applied';
     _database.execute(
       'UPDATE text_jobs SET status=?,payload=?,error=NULL WHERE id=?',

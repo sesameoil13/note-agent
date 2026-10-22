@@ -197,11 +197,14 @@ class BudgetFixture {
     client.close();
   }
 
-  Future<void> reopen(int i) async {
+  Future<void> reopen(int i, {VaultStorage? vaultStorage}) async {
     await workspaces[i].close();
     workspaces[i] = await NoteWorkspace.open(
       localDirectory: Directory('${root.path}/local$i'),
-      vaultDirectory: Directory('${root.path}/vault$i'),
+      vaultDirectory: vaultStorage == null
+          ? Directory('${root.path}/vault$i')
+          : null,
+      vaultStorage: vaultStorage,
       connection: WorkspaceConnection(
         secureStore: stores[i],
         textApiBase: Uri.parse('http://127.0.0.1:${router.port}/'),

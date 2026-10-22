@@ -34,6 +34,7 @@ export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 part 'text_processing.dart';
 part 'audio_processing.dart';
 part 'note_actions.dart';
+part 'note_associations.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -69,6 +70,8 @@ class WorkspaceNote {
     this.document,
     this.presentation = const NotePresentation(),
     this.actionSavePending = false,
+    this.associations = const [],
+    this.associationSavePending = false,
   });
 
   final String id;
@@ -90,6 +93,8 @@ class WorkspaceNote {
   final WorkspaceDocument? document;
   final NotePresentation presentation;
   final bool actionSavePending;
+  final List<WorkspaceAssociation> associations;
+  final bool associationSavePending;
   NoteKind get kind => presentation.kind;
   List<WorkspaceAction> get actions => presentation.actions;
 
@@ -115,6 +120,48 @@ class NoteWorkspace {
     this._createId,
     this.connection,
   );
+
+  List<WorkspaceTopicSuggestion> get pendingTopicSuggestions =>
+      List.unmodifiable(
+        _topicSuggestions().where(
+          (s) => s.status == TopicSuggestionStatus.pending,
+        ),
+      );
+  List<WorkspaceNote> get pendingConfirmationNotes {
+    final ids = {
+      ...pendingActionNotes.map((n) => n.id),
+      ...pendingTopicSuggestions.map((s) => s.noteId),
+    };
+    return List.unmodifiable(notes.where((n) => ids.contains(n.id)));
+  }
+
+  Future<void> confirmTopicSuggestion(String id) =>
+      _mutate(() => _resolveTopic(id, true));
+  Future<void> ignoreTopicSuggestion(String id) =>
+      _mutate(() => _resolveTopic(id, false));
+  Future<void> removeAssociation(String noteId, String targetNoteId) =>
+      _mutate(() async {
+        await _finishAssociationChange(noteId);
+        final state = _associationState(noteId);
+        for (final link in state['links'] as List) {
+          if (link['noteId'] == targetNoteId) link['removed'] = true;
+        }
+        await _writeAssociationState(noteId, state);
+      });
+  Future<void> retryAssociationSave(String noteId) {
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _trackText(_retryAssociationSave(noteId));
+  }
+
+  Future<void> _retryAssociationSave(String noteId) async {
+    await _mutate(() => _finishAssociationChange(noteId));
+    for (final job in textJobs.where((j) => j.noteId == noteId)) {
+      final payload = _textPayload(job.id);
+      if (payload['result'] is Map && payload['applyPhase'] != 'applied') {
+        await _applyText(job.id, payload);
+      }
+    }
+  }
 
   WorkspaceBudgetState _budget = const WorkspaceBudgetState();
   WorkspaceBudgetState get budget => _budget;
@@ -467,6 +514,12 @@ class NoteWorkspace {
     database.execute('''CREATE TABLE IF NOT EXISTS note_action_changes (
       note_id TEXT PRIMARY KEY, vault TEXT NOT NULL, payload TEXT NOT NULL
     )''');
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS note_associations (note_id TEXT PRIMARY KEY,vault TEXT NOT NULL,payload TEXT NOT NULL)',
+    );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS note_association_changes (note_id TEXT PRIMARY KEY,vault TEXT NOT NULL,payload TEXT NOT NULL)',
+    );
     final workspace = NoteWorkspace._(
       database,
       vaultStorage,
@@ -532,6 +585,7 @@ class NoteWorkspace {
     }
     await workspace._attachments.recover();
     await workspace._recoverActionChanges();
+    await workspace._recoverAssociationChanges();
     await workspace._recoverText();
     await workspace._recoverAudioJobs();
     return workspace;
@@ -566,10 +620,23 @@ class NoteWorkspace {
     required String title,
     required String text,
     List<String> semanticTitleCandidates = const [],
-  }) => _mutate(() async {
+  }) => _mutate(
+    () => _captureText(
+      title: title,
+      text: text,
+      semanticTitleCandidates: semanticTitleCandidates,
+    ),
+  );
+
+  Future<WorkspaceNote> _captureText({
+    required String title,
+    required String text,
+    List<String> semanticTitleCandidates = const [],
+    String? noteId,
+  }) async {
     if (text.trim().isEmpty) throw ArgumentError('请输入要保存的文字。');
     final safeTitle = _safeTitle(title);
-    final id = _createId();
+    final id = noteId ?? _createId();
     final now = _clock();
     final note = WorkspaceNote(
       id: id,
@@ -603,7 +670,7 @@ class NoteWorkspace {
       ],
     );
     return _retryNoteExport(id);
-  });
+  }
 
   /// Candidates are semantic alternatives supplied by the organizing service.
   /// This workspace performs no AI calls and invents no semantic alternatives.
@@ -728,6 +795,13 @@ class NoteWorkspace {
     required String title,
     List<String> semanticTitleCandidates = const [],
   }) async {
+    if (_hasAssociationChange(id) ||
+        _database.select(
+          'SELECT note_id FROM note_association_changes WHERE vault=?',
+          [vaultStorage.identity],
+        ).isNotEmpty) {
+      throw StateError('关联修改尚未写入，请先重试保存关联。');
+    }
     if (_hasActionChange(id)) {
       throw StateError('行动修正尚未写入，请先重试保存修正，再修改标题。');
     }
@@ -1028,6 +1102,8 @@ class NoteWorkspace {
     ),
     document: _document(row['id'] as String),
     presentation: _presentation(row['presentation'] as String?),
+    associations: _associations(row['id'] as String),
+    associationSavePending: _hasAssociationChange(row['id'] as String),
     actionSavePending: _hasActionChange(row['id'] as String),
   );
 
@@ -1050,7 +1126,7 @@ class NoteWorkspace {
 
 ## 关联
 
-暂无关联
+${_associationMarkdown(note.id)}
 
 ## 来源
 
