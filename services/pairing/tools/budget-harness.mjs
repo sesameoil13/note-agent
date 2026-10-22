@@ -27,6 +27,27 @@ mock
     },
   })
   .persist();
+mock
+  .get("https://openrouter.ai")
+  .intercept({ path: "/api/v1/models/openai/whisper-large-v3-turbo/endpoints" })
+  .reply(200, {
+    data: {
+      id: "openai/whisper-large-v3-turbo",
+      endpoints: [
+        {
+          model_id: "openai/whisper-large-v3-turbo",
+          tag: "groq",
+          status: 0,
+          pricing: {
+            prompt: "0.0000111111111111",
+            completion: "0",
+            request: "0",
+          },
+        },
+      ],
+    },
+  })
+  .persist();
 const date = new Date().toISOString().slice(0, 10);
 mock
   .get("https://www.ecb.europa.eu")
@@ -51,7 +72,11 @@ const mf = new Miniflare({
   port: 0,
 });
 const db = await mf.getD1Database("DB");
-for (const file of ["0001_pairing.sql", "0002_budget.sql"]) {
+for (const file of [
+  "0001_pairing.sql",
+  "0002_budget.sql",
+  "0003_audio_budget.sql",
+]) {
   for (const sql of (await readFile("migrations/" + file, "utf8"))
     .split(";")
     .filter((s) => s.trim()))
