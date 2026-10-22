@@ -347,7 +347,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
                     icon: const Icon(Icons.rule),
-                    label: Text('待确认 ${_workspace!.pendingActionNotes.length}'),
+                    label: Text(
+                      '待确认 ${_workspace!.pendingConfirmationNotes.length}',
+                    ),
                     onPressed: _saving
                         ? null
                         : () async {
@@ -1122,7 +1124,57 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
               const SizedBox(height: 32),
               _sectionTitle('关联'),
               const SizedBox(height: 16),
-              const Text('暂无关联', style: TextStyle(color: ash)),
+              if (note.associations.isEmpty)
+                const Text('暂无关联', style: TextStyle(color: ash)),
+              for (final association in note.associations)
+                ExpansionTile(
+                  title: Text(association.title),
+                  subtitle: const Text('查看关联理由'),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(association.reason),
+                    ),
+                    TextButton(
+                      onPressed: _saving || note.associationSavePending
+                          ? null
+                          : () async {
+                              try {
+                                await _workspace!.removeAssociation(
+                                  note.id,
+                                  association.targetNoteId,
+                                );
+                                if (mounted) setState(() {});
+                              } catch (e) {
+                                if (mounted) {
+                                  setState(() {
+                                    _error = _errorMessage(e);
+                                  });
+                                }
+                              }
+                            },
+                      child: const Text('移除关联'),
+                    ),
+                  ],
+                ),
+              if (note.associationSavePending)
+                OutlinedButton(
+                  onPressed: _saving
+                      ? null
+                      : () async {
+                          try {
+                            await _workspace!.retryAssociationSave(note.id);
+                            if (mounted) setState(() {});
+                          } catch (e) {
+                            if (mounted) {
+                              setState(() {
+                                _error = _errorMessage(e);
+                              });
+                            }
+                          }
+                        },
+                  child: const Text('重试保存关联'),
+                ),
               const SizedBox(height: 32),
               _sectionTitle('来源'),
               const SizedBox(height: 16),

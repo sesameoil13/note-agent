@@ -85,6 +85,7 @@ extension _WorkspaceActions on NoteWorkspace {
     required List<WorkspaceAction> actions,
     String? body,
   }) async {
+    if (_hasAssociationChange(noteId)) throw StateError('关联修改尚未写入，请先重试保存关联。');
     if (_hasActionChange(noteId)) {
       throw StateError('上次行动修正尚未写入，请先重试保存修正。');
     }
