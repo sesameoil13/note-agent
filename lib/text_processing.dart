@@ -89,11 +89,11 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   }
 
   Future<WorkspaceTextJob> _prepareText(String noteId) async {
-    final readiness = textProcessingReadiness(noteId);
-    if (!readiness.canPrepare) throw StateError(readiness.message);
     final existing = textJobs.where((j) => j.noteId == noteId).firstOrNull;
     if (existing != null) {
       if (existing.status == TextProcessingStatus.cancelled) {
+        final readiness = textProcessingReadiness(noteId);
+        if (!readiness.canPrepare) throw StateError(readiness.message);
         final payload = _textPayload(existing.id);
         final note = notes.firstWhere((n) => n.id == noteId);
         payload['noteSnapshot'] = await vaultStorage.readText(
@@ -120,6 +120,8 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       }
       return existing;
     }
+    final readiness = textProcessingReadiness(noteId);
+    if (!readiness.canPrepare) throw StateError(readiness.message);
     final note = notes.firstWhere((n) => n.id == noteId);
     final id = _createId();
     final payload = <String, dynamic>{
