@@ -75,7 +75,7 @@ test("STT binding and conservative budget; above-reserve actual pauses admission
   const token = "transcription-test-owner-token-32";
   const mf = new Miniflare({
     modules: true,
-    scriptPath: "src/worker.mjs",
+    scriptPath: "tools/budget-latency-fixture.mjs",
     compatibilityDate: "2026-07-30",
     d1Databases: ["DB"],
     fetchMock: mock,
@@ -94,12 +94,13 @@ test("STT binding and conservative budget; above-reserve actual pauses admission
         .split(";")
         .filter((s) => s.trim()))
         await db.prepare(sql).run();
-    const req = async (path, body) => {
+    const req = async (path, body, extra = {}) => {
       const r = await mf.dispatchFetch("https://fixture.test" + path, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: "Bearer " + token,
+          ...extra,
         },
         body: JSON.stringify(body),
       });
@@ -171,10 +172,42 @@ test("STT binding and conservative budget; above-reserve actual pauses admission
       (await req("/v1/budget/attempt/audio-attempt-1/send", {})).status,
       200,
     );
-    const receipt = await req("/v1/budget/attempt/audio-attempt-1/settle", {
-      generationId: "gen-audio-overrun",
-      usdNanos: 100000000,
-    });
+    const settling = req(
+      "/v1/budget/attempt/audio-attempt-1/settle",
+      {
+        generationId: "gen-audio-overrun",
+        usdNanos: 100000000,
+      },
+      { "x-fixture-write-latency": "first-write" },
+    );
+    let receipt;
+    try {
+      let reached = false;
+      for (let i = 0; i < 100; i++) {
+        reached = (
+          await (
+            await mf.dispatchFetch("https://fixture.test/fixture-write-status")
+          ).json()
+        ).reached;
+        if (reached) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(reached, true);
+      const observed = await (
+        await mf.dispatchFetch("https://fixture.test/v1/budget", {
+          headers: { authorization: "Bearer " + token },
+        })
+      ).json();
+      assert.equal(observed.spentUsdNanos, 100000000);
+      assert.equal(observed.disputed, true);
+      assert.equal(
+        (await req("/v1/budget/attempt/text-held-before-overrun/send", {}))
+          .status,
+        409,
+      );
+    } finally {
+      receipt = await settling;
+    }
     assert.equal(receipt.data.budget.disputed, true);
     assert.equal(
       (await req("/v1/budget/attempt/text-held-before-overrun/send", {}))

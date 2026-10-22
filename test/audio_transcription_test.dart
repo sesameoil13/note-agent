@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
@@ -100,6 +101,10 @@ void main() {
     expect(w.audioJobs.single.message, contains('超过'));
     expect(w.notes.single.originalText, f.transcript);
     expect(await File(w.notes.single.sourcePath).readAsString(), f.transcript);
+    expect(f.modelRequests, isEmpty);
+    expect(w.budget.reservedCnyMicros, 0);
+    await w.prepareAudioOrganization(source.id);
+    expect(w.audioJobs.single.status, AudioJobStatus.paused);
     expect(f.modelRequests, isEmpty);
     expect(w.budget.reservedCnyMicros, 0);
   });
@@ -212,4 +217,183 @@ void main() {
     expect(reopened.budget.unknownCnyMicros, unknown);
     expect(reopened.notes, hasLength(1));
   });
+  for (final deferred in [false, true]) {
+    test(
+      'recording transcript sends frozen semantic candidates and applies multiple links with pending new topic (deferred: $deferred)',
+      () async {
+        final f = BudgetFixture();
+        await f.start();
+        addTearDown(f.close);
+        final w = f.workspaces.first;
+        f.omitAudioCost = deferred;
+        final research = await w.captureText(
+          title: '用户访谈',
+          text: '访谈反映新手理解产品的障碍。',
+        );
+        final design = await w.captureText(
+          title: '体验设计',
+          text: '首次使用体验需要降低认知负担。',
+        );
+        f.transcript = '受访者第一次打开工具，不知道下一步该点哪里。';
+        f.modelResult = {
+          'manifestVersion': 3,
+          'kind': 'ordinary',
+          'title': '首次使用观察',
+          'body': '受访者初次打开工具时不知道下一步操作。',
+          'actions': [],
+          'associations': [
+            {'noteId': research.id, 'reason': '同为访谈中观察到的使用障碍。'},
+            {'noteId': design.id, 'reason': '为首次使用体验提供设计依据。'},
+          ],
+          'newTopics': [
+            {'title': '引导流程', 'reason': '汇集初次使用体验线索。'},
+          ],
+        };
+        final source = await w.importAudio(
+          original: await File('${f.root.path}/synthetic.wav')
+              .writeAsBytes(wave()),
+          submissionId: 'audio-semantic',
+        );
+        await w.prepareAudioProcessing(source.id);
+        await w.confirmAudioProcessing(source.id);
+        if (deferred) {
+          expect(f.modelRequests, isEmpty);
+          f.generationAvailable = true;
+          f.generationCost = 0.00001;
+          await w.reconcileAudioProcessing(source.id);
+          await w.prepareAudioOrganization(source.id);
+          expect(f.audioRequests, 1);
+          expect(f.modelRequests, isEmpty);
+          await w.confirmAudioProcessing(source.id);
+        }
+        final note = w.notes.firstWhere((n) => n.id == source.outputNoteId);
+        expect(note.associations.map((a) => a.targetNoteId), [
+          research.id,
+          design.id,
+        ]);
+        expect(note.originalText, f.transcript);
+        expect(w.pendingTopicSuggestions.single.title, '引导流程');
+        expect(w.notes, hasLength(3));
+        final request = f.modelRequests.single;
+        final input = jsonDecode(
+          (request['messages'] as List).last['content'] as String,
+        ) as Map;
+        expect(
+          (input['associationCandidates'] as List).map((c) => c['noteId']),
+          containsAll([research.id, design.id]),
+        );
+        expect(
+          utf8.encode(jsonEncode(request)).length,
+          lessThanOrEqualTo(20000),
+        );
+        final md = await File(note.notePath).readAsString();
+        expect(md, contains('[[用户访谈]]'));
+        expect(md, contains('[[体验设计]]'));
+        expect(md, isNot(contains('[[引导流程]]')));
+        await f.reopen(0);
+        expect(
+          f.workspaces.first.notes
+              .firstWhere((n) => n.id == note.id)
+              .associations,
+          hasLength(2),
+        );
+        expect(
+          f.workspaces.first.pendingTopicSuggestions.single.noteId,
+          note.id,
+        );
+        expect(f.audioRequests, 1);
+        expect(f.modelRequests, hasLength(1));
+      },
+    );
+  }
+  for (final mode in ['initial', 'deferred', 'retry']) {
+    test(
+      'optional association context yields space to the complete Mandarin transcript within the consent bound ($mode)',
+      () async {
+        final f = BudgetFixture();
+        f.omitAudioCost = mode == 'deferred';
+        if (mode == 'retry') f.modelStatuses.add(503);
+        await f.start();
+        addTearDown(f.close);
+        final w = f.workspaces.first;
+        for (var i = 0; i < 12; i++) {
+          await w.captureText(
+            title: '体验设计$i',
+            text: List.filled(200, '用户访谈与首次使用体验。').join(),
+          );
+        }
+        f.transcript = List.filled(250, '用户访谈记录首次使用体验。').join();
+        final source = await w.importAudio(
+          original: await File('${f.root.path}/synthetic.wav')
+              .writeAsBytes(wave()),
+          submissionId: 'bounded-audio-context',
+        );
+        f.beforeReply = () async {
+          final request = f.modelRequests.last;
+          final input = jsonDecode(
+            (request['messages'] as List).last['content'] as String,
+          ) as Map;
+          final sent = (input['associationCandidates'] as List)
+              .map((c) => c['noteId'])
+              .toSet();
+          final omitted = w.notes.firstWhere(
+            (n) => n.id != source.outputNoteId && !sent.contains(n.id),
+          );
+          f.modelResult = {
+            'manifestVersion': 3,
+            'kind': 'ordinary',
+            'title': '错误关联',
+            'body': '此结果不得覆盖原文。',
+            'actions': [],
+            'associations': [
+              {'noteId': omitted.id, 'reason': '未发送候选不得成为链接。'},
+            ],
+            'newTopics': [],
+          };
+        };
+        await w.prepareAudioProcessing(source.id);
+        await w.confirmAudioProcessing(source.id);
+        if (mode == 'deferred') {
+          expect(f.modelRequests, isEmpty);
+          f.generationAvailable = true;
+          f.generationCost = 0.00001;
+          await w.reconcileAudioProcessing(source.id);
+        }
+        if (mode != 'initial') {
+          await w.prepareAudioOrganization(source.id);
+          expect(w.audioJobs.single.status, AudioJobStatus.prepared);
+          await w.confirmAudioProcessing(source.id);
+        }
+        expect(f.modelRequests, hasLength(mode == 'retry' ? 2 : 1));
+        for (final sent in f.modelRequests) {
+          expect(
+            utf8.encode(jsonEncode(sent)).length,
+            lessThanOrEqualTo(20000),
+          );
+          final sentInput = jsonDecode(
+            (sent['messages'] as List).last['content'] as String,
+          ) as Map;
+          expect(sentInput['text'], f.transcript);
+        }
+        final request = f.modelRequests.last;
+        expect(
+          utf8.encode(jsonEncode(request)).length,
+          lessThanOrEqualTo(20000),
+        );
+        final input = jsonDecode(
+          (request['messages'] as List).last['content'] as String,
+        ) as Map;
+        expect(input['text'], f.transcript);
+        expect((input['associationCandidates'] as List).length, lessThan(12));
+        expect((input['associationCandidates'] as List).length, greaterThan(0));
+        final note = w.notes.firstWhere((n) => n.id == source.outputNoteId);
+        expect(note.originalText, f.transcript);
+        expect(note.associations, isEmpty);
+        expect(w.textJobs.single.status, TextProcessingStatus.review);
+        expect(note.text, f.transcript);
+        expect(await File(note.sourcePath).readAsString(), f.transcript);
+        expect(f.audioRequests, 1);
+      },
+    );
+  }
 }

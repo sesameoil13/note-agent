@@ -434,14 +434,29 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         noteId,
         payload['original'] as String,
       );
-      payload['request'] = textModelPayload(
-        noteId,
-        payload['original'] as String,
-        (payload['quote'] as Map).cast<String, dynamic>(),
-        associationCandidates: (payload['associationCandidates'] as List)
-            .map((c) => (c as Map).cast<String, dynamic>())
-            .toList(),
-      );
+      if (payload['audioPipeline'] is String) {
+        final audioContext = <String, dynamic>{
+          'noteId': noteId,
+          'transcript': payload['original'],
+          'textQuote': payload['quote'],
+          'associationCandidates': payload['associationCandidates'],
+        };
+        payload['request'] = await _audioTextRequest(audioContext);
+        payload['associationCandidates'] =
+            audioContext['associationCandidates'];
+        if (utf8.encode(jsonEncode(payload['request'])).length > 20000) {
+          throw const ConnectionFailure('完整转写超过整理上限，未发送或截断。');
+        }
+      } else {
+        payload['request'] = textModelPayload(
+          noteId,
+          payload['original'] as String,
+          (payload['quote'] as Map).cast<String, dynamic>(),
+          associationCandidates: (payload['associationCandidates'] as List)
+              .map((c) => (c as Map).cast<String, dynamic>())
+              .toList(),
+        );
+      }
       payload['pendingReservation'] =
           '$id-${(payload['attempts'] as List).length}';
       await _saveText(id, TextProcessingStatus.costPending, payload);

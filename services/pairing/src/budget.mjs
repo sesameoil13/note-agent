@@ -440,9 +440,15 @@ export async function budgetRequest(request, env, context) {
         );
         try {
           await env.DB.prepare(
-            "UPDATE budget_attempts SET state='settled',usd_nanos=?,actual_cny=?,generation_id=? WHERE id=? AND state IN ('sent','uncertain')",
+            "UPDATE budget_attempts SET state='settled',usd_nanos=?,actual_cny=?,generation_id=?,disputed=CASE WHEN ?>reserve_cny THEN 1 ELSE disputed END WHERE id=? AND state IN ('sent','uncertain')",
           )
-            .bind(d.usdNanos, cny(d.usdNanos, q.fxMicros), d.generationId, a.id)
+            .bind(
+              d.usdNanos,
+              cny(d.usdNanos, q.fxMicros),
+              d.generationId,
+              cny(d.usdNanos, q.fxMicros),
+              a.id,
+            )
             .run();
         } catch {
           const collision = await env.DB.prepare(
@@ -459,13 +465,6 @@ export async function budgetRequest(request, env, context) {
             .bind(a.id)
             .run();
           fail(409, "generation_conflict");
-        }
-        if (cny(d.usdNanos, q.fxMicros) > a.reserve_cny) {
-          await env.DB.prepare(
-            "UPDATE budget_attempts SET disputed=1 WHERE id=?",
-          )
-            .bind(a.id)
-            .run();
         }
         const committed = await env.DB.prepare(
           "SELECT usd_nanos,generation_id FROM budget_attempts WHERE id=?",

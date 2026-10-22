@@ -46,10 +46,10 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
             status: AudioJobStatus.values.byName(r['status'] as String),
             estimatedCnyMicros: p['estimate'] as int? ?? 0,
             description: p['organizationOnly'] == true
-                ? '本次仅整理已有完整转写，不重新上传音频；需确认新的整理费用。最多 20000 编码字节、1024 输出 token，不自动重发。\n${_textQuoteDescription(p['textQuote'])}'
+                ? '本次仅整理已有完整转写，不重新上传音频；需确认新的整理费用。附带最多 12 条本库相关标题及每条最多 400 字片段用于关联；完整请求最多 20000 编码字节、1024 输出 token，不自动重发。\n${_textQuoteDescription(p['textQuote'])}'
                 : aq == null
                 ? '尚未取得转写和整理费率。'
-                : '一次确认包含完整音频转写（$transcriptionModelId）及固定 DeepSeek V4.1 Flash 整理。\n转写按全部已知路由最高秒价预留：\$${(aq['secondNano'] as int) / 1000000000}/秒，最少 ${aq['minimumSeconds']} 秒，时长另含 25% 余量；两阶段均含 25% 费用余量。汇率日期 ${aq['fxDate']}。\n转写不保证远端价格封顶；超出预留将如实记账并暂停后续收费。\n整理请求最多 20000 编码字节、1024 输出 token；超限保留完整转写并暂停，不截断或隐式分段。两阶段均不自动重发。报价到期需重新预估。\n${_textQuoteDescription(p['textQuote'])}',
+                : '一次确认包含完整音频转写（$transcriptionModelId）及固定 DeepSeek V4.1 Flash 整理。\n转写按全部已知路由最高秒价预留：\$${(aq['secondNano'] as int) / 1000000000}/秒，最少 ${aq['minimumSeconds']} 秒，时长另含 25% 余量；两阶段均含 25% 费用余量。汇率日期 ${aq['fxDate']}。\n转写不保证远端价格封顶；超出预留将如实记账并暂停后续收费。\n整理会附带最多 12 条本库相关标题及每条最多 400 字片段用于关联；完整请求最多 20000 编码字节、1024 输出 token；超限保留完整转写并暂停，不截断或隐式分段。两阶段均不自动重发。报价到期需重新预估。\n${_textQuoteDescription(p['textQuote'])}',
             canCancel: p['consented'] != true || p['organizationOnly'] == true,
             message: r['error'] as String? ?? '',
             transcript: p['transcript'] as String?,
@@ -372,13 +372,35 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     return _audioJob(id);
   }
 
-  Future<void> _createAudioTextJob(String id, Map<String, dynamic> p) async {
-    final note = notes.firstWhere((n) => n.id == p['noteId']);
-    final request = textModelPayload(
-      note.id,
+  Future<Map<String, dynamic>> _audioTextRequest(Map<String, dynamic> p) async {
+    p['associationCandidates'] ??= await _associationCandidates(
+      p['noteId'] as String,
+      p['transcript'] as String,
+    );
+    final candidates = (p['associationCandidates'] as List)
+        .map((c) => (c as Map).cast<String, dynamic>())
+        .toList();
+    Map<String, dynamic> request() => textModelPayload(
+      p['noteId'] as String,
       p['transcript'] as String,
       (p['textQuote'] as Map).cast<String, dynamic>(),
+      associationCandidates: candidates,
     );
+    var encoded = request();
+    // Optional context yields to the complete transcript. Freeze exactly the
+    // sent identities so omitted candidates cannot be invented by the model.
+    while (utf8.encode(jsonEncode(encoded)).length > 20000 &&
+        candidates.isNotEmpty) {
+      candidates.removeLast();
+      encoded = request();
+    }
+    p['associationCandidates'] = candidates;
+    return encoded;
+  }
+
+  Future<void> _createAudioTextJob(String id, Map<String, dynamic> p) async {
+    final note = notes.firstWhere((n) => n.id == p['noteId']);
+    final request = await _audioTextRequest(p);
     if (utf8.encode(jsonEncode(request)).length > 20000) {
       throw const ConnectionFailure('完整转写超过本次整理上限，原音与完整转写保留；不会截断或额外上传。');
     }
@@ -394,6 +416,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       'request': request,
       'attempts': [p['textAttempt']],
       'audioPipeline': id,
+      'associationCandidates': p['associationCandidates'],
     };
     p['textJob'] = textId;
     await _mutate(() async {
@@ -429,56 +452,68 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
         p['audioSettled'] != true) {
       throw StateError('请先核对转写费用；仅已保存转写且费用已核清的暂停任务可重新预估整理。');
     }
-    await _releaseUnsentAudio(p);
-    if (p['textJob'] is String) {
-      final textId = p['textJob'] as String;
-      final t = _textPayload(textId);
-      if (t['result'] != null) throw StateError('已有整理结果，请核对已有内容，不重复计费。');
-      await _reserveNextText(textId, p['noteId'] as String, t);
-      p['textQuote'] = t['quote'];
-      p['textAttempt'] = (t['attempts'] as List).last;
-    } else {
-      final operation = _createId();
-      p['operation'] = operation;
-      p['textAttempt'] = '$operation-text';
-      p['textQuote'] = (await connection.requestSharedBudget(
-        '/v1/budget/quote',
-        body: {},
-      ))['quote'];
-      await _saveAudioJob(id, AudioJobStatus.preparing, p);
-      // Validate the entire request before reserving or asking for consent.
-      final request = textModelPayload(
-        p['noteId'] as String,
-        p['transcript'] as String,
-        (p['textQuote'] as Map).cast<String, dynamic>(),
-      );
-      if (utf8.encode(jsonEncode(request)).length > 20000) {
-        throw const ConnectionFailure('完整转写超过整理上限，未发送或截断。');
+    try {
+      p['organizationOnly'] = true;
+      await _releaseUnsentAudio(p);
+      if (p['textJob'] is String) {
+        final textId = p['textJob'] as String;
+        final t = _textPayload(textId);
+        if (t['result'] != null) throw StateError('已有整理结果，请核对已有内容，不重复计费。');
+        await _reserveNextText(textId, p['noteId'] as String, t);
+        p['textQuote'] = t['quote'];
+        p['textAttempt'] = (t['attempts'] as List).last;
+      } else {
+        final operation = _createId();
+        p['operation'] = operation;
+        p['textAttempt'] = '$operation-text';
+        p['textQuote'] = (await connection.requestSharedBudget(
+          '/v1/budget/quote',
+          body: {},
+        ))['quote'];
+        await _saveAudioJob(id, AudioJobStatus.preparing, p);
+        // Validate the entire request before reserving or asking for consent.
+        final request = await _audioTextRequest(p);
+        if (utf8.encode(jsonEncode(request)).length > 20000) {
+          throw const ConnectionFailure('完整转写超过整理上限，未发送或截断。');
+        }
+        final r = await connection.requestSharedBudget(
+          '/v1/budget/reserve',
+          body: {
+            'attemptId': p['textAttempt'],
+            'operationId': operation,
+            'quoteId': (p['textQuote'] as Map)['id'],
+            'inputBytes': 20000,
+          },
+        );
+        _readTextBudget((r['budget'] as Map).cast<String, dynamic>());
+        await _createAudioTextJob(id, p);
       }
       final r = await connection.requestSharedBudget(
-        '/v1/budget/reserve',
-        body: {
-          'attemptId': p['textAttempt'],
-          'operationId': operation,
-          'quoteId': (p['textQuote'] as Map)['id'],
-          'inputBytes': 20000,
-        },
+        '/v1/budget/attempt/${p['textAttempt']}',
       );
-      _readTextBudget((r['budget'] as Map).cast<String, dynamic>());
-      await _createAudioTextJob(id, p);
+      p['estimate'] = (r['attempt'] as Map)['reserve_cny'];
+      p['organizationOnly'] = true;
+      await _saveAudioJob(
+        id,
+        AudioJobStatus.prepared,
+        p,
+        error: '仅重新整理已有完整转写，不再次上传音频。此整理需单独确认费用。',
+      );
+      return _audioJob(id);
+    } catch (e) {
+      await _releaseUnsentAudio(p);
+      await _saveAudioJob(
+        id,
+        AudioJobStatus.paused,
+        p,
+        error: e is ConnectionFailure
+            ? e.message
+            : e is StateError
+            ? e.message.toString()
+            : '整理预估未能确认，完整转写和费用预留保留，请稍后核对。',
+      );
+      return _audioJob(id);
     }
-    final r = await connection.requestSharedBudget(
-      '/v1/budget/attempt/${p['textAttempt']}',
-    );
-    p['estimate'] = (r['attempt'] as Map)['reserve_cny'];
-    p['organizationOnly'] = true;
-    await _saveAudioJob(
-      id,
-      AudioJobStatus.prepared,
-      p,
-      error: '仅重新整理已有完整转写，不再次上传音频。此整理需单独确认费用。',
-    );
-    return _audioJob(id);
   }
 
   Future<void> _settleAudio(Map<String, dynamic> p) async {
