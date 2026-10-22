@@ -1,3 +1,5 @@
+import 'dart:async';
+
 /// OS notification boundary shared by reminders and future grouped notices.
 /// Scheduling confirms OS acceptance only; it never proves actual delivery.
 enum NotificationPermission {
@@ -57,4 +59,26 @@ class UnavailableNotifications implements NotificationPort {
       throw UnsupportedError('当前平台尚未连接系统通知。');
   @override
   Future<void> cancel(String id) async {}
+}
+
+/// Optional interaction seam; existing scheduling-only adapters remain valid.
+class NotificationInteraction {
+  const NotificationInteraction({
+    required this.id,
+    required this.payload,
+    this.actionIdentifier = 'default',
+  });
+  final String id;
+  final Map<String, String> payload;
+  final String actionIdentifier;
+}
+
+abstract interface class NotificationInteractionPort {
+  Stream<void> get interactionSignals;
+
+  /// Drains durable responses, including those received before Dart attached.
+  Future<List<NotificationInteraction>> takeInteractions({
+    required String kind,
+    String? vault,
+  });
 }

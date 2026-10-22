@@ -7,6 +7,7 @@ import UserNotifications
 final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
   private let center = UNUserNotificationCenter.current()
   private var channel: FlutterMethodChannel?
+  private let interactionKey = "noteAgent.notificationInteractions.v1"
   private let acceptedKey = "noteAgent.notificationAcceptedIDs.v1"
 
   init(messenger: FlutterBinaryMessenger) {
@@ -43,6 +44,17 @@ final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
           }
         }
       }
+    case "takeInteractions":
+      guard let values = call.arguments as? [String: String], let kind = values["kind"] else {
+        result(FlutterError(code: "notification_arguments", message: "通知类型无效。", details: nil)); return
+      }
+      let responses = UserDefaults.standard.array(forKey: interactionKey) as? [[String: Any]] ?? []
+      func matches(_ response: [String: Any]) -> Bool {
+        guard let payload = response["payload"] as? [String: String] else { return false }
+        return payload["kind"] == kind && (values["vault"] == nil || payload["vault"] == values["vault"])
+      }
+      UserDefaults.standard.set(responses.filter { !matches($0) }, forKey: interactionKey)
+      result(responses.filter { matches($0) })
     case "requestPermission":
       // This method is invoked only by the explicit App button.
       center.requestAuthorization(options: [.alert, .sound]) { _, error in
@@ -106,6 +118,23 @@ final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
       UserDefaults.standard.set(ids, forKey: acceptedKey)
       result(nil)
     default: result(FlutterMethodNotImplemented)
+    }
+  }
+
+  func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                              withCompletionHandler completionHandler: @escaping () -> Void) {
+    let request = response.notification.request
+    guard request.identifier.hasPrefix("note-agent:"),
+          let payload = request.content.userInfo as? [String: String], payload["kind"] != nil else {
+      completionHandler(); return
+    }
+    DispatchQueue.main.async {
+      var responses = UserDefaults.standard.array(forKey: self.interactionKey) as? [[String: Any]] ?? []
+      let action = response.actionIdentifier == UNNotificationDefaultActionIdentifier ? "default" : response.actionIdentifier
+      responses.append(["id": request.identifier, "payload": payload, "actionIdentifier": action])
+      UserDefaults.standard.set(responses, forKey: self.interactionKey)
+      self.channel?.invokeMethod("interactionAvailable", arguments: nil)
+      completionHandler()
     }
   }
 
