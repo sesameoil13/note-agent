@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:cryptography/dart.dart';
+
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
@@ -30,6 +32,7 @@ export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
 part 'text_processing.dart';
+part 'audio_processing.dart';
 part 'note_actions.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
@@ -200,6 +203,33 @@ class NoteWorkspace {
       _mutate(() async => _setup.consent());
   Future<void> clearSetupReports() => _mutate(() async => _setup.clear());
   late final WorkspaceAudioQueue _audioQueue;
+
+  final Map<String, Future<WorkspaceAudioJob>> _audioOperations = {};
+  List<WorkspaceAudioJob> get audioJobs => _audioJobs();
+  Future<WorkspaceAudioJob> prepareAudioProcessing(String sourceId) =>
+      _audioOperation(sourceId, () => _prepareAudio(sourceId));
+  Future<WorkspaceAudioJob> confirmAudioProcessing(String sourceId) =>
+      _audioOperation(sourceId, () => _confirmAudio(sourceId));
+  Future<WorkspaceAudioJob> prepareAudioRetry(String sourceId) =>
+      _audioOperation(sourceId, () => _prepareAudio(sourceId, retry: true));
+  Future<WorkspaceAudioJob> prepareAudioOrganization(String sourceId) =>
+      _audioOperation(sourceId, () => _prepareAudioOrganization(sourceId));
+  Future<WorkspaceAudioJob> cancelAudioProcessing(String sourceId) =>
+      _audioOperation(sourceId, () => _cancelAudio(sourceId));
+  Future<WorkspaceAudioJob> reconcileAudioProcessing(String sourceId) =>
+      _audioOperation(sourceId, () => _reconcileAudio(sourceId));
+  Future<WorkspaceAudioJob> _audioOperation(
+    String sourceId,
+    Future<WorkspaceAudioJob> Function() action,
+  ) {
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _audioOperations.putIfAbsent(
+      sourceId,
+      () => _trackText(action()).whenComplete(() {
+        _audioOperations.remove(sourceId);
+      }),
+    );
+  }
 
   String newAudioSubmissionId() => _randomId();
   List<WorkspaceAudioSource> get audioSources => _audioQueue.sources;
@@ -421,6 +451,10 @@ class NoteWorkspace {
       note_id TEXT PRIMARY KEY, vault TEXT NOT NULL, attachment_id TEXT,
       status TEXT NOT NULL, result TEXT, error TEXT, write_plan TEXT
     )''');
+    database.execute('''CREATE TABLE IF NOT EXISTS audio_jobs (
+      source_id TEXT PRIMARY KEY, vault TEXT NOT NULL, status TEXT NOT NULL,
+      payload TEXT NOT NULL, error TEXT
+    )''');
     database.execute('''CREATE TABLE IF NOT EXISTS text_jobs (
       id TEXT PRIMARY KEY,note_id TEXT NOT NULL,vault TEXT NOT NULL,status TEXT NOT NULL,
       payload TEXT NOT NULL,error TEXT
@@ -499,6 +533,7 @@ class NoteWorkspace {
     await workspace._attachments.recover();
     await workspace._recoverActionChanges();
     await workspace._recoverText();
+    await workspace._recoverAudioJobs();
     return workspace;
   }
 

@@ -26,6 +26,11 @@ class BudgetFixture {
   late HttpServer router;
   bool omitCost = false, generationAvailable = false;
   int generationReads = 0;
+  int audioRequests = 0;
+  String transcript = '明天下午两点整理会议记录。';
+  bool omitAudioCost = false, omitAudioId = false;
+  int audioStatus = 200;
+  Map<String, dynamic>? lastAudioRequest;
   final modelStatuses = <int>[];
   bool malformedContent = false;
   bool reuseGenerationId = false;
@@ -53,7 +58,25 @@ class BudgetFixture {
     );
     router = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     router.listen((r) async {
-      if (r.uri.path == '/chat/completions') {
+      if (r.uri.path == '/audio/transcriptions') {
+        audioRequests++;
+        lastAudioRequest = jsonDecode(
+          await utf8.decoder.bind(r).join(),
+        ) as Map<String, dynamic>;
+        r.response.statusCode = audioStatus;
+        if (!omitAudioId) {
+          r.response.headers.set(
+            'X-Generation-Id',
+            'gen-audio-fixture-$audioRequests',
+          );
+        }
+        r.response.write(
+          jsonEncode({
+            'text': transcript,
+            if (!omitAudioCost) 'usage': {'cost': 0.00001},
+          }),
+        );
+      } else if (r.uri.path == '/chat/completions') {
         final request = jsonDecode(
           await utf8.decoder.bind(r).join(),
         ) as Map<String, dynamic>;

@@ -267,11 +267,14 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       [status.name, jsonEncode(payload), error, id],
     );
   }, accepted: true);
-  Future<WorkspaceTextJob> _processText(String noteId) async {
+  Future<WorkspaceTextJob> _processText(
+    String noteId, {
+    int maxRetries = 3,
+  }) async {
     final job = await prepareTextProcessing(noteId);
     if (job.status != TextProcessingStatus.prepared) return job;
     final payload = _textPayload(job.id);
-    for (var retry = 0; retry < 4; retry++) {
+    for (var retry = 0; retry <= maxRetries; retry++) {
       final attempt = (payload['attempts'] as List).last as String;
       payload.remove('validationError');
       await _saveText(job.id, TextProcessingStatus.sending, payload);
@@ -347,7 +350,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           error: e.message,
         );
         await refreshBudget();
-        if (!e.recoverable || retry == 3) break;
+        if (!e.recoverable || retry == maxRetries) break;
         // A prior send may already have incurred a charge. Its hold is never
         // recycled into a retry: every attempt needs another atomic admission.
         await Future<void>.delayed(Duration(seconds: 1 << retry));
