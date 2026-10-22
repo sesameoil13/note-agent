@@ -27,11 +27,19 @@ class PendingActionsScreen extends StatefulWidget {
 class _PendingActionsScreenState extends State<PendingActionsScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('待确认行动')),
+    appBar: AppBar(title: const Text('待确认行动与主题')),
     body: ListView(
       children: [
-        if (widget.workspace.pendingActionNotes.isEmpty)
-          const Padding(padding: EdgeInsets.all(24), child: Text('没有待确认行动。')),
+        if (widget.workspace.pendingConfirmationNotes.isEmpty)
+          const Padding(padding: EdgeInsets.all(24), child: Text('没有待确认内容。')),
+        for (final suggestion in widget.workspace.pendingTopicSuggestions)
+          _TopicDecisionTile(
+            workspace: widget.workspace,
+            suggestion: suggestion,
+            onChanged: () {
+              if (mounted) setState(() {});
+            },
+          ),
         for (final n in widget.workspace.pendingActionNotes)
           ListTile(
             title: Text(n.title),
@@ -270,6 +278,83 @@ class _ActionConfirmationScreenState extends State<ActionConfirmationScreen> {
         FilledButton(
           onPressed: busy ? null : () => save(NoteKind.todo),
           child: Text(note.actionSavePending ? '重试保存修正' : '保存修正（不调用模型）'),
+        ),
+      ],
+    ),
+  );
+}
+
+class _TopicDecisionTile extends StatefulWidget {
+  const _TopicDecisionTile({
+    required this.workspace,
+    required this.suggestion,
+    required this.onChanged,
+  });
+  final NoteWorkspace workspace;
+  final WorkspaceTopicSuggestion suggestion;
+  final VoidCallback onChanged;
+  @override
+  State<_TopicDecisionTile> createState() => _TopicDecisionTileState();
+}
+
+class _TopicDecisionTileState extends State<_TopicDecisionTile> {
+  bool busy = false;
+  String? error;
+  Future<void> decide(bool approve) async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      if (approve) {
+        await widget.workspace.confirmTopicSuggestion(widget.suggestion.id);
+      } else {
+        await widget.workspace.ignoreTopicSuggestion(widget.suggestion.id);
+      }
+      widget.onChanged();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          error = '主题决定尚未保存，请重试。';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('新主题：${widget.suggestion.title}'),
+        Text(widget.suggestion.reason),
+        Text(
+          '来自：${widget.workspace.notes.firstWhere((n) => n.id == widget.suggestion.noteId).title}',
+        ),
+        if (error != null) Text(error!),
+        Wrap(
+          spacing: 12,
+          children: [
+            OutlinedButton(
+              onPressed: busy ? null : () => decide(true),
+              child: Text(
+                widget.suggestion.creationStarted ? '重试完成主题创建' : '确认创建主题',
+              ),
+            ),
+            TextButton(
+              onPressed: busy || widget.suggestion.creationStarted
+                  ? null
+                  : () => decide(false),
+              child: const Text('忽略主题建议'),
+            ),
+          ],
         ),
       ],
     ),
