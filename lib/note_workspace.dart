@@ -1436,8 +1436,9 @@ $source
             (attempt) =>
                 receipts[attempt] is! Map ||
                 receipts[attempt]['released'] != true,
-          ))
+          )) {
         return false;
+      }
     }
     return true;
   }
