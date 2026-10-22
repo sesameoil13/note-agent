@@ -122,6 +122,45 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   bool _saving = false;
   bool _composing = true;
   bool _recordingPage = false;
+  StreamSubscription<void>? _notificationInteractions;
+  bool _pendingListOpen = false;
+
+  void _watchNotificationInteractions() {
+    unawaited(_notificationInteractions?.cancel());
+    _notificationInteractions = _workspace?.notificationInteractionSignals
+        .listen((_) {
+          unawaited(_takeNotificationNavigation());
+        });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_takeNotificationNavigation());
+    });
+  }
+
+  Future<void> _takeNotificationNavigation() async {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    try {
+      final open = await workspace.takePendingConfirmationNavigation();
+      if (mounted && workspace == _workspace && open) await _openPendingList();
+    } catch (_) {
+      /* An unread response remains available on next resume. */
+    }
+  }
+
+  Future<void> _openPendingList() async {
+    if (_pendingListOpen || _workspace == null) return;
+    _pendingListOpen = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => PendingActionsScreen(workspace: _workspace!),
+        ),
+      );
+    } finally {
+      _pendingListOpen = false;
+      if (mounted) setState(() {});
+    }
+  }
 
   @override
   void initState() {
@@ -130,11 +169,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     _workspace = widget.initialWorkspace;
     _connection = _workspace?.connection ?? WorkspaceConnection.platform();
     if (_workspace == null) _restore();
+    _watchNotificationInteractions();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_notificationInteractions?.cancel());
     _title.dispose();
     _text.dispose();
     _search.dispose();
@@ -148,6 +189,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _resumeAudioQueue();
+      unawaited(_takeNotificationNavigation());
       final workspace = _workspace;
       if (workspace != null) {
         unawaited(
@@ -243,6 +285,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       _pendingCaptureId = null;
     }
     _workspace = workspace;
+    _watchNotificationInteractions();
     _deviceInfo = location.deviceInfo;
     _error = location.authorizationError;
     _selectedId = null;
@@ -368,18 +411,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                     label: Text(
                       '待确认 ${_workspace!.pendingConfirmationNotes.length}',
                     ),
-                    onPressed: _saving
-                        ? null
-                        : () async {
-                            await Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => PendingActionsScreen(
-                                  workspace: _workspace!,
-                                ),
-                              ),
-                            );
-                            if (mounted) setState(() {});
-                          },
+                    onPressed: _saving ? null : _openPendingList,
                   ),
                 ),
               if (_workspace != null && constraints.maxWidth < 720)
