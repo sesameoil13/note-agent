@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -34,6 +35,7 @@ export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 part 'text_processing.dart';
 part 'note_actions.dart';
 part 'note_reminders.dart';
+part 'pending_confirmations.dart';
 part 'note_associations.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
@@ -128,6 +130,20 @@ class NoteWorkspace {
   String? _notificationError;
   String? get notificationError => _notificationError;
   List<WorkspaceReminder> get reminders => _reminderList();
+  List<WorkspacePendingConfirmation> get pendingConfirmationItems =>
+      _pendingConfirmationItems();
+  Stream<void> get notificationInteractionSignals =>
+      _notifications is NotificationInteractionPort
+      ? (_notifications as NotificationInteractionPort).interactionSignals
+      : const Stream.empty();
+  Future<bool> takePendingConfirmationNavigation() {
+    if (_notifications is! NotificationInteractionPort) {
+      return Future.value(false);
+    }
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _trackText(_takePendingConfirmationNavigation());
+  }
+
   Future<void> reconcileReminders() => _mutate(() async {});
   Future<void> requestNotificationPermission() => _mutate(() async {
     await _notifications.requestPermission();
@@ -600,6 +616,9 @@ class NoteWorkspace {
     database.execute(
       'CREATE TABLE IF NOT EXISTS reminder_defaults(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
     );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS pending_notice_state(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
+    );
     workspace._notifications =
         notifications ?? const UnavailableNotifications();
     workspace._setup = WorkspaceSetup(
@@ -663,6 +682,7 @@ class NoteWorkspace {
     await workspace._recoverAssociationChanges();
     await workspace._recoverText();
     await workspace._reconcileReminders();
+    await workspace._reconcilePendingConfirmations();
     return workspace;
   }
 
@@ -841,6 +861,7 @@ class NoteWorkspace {
       try {
         final value = await action();
         await _reconcileReminders();
+        await _reconcilePendingConfirmations();
         return value;
       } finally {
         _pendingMutations--;

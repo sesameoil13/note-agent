@@ -33,7 +33,13 @@ void main() {
     expect(w.reminders.single.actionId, 'buy');
     expect(w.reminders.single.time, DateTime(2026, 10, 22, 9));
     expect(w.reminders.single.status, ReminderStatus.scheduled);
-    expect(notifications.pending.values.single.time, DateTime(2026, 10, 22, 9));
+    expect(
+      notifications.pending.values
+          .where((r) => r.payload['kind'] == 'actionReminder')
+          .single
+          .time,
+      DateTime(2026, 10, 22, 9),
+    );
   });
   test('explicit calendar expressions, periods and late processing use the collection date', () async {
     final root = await Directory.systemTemp.createTemp('reminder-calendar-');
