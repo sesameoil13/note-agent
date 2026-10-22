@@ -1,0 +1,116 @@
+import Cocoa
+import FlutterMacOS
+import UserNotifications
+
+/// Local-only, one-shot system boundary. Successful add is acceptance, not proof
+/// that the OS displayed an alert. No remote/push registration is performed.
+final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
+  private let center = UNUserNotificationCenter.current()
+  private var channel: FlutterMethodChannel?
+  private let acceptedKey = "noteAgent.notificationAcceptedIDs.v1"
+
+  init(messenger: FlutterBinaryMessenger) {
+    super.init()
+    center.delegate = self
+    let channel = FlutterMethodChannel(name: "dev.noteagent/notifications", binaryMessenger: messenger)
+    channel.setMethodCallHandler { [weak self] call, result in
+      self?.handle(call, result: result)
+    }
+    self.channel = channel
+  }
+
+  private func permission(_ settings: UNNotificationSettings) -> String {
+    switch settings.authorizationStatus {
+    case .authorized, .provisional: return "allowed"
+    case .notDetermined: return "notDetermined"
+    case .denied: return "denied"
+    @unknown default: return "unknown"
+    }
+  }
+
+  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "inspect":
+      center.getNotificationSettings { settings in
+        self.center.getPendingNotificationRequests { pending in
+          self.center.getDeliveredNotifications { delivered in
+            DispatchQueue.main.async {
+              result(["permission": self.permission(settings),
+                      "pending": pending.map(\.identifier),
+                      "delivered": delivered.map { $0.request.identifier },
+                      "accepted": UserDefaults.standard.stringArray(forKey: self.acceptedKey) ?? []])
+            }
+          }
+        }
+      }
+    case "requestPermission":
+      // This method is invoked only by the explicit App button.
+      center.requestAuthorization(options: [.alert, .sound]) { _, error in
+        if let error = error {
+          DispatchQueue.main.async { result(FlutterError(code: "notification_permission", message: error.localizedDescription, details: nil)) }
+          return
+        }
+        self.center.getNotificationSettings { settings in
+          DispatchQueue.main.async { result(self.permission(settings)) }
+        }
+      }
+    case "schedule":
+      guard let values = call.arguments as? [String: Any],
+            let id = values["id"] as? String, id.hasPrefix("note-agent:"),
+            let title = values["title"] as? String,
+            let body = values["body"] as? String,
+            let millis = values["timeMs"] as? NSNumber,
+            let immediate = values["immediate"] as? Bool,
+            let payload = values["payload"] as? [String: String] else {
+        result(FlutterError(code: "notification_arguments", message: "提醒计划无效。", details: nil)); return
+      }
+      center.getNotificationSettings { settings in
+        guard self.permission(settings) == "allowed" else {
+          DispatchQueue.main.async { result(FlutterError(code: "notification_denied", message: "系统通知未允许，计划仍保留在 App。", details: nil)) }; return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = payload
+        let date = Date(timeIntervalSince1970: millis.doubleValue / 1000)
+        let trigger: UNNotificationTrigger
+        if immediate || date <= Date() {
+          trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        } else {
+          var calendar = Calendar(identifier: .gregorian)
+          calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+          var components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+          components.timeZone = calendar.timeZone
+          trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        }
+        self.center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger)) { error in
+          DispatchQueue.main.async {
+            if let error = error {
+              result(FlutterError(code: "notification_schedule", message: error.localizedDescription, details: nil)); return
+            }
+            var ids = Set(UserDefaults.standard.stringArray(forKey: self.acceptedKey) ?? [])
+            ids.insert(id)
+            UserDefaults.standard.set(Array(ids), forKey: self.acceptedKey)
+            result(nil)
+          }
+        }
+      }
+    case "cancel":
+      guard let values = call.arguments as? [String: String], let id = values["id"], id.hasPrefix("note-agent:") else {
+        result(FlutterError(code: "notification_arguments", message: "提醒标识无效。", details: nil)); return
+      }
+      center.removePendingNotificationRequests(withIdentifiers: [id])
+      center.removeDeliveredNotifications(withIdentifiers: [id])
+      let ids = (UserDefaults.standard.stringArray(forKey: acceptedKey) ?? []).filter { $0 != id }
+      UserDefaults.standard.set(ids, forKey: acceptedKey)
+      result(nil)
+    default: result(FlutterMethodNotImplemented)
+    }
+  }
+
+  func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                              withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+    completionHandler([.banner, .list, .sound])
+  }
+}
