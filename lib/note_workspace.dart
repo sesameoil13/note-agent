@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 
+import 'notifications.dart';
+export 'notifications.dart';
 import 'note_files.dart';
 import 'workspace_setup.dart';
 export 'workspace_setup.dart' hide WorkspaceSetup;
@@ -31,6 +33,7 @@ export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
 part 'text_processing.dart';
 part 'note_actions.dart';
+part 'note_reminders.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -113,6 +116,103 @@ class NoteWorkspace {
     this.connection,
   );
 
+  NotificationPort _notifications = const UnavailableNotifications();
+  NotificationPermission _notificationPermission =
+      NotificationPermission.unknown;
+  NotificationPermission get notificationPermission => _notificationPermission;
+  String? _notificationError;
+  String? get notificationError => _notificationError;
+  List<WorkspaceReminder> get reminders => _reminderList();
+  Future<void> reconcileReminders() => _mutate(() async {});
+  Future<void> requestNotificationPermission() => _mutate(() async {
+    await _notifications.requestPermission();
+  });
+  ReminderDefaults get reminderDefaults {
+    final rows = _database.select(
+      'SELECT payload FROM reminder_defaults WHERE vault=?',
+      [vaultStorage.identity],
+    );
+    return rows.isEmpty
+        ? const ReminderDefaults()
+        : ReminderDefaults.fromJson(
+            (jsonDecode(rows.single['payload'] as String) as Map)
+                .cast<String, dynamic>(),
+          );
+  }
+
+  Future<void> setReminderDefaults(ReminderDefaults defaults) => _mutate(
+    () async {
+      if (defaults.toJson().values.any((v) => v < 0 || v >= 1440)) {
+        throw ArgumentError('提醒时间必须在 00:00–23:59。');
+      }
+      _database.execute(
+        'INSERT OR REPLACE INTO reminder_defaults(vault,payload) VALUES (?,?)',
+        [vaultStorage.identity, jsonEncode(defaults.toJson())],
+      );
+    },
+  );
+  ReminderDefaultsPreview previewReminderDefaults() =>
+      _previewReminderDefaults();
+  Future<void> applyReminderDefaults(
+    ReminderDefaultsPreview preview,
+  ) => _mutate(() async {
+    final current = _previewReminderDefaults();
+    if (preview._fingerprint != current._fingerprint) {
+      throw StateError('提醒计划已变化，请重新预览后确认。');
+    }
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      for (final change in current.changes) {
+        final row = _database.select(
+          'SELECT payload FROM reminder_plans WHERE vault=? AND action_id=?',
+          [vaultStorage.identity, change._key],
+        ).single;
+        final v = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
+        final oldId = v['id'] as String;
+        v['revision'] = (v['revision'] as int) + 1;
+        v['id'] =
+            '${oldId.substring(0, oldId.lastIndexOf(':'))}:${v['revision']}';
+        v['time'] = change.time.toIso8601String();
+        v['status'] = ReminderStatus.pending.name;
+        v['immediate'] = !change.time.isAfter(_clock());
+        v['cancel'] = [...?v['cancel'] as List?, oldId];
+        _saveReminder(v);
+      }
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
+  });
+  Future<void> setActionReminderTime(
+    String noteId,
+    String actionId,
+    DateTime? time,
+  ) => _mutate(() async {
+    final note = notes.firstWhere((n) => n.id == noteId);
+    final action = note.actions.firstWhere((a) => a.id == actionId);
+    if (!action.actionConfirmed) throw StateError('请先确认行动，再设置提醒。');
+    await _resolveActions(
+      noteId,
+      kind: note.kind,
+      actions: [
+        for (final a in note.actions)
+          if (a.id != actionId)
+            a
+          else
+            WorkspaceAction(
+              id: a.id,
+              text: a.text,
+              decision: a.decision,
+              reason: a.reason,
+              timeExpression: time?.toLocal().toIso8601String() ?? '',
+              timeStatus: time == null
+                  ? ActionTimeStatus.absent
+                  : ActionTimeStatus.explicit,
+            ),
+      ],
+    );
+  });
   WorkspaceBudgetState _budget = const WorkspaceBudgetState();
   WorkspaceBudgetState get budget => _budget;
   Future<void> refreshBudget() => _refreshTextBudget();
@@ -372,6 +472,7 @@ class NoteWorkspace {
     AudioPlatform? audioPlatform,
     AudioSourceInspector? audioInspector,
     AudioProcessor? audioProcessor,
+    NotificationPort? notifications,
   }) async {
     if (vaultStorage == null) {
       if (vaultDirectory == null || !await vaultDirectory.exists()) {
@@ -440,6 +541,14 @@ class NoteWorkspace {
       createId ?? _randomId,
       connection ?? WorkspaceConnection.platform(),
     );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS reminder_plans(vault TEXT NOT NULL,action_id TEXT NOT NULL,removed INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,action_id))',
+    );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS reminder_defaults(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
+    );
+    workspace._notifications =
+        notifications ?? const UnavailableNotifications();
     workspace._setup = WorkspaceSetup(
       database,
       vaultStorage.identity,
@@ -499,6 +608,7 @@ class NoteWorkspace {
     await workspace._attachments.recover();
     await workspace._recoverActionChanges();
     await workspace._recoverText();
+    await workspace._reconcileReminders();
     return workspace;
   }
 
@@ -662,7 +772,9 @@ class NoteWorkspace {
     _pendingMutations++;
     final result = _mutations.then((_) async {
       try {
-        return await action();
+        final value = await action();
+        await _reconcileReminders();
+        return value;
       } finally {
         _pendingMutations--;
       }
