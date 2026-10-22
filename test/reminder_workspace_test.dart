@@ -151,6 +151,107 @@ void main() {
     expect(w.reminders.any((r) => r.timeNeedsConfirmation), false);
   });
 
+  test('ambiguous and contradictory daypart clocks require confirmation instead of confidently setting noon', () async {
+    final root = await Directory.systemTemp.createTemp('reminder-daypart-');
+    final port = _Notifications();
+    final w = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: await Directory('${root.path}/vault').create(),
+      notifications: port,
+      clock: () => DateTime(2026, 10, 22, 8),
+    );
+    addTearDown(() async {
+      await w.close();
+      await root.delete(recursive: true);
+    });
+    final n = await w.captureText(title: '时间核对', text: '保留时间原文');
+    final samples = [
+      '明天晚上十二点',
+      '明天上午十三点',
+      '明天晚上两点',
+      '明天下午23点',
+      '明天下午十一点',
+      'tomorrow 13 AM',
+      '2026-02-29 09:30',
+      '2026-04-31 10:00',
+    ];
+    await w.resolveNoteActions(
+      n.id,
+      kind: NoteKind.todo,
+      actions: [
+        for (var i = 0; i < samples.length; i++)
+          WorkspaceAction(
+            id: 'a$i',
+            text: '事项$i',
+            decision: ActionDecision.confirmed,
+            timeStatus: ActionTimeStatus.explicit,
+            timeExpression: samples[i],
+          ),
+      ],
+    );
+    for (final r in w.reminders) {
+      expect(r.time, DateTime(2026, 10, 23, 9), reason: r.actionId);
+      expect(r.explicitTime, false, reason: r.actionId);
+      expect(r.timeNeedsConfirmation, true, reason: r.actionId);
+    }
+    expect(w.notes.single.actions.map((a) => a.timeExpression), samples);
+  });
+
+  test('unambiguous meridiem clocks and ISO seconds preserve their exact intended instant', () async {
+    final root = await Directory.systemTemp.createTemp('reminder-exact-clock-');
+    final port = _Notifications();
+    final w = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: await Directory('${root.path}/vault').create(),
+      notifications: port,
+      clock: () => DateTime(2026, 10, 22, 8),
+    );
+    addTearDown(() async {
+      await w.close();
+      await root.delete(recursive: true);
+    });
+    final n = await w.captureText(title: '准确时间', text: '保留准确时间');
+    final samples = [
+      'tomorrow 12 AM',
+      'tomorrow 12 PM',
+      'tomorrow 9:15 PM',
+      '明天下午三点',
+      '明天晚上八点',
+      '2026-10-25T10:30:45+08:00',
+      '2026-10-25T10:30:45.123456Z',
+    ];
+    await w.resolveNoteActions(
+      n.id,
+      kind: NoteKind.todo,
+      actions: [
+        for (var i = 0; i < samples.length; i++)
+          WorkspaceAction(
+            id: 'a$i',
+            text: '事项$i',
+            decision: ActionDecision.confirmed,
+            timeStatus: ActionTimeStatus.explicit,
+            timeExpression: samples[i],
+          ),
+      ],
+    );
+    expect(
+      {for (final r in w.reminders) r.actionId: r.time},
+      {
+        'a0': DateTime(2026, 10, 23, 0),
+        'a1': DateTime(2026, 10, 23, 12),
+        'a2': DateTime(2026, 10, 23, 21, 15),
+        'a3': DateTime(2026, 10, 23, 15),
+        'a4': DateTime(2026, 10, 23, 20),
+        'a5': DateTime.utc(2026, 10, 25, 2, 30, 45).toLocal(),
+        'a6': DateTime.utc(2026, 10, 25, 10, 30, 45, 123, 456).toLocal(),
+      },
+    );
+    expect(
+      w.reminders.every((r) => r.explicitTime && !r.timeNeedsConfirmation),
+      true,
+    );
+  });
+
   test('new defaults preserve existing plans until a confirmed preview and never override exact times', () async {
     final root = await Directory.systemTemp.createTemp('reminder-defaults-');
     final port = _Notifications();

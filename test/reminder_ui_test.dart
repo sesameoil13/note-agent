@@ -70,7 +70,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(
         find.widgetWithText(TextField, '提醒时间（YYYY-MM-DD HH:mm）'),
-        '2026-10-29 16:45',
+        '2026-10-29 16:45:30.123456',
       );
       await tester.runAsync(() async {
         await tester.tap(find.text('确认新时间'));
@@ -81,7 +81,10 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 50)),
       );
       await tester.pumpAndSettle();
-      expect(w.reminders.single.time, DateTime(2026, 10, 29, 16, 45));
+      expect(
+        w.reminders.single.time,
+        DateTime(2026, 10, 29, 16, 45, 30, 123, 456),
+      );
       expect(w.reminders.single.explicitTime, true);
 
       expect(tester.takeException(), isNull);

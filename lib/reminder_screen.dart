@@ -5,7 +5,16 @@ import 'note_workspace.dart';
 String reminderTimeLabel(DateTime time) {
   final t = time.toLocal();
   String two(int n) => n.toString().padLeft(2, '0');
-  return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  var label =
+      '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  if (t.second != 0 || t.millisecond != 0 || t.microsecond != 0) {
+    label += ':${two(t.second)}';
+    if (t.millisecond != 0 || t.microsecond != 0) {
+      label += '.${t.millisecond.toString().padLeft(3, '0')}';
+      if (t.microsecond != 0) label += t.microsecond.toString().padLeft(3, '0');
+    }
+  }
+  return label;
 }
 
 class ReminderScreen extends StatefulWidget {
@@ -135,8 +144,20 @@ class _ReminderScreenState extends State<ReminderScreen> {
     );
     if (value == null || !mounted) return;
     await run(() async {
+      final entered = RegExp(
+        r'^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?$',
+      ).firstMatch(value.trim());
       final t = DateTime.tryParse(value.trim());
-      if (t == null || reminderTimeLabel(t) != value.trim()) {
+      final fraction = (entered?[7] ?? '').padRight(6, '0');
+      if (entered == null ||
+          t == null ||
+          t.year != int.parse(entered[1]!) ||
+          t.month != int.parse(entered[2]!) ||
+          t.day != int.parse(entered[3]!) ||
+          t.hour != int.parse(entered[4]!) ||
+          t.minute != int.parse(entered[5]!) ||
+          t.second != (int.tryParse(entered[6] ?? '') ?? 0) ||
+          t.millisecond * 1000 + t.microsecond != int.parse(fraction)) {
         throw ArgumentError('请填写有效的年月日和时间。');
       }
       await widget.workspace.setActionReminderTime(

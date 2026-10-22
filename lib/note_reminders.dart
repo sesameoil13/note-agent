@@ -377,19 +377,78 @@ _ReminderTime _reminderTime(
       }
     }
   }
+  final englishClock = RegExp(r'^(.*?)\s*(am|pm)$').firstMatch(rest);
+  final meridiem = englishClock?[2];
+  if (englishClock != null) {
+    rest = englishClock[1]!.trim();
+    if (RegExp(r'^\d{1,2}$').hasMatch(rest)) rest = '$rest:00';
+  }
   final exact = RegExp(
-    r'^(?:(上午|下午|晚上)\s*)?(\d{1,2})(?::|：|点|時|时)(\d{1,2})?(?:分)?(?::([0-5]\d)(?:\.\d+)?)?(z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?$',
+    r'^(?:(上午|下午|晚上)\s*)?(\d{1,2})(?:(?::|：)(\d{1,2})|(?:点|時|时)(\d{1,2})?(?:分)?)(?::([0-5]\d)(\.\d+)?)?(z|[+-](?:[01]\d|2[0-3]):?[0-5]\d)?$',
   ).firstMatch(rest);
   if (exact != null) {
     var hour = int.parse(exact[2]!);
-    final minute = int.tryParse(exact[3] ?? '') ?? 0;
-    if ((exact[1] == '下午' || exact[1] == '晚上') && hour < 12) hour += 12;
-    if (hour < 24 && minute < 60) {
-      var value = DateTime(day.year, day.month, day.day, hour, minute);
-      if (exact[5] != null && date != null) {
+    final minute = int.tryParse(exact[3] ?? exact[4] ?? '') ?? 0;
+    final second = int.tryParse(exact[5] ?? '') ?? 0;
+    final fraction = (exact[6]?.substring(1) ?? '')
+        .padRight(6, '0')
+        .substring(0, 6);
+    final microseconds = int.parse(fraction);
+    final daypart = exact[1];
+    var unambiguous = hour < 24 && minute < 60;
+    if (meridiem != null) {
+      unambiguous = unambiguous && hour >= 1 && hour <= 12;
+      if (daypart != null) {
+        unambiguous =
+            unambiguous &&
+            hour != 12 &&
+            (daypart == '上午' ? meridiem == 'am' : meridiem == 'pm');
+      }
+      hour = hour % 12 + (meridiem == 'pm' ? 12 : 0);
+      if (daypart == '晚上' && hour < 18) unambiguous = false;
+      if (daypart == '下午' && (hour < 13 || hour > 17)) unambiguous = false;
+    } else if (daypart == '上午') {
+      unambiguous = unambiguous && hour >= 1 && hour <= 11;
+    } else if (daypart == '下午') {
+      // Chinese daypart + twelve does not settle the noon/midnight boundary.
+      unambiguous =
+          unambiguous && (hour >= 1 && hour <= 5 || hour >= 13 && hour <= 17);
+      if (hour < 12) hour += 12;
+    } else if (daypart == '晚上') {
+      // Early single-digit night clocks may refer to the following day.
+      // Keep the original expression for confirmation instead of guessing.
+      unambiguous =
+          unambiguous && (hour >= 6 && hour <= 11 || hour >= 18 && hour <= 23);
+      if (hour < 12) hour += 12;
+    }
+    final zone = exact[7];
+    if (zone != null && date == null) unambiguous = false;
+    if (unambiguous) {
+      DateTime value;
+      if (zone != null) {
         value = DateTime.parse(
-          '${date[1]}-${date[2]!.padLeft(2, '0')}-${date[3]!.padLeft(2, '0')}T${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:00${exact[5]}',
+          '${date![1]}-${date[2]!.padLeft(2, '0')}-${date[3]!.padLeft(2, '0')}T${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}:${second.toString().padLeft(2, '0')}.$fraction$zone',
         ).toLocal();
+      } else {
+        value = DateTime(
+          day.year,
+          day.month,
+          day.day,
+          hour,
+          minute,
+          second,
+          microseconds ~/ 1000,
+          microseconds % 1000,
+        );
+        // Reject calendar normalization, including nonexistent local wall times.
+        if (value.year != day.year ||
+            value.month != day.month ||
+            value.day != day.day ||
+            value.hour != hour ||
+            value.minute != minute ||
+            value.second != second) {
+          return _reminderTime(const WorkspaceAction(text: ''), now, defaults);
+        }
       }
       return _ReminderTime(value, true, 'explicit');
     }
