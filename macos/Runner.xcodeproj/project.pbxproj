@@ -21,6 +21,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		A19000010000000000000001 /* NativeNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = A19000010000000000000002 /* NativeNotifications.swift */; };
 		A12C00020000000000000001 /* SecureInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12C00020000000000000002 /* SecureInput.swift */; };
 		A12C00010000000000000001 /* SecureCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12C00010000000000000002 /* SecureCredentials.swift */; };
 		A80000000000000000000001 /* NativeAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A80000000000000000000002 /* NativeAudio.swift */; };
@@ -64,6 +65,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A19000010000000000000002 /* NativeNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeNotifications.swift; sourceTree = "<group>"; };
 		A12C00020000000000000002 /* SecureInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureInput.swift; sourceTree = "<group>"; };
 		A12C00010000000000000002 /* SecureCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureCredentials.swift; sourceTree = "<group>"; };
 		A80000000000000000000002 /* NativeAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeAudio.swift; sourceTree = "<group>"; };
@@ -177,6 +179,7 @@
 				A12C00010000000000000002 /* SecureCredentials.swift */,
 				A12C00020000000000000002 /* SecureInput.swift */,
 				A80000000000000000000002 /* NativeAudio.swift */,
+				A19000010000000000000002 /* NativeNotifications.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -367,6 +370,7 @@
 				A12C00010000000000000001 /* SecureCredentials.swift in Sources */,
 				A12C00020000000000000001 /* SecureInput.swift in Sources */,
 				A80000000000000000000001 /* NativeAudio.swift in Sources */,
+				A19000010000000000000001 /* NativeNotifications.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);

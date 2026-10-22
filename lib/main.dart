@@ -17,6 +17,8 @@ import 'document_panel.dart';
 import 'setup_screen.dart';
 import 'budget_panel.dart';
 import 'action_confirmation_screen.dart';
+import 'reminder_screen.dart';
+import 'notification_platform.dart';
 
 void main() => runApp(const NoteAgentApp());
 
@@ -144,7 +146,22 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _resumeAudioQueue();
+    if (state == AppLifecycleState.resumed) {
+      _resumeAudioQueue();
+      final workspace = _workspace;
+      if (workspace != null) {
+        unawaited(
+          workspace
+              .reconcileReminders()
+              .then((_) {
+                if (mounted) setState(() {});
+              })
+              .catchError((Object e) {
+                if (mounted) setState(() => _error = _errorMessage(e));
+              }),
+        );
+      }
+    }
   }
 
   void _resumeAudioQueue() {
@@ -210,6 +227,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       vaultDirectory: location.vaultDirectory,
       vaultStorage: location.vaultStorage,
       connection: _connection,
+      notifications: Platform.isMacOS ? MethodChannelNotifications() : null,
       audioPlatform:
           (Platform.isMacOS && location.vaultDirectory != null) ||
               Platform.isAndroid
@@ -467,6 +485,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                   },
             label: 'AI 与共享预算',
             icon: const Icon(Icons.account_balance_wallet_outlined),
+          ),
+        if (_workspace != null)
+          AccessibleIconButton(
+            onPressed: _saving || _loading
+                ? null
+                : () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => ReminderScreen(workspace: _workspace!),
+                      ),
+                    );
+                    if (mounted) setState(() {});
+                  },
+            label: '提醒与默认时间',
+            icon: const Icon(Icons.notifications_outlined),
           ),
         AccessibleIconButton(
           onPressed: _saving || _loading ? null : _showSetup,
