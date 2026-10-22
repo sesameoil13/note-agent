@@ -75,9 +75,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
     final jobs = w.textJobs;
     final notes = w.notes.where(
       (n) =>
-          n.status == NoteStatus.localSaved &&
-          n.document == null &&
-          n.attachments.isEmpty &&
+          (n.document != null || n.attachments.isEmpty) &&
           (widget.noteId == null || n.id == widget.noteId),
     );
     return Scaffold(
@@ -157,11 +155,14 @@ class _BudgetPanelState extends State<BudgetPanel> {
           for (final note in notes) ...[
             const SizedBox(height: 20),
             Text(note.title, style: Theme.of(context).textTheme.titleMedium),
+            if (w.textProcessingReadiness(note.id).message.isNotEmpty)
+              Text(w.textProcessingReadiness(note.id).message),
             if (!jobs.any((j) => j.noteId == note.id))
               Align(
                 alignment: Alignment.centerLeft,
                 child: OutlinedButton(
-                  onPressed: _busy
+                  onPressed:
+                      _busy || !w.textProcessingReadiness(note.id).canPrepare
                       ? null
                       : () => _run(() async {
                           await w.prepareTextProcessing(note.id);

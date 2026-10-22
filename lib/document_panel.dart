@@ -196,7 +196,11 @@ class _DocumentStatusViewState extends State<DocumentStatusView> {
           ),
         if (!active && !saving)
           OutlinedButton(
-            onPressed: _busy ? null : _retry,
+            onPressed:
+                _busy ||
+                    !widget.workspace.canRetryDocumentExtraction(widget.note.id)
+                ? null
+                : _retry,
             child: Text(
               doc.attachmentId == null
                   ? '重新选择文档'
@@ -205,6 +209,10 @@ class _DocumentStatusViewState extends State<DocumentStatusView> {
                   : '重新提取文档',
             ),
           ),
+        if (!active &&
+            !saving &&
+            !widget.workspace.canRetryDocumentExtraction(widget.note.id))
+          const Text('已有 AI 任务，保留当前提取版本和文档原件。'),
       ],
     );
   }

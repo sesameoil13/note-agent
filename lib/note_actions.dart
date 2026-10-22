@@ -153,6 +153,8 @@ extension _WorkspaceActions on NoteWorkspace {
       notePath: note.notePath,
       sourcePath: note.sourcePath,
       status: note.status,
+      document: note.document,
+      attachments: note.attachments,
       presentation: presentation,
     );
     // Preserve existing association and source entries (including attachments),
