@@ -150,7 +150,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
           ),
           const Divider(height: 32),
           const Text(
-            '文字整理使用固定 DeepSeek V4.1 Flash。预估只读取公开费率并预留共享额度；确认发送后才调用模型。网络临时失败最多重试 3 次，每次单独预留。已发送的未知费用不会当作退款。',
+            '文字整理使用固定 DeepSeek V4.1 Flash。为匹配关联，同时发送最多 12 条本库笔记的标题与各 400 字以内的正文片段。预估只读取公开费率并预留共享额度；确认发送后才调用模型。网络临时失败最多重试 3 次，每次单独预留。已发送的未知费用不会当作退款。',
           ),
           if (_busy) const LinearProgressIndicator(),
           if (_error != null) Text(_error!),
