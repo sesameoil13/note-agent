@@ -14,6 +14,7 @@ add_executable(${BINARY_NAME} WIN32
   "workspace_platform.cpp"
   "secure_credentials.cpp"
   "native_paths.cpp"
+  "native_audio.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"
   "runner.exe.manifest"
@@ -40,7 +41,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
-target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "ole32.lib" "advapi32.lib" "crypt32.lib" "uuid.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "ole32.lib" "advapi32.lib" "crypt32.lib" "uuid.lib"
+  "mf.lib" "mfplat.lib" "mfreadwrite.lib" "mfuuid.lib")
 target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 

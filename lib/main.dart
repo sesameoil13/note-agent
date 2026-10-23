@@ -331,7 +331,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           ? _systemNotifications()
           : null,
       audioPlatform:
-          (Platform.isMacOS && location.vaultDirectory != null) ||
+          ((Platform.isMacOS || Platform.isWindows) &&
+                  location.vaultDirectory != null) ||
               Platform.isAndroid
           ? MethodChannelAudioPlatform()
           : null,
