@@ -31,8 +31,13 @@ class NotificationSnapshot {
     this.pendingIds = const {},
     this.acceptedIds = const {},
     this.deliveredIds = const {},
+    this.exactTiming = true,
   });
   final NotificationPermission permission;
+
+  /// False when the OS may defer alarms (Android without exact-alarm access);
+  /// reminders are still scheduled but may arrive late.
+  final bool exactTiming;
   final Set<String> pendingIds, acceptedIds, deliveredIds;
 }
 
