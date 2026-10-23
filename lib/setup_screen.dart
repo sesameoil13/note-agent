@@ -15,16 +15,117 @@ class SetupScreen extends StatefulWidget {
     super.key,
     required this.workspace,
     required this.connection,
+    this.vaultAuthorizationError,
   });
   final NoteWorkspace? workspace;
   final WorkspaceConnection connection;
+  final String? vaultAuthorizationError;
   @override
   State<SetupScreen> createState() => _SetupScreenState();
 }
 
+const _evidenceLabels = {
+  SetupEvidence.notDone: '未完成',
+  SetupEvidence.needsAttention: '需要处理',
+  SetupEvidence.userReported: '你已核对',
+  SetupEvidence.appVerified: 'App 已验证',
+};
+
+const _stepLabels = {
+  SetupStep.aiConnection: 'AI 连接',
+  SetupStep.devicePairing: '设备配对',
+  SetupStep.vault: '本地笔记库',
+  SetupStep.permissions: '录音与通知',
+  SetupStep.obsidian: 'Obsidian 与 Sync',
+  SetupStep.backup: '旧库备份',
+};
+
 class _SetupScreenState extends State<SetupScreen> {
   bool _busy = false;
   String? _error;
+  String? _backupResult;
+  final _platform = WorkspacePlatform();
+
+  Widget _progress(BuildContext context) {
+    final steps = describeSetup(
+      setup: widget.workspace?.setup,
+      connection: widget.connection.state,
+      pairing: widget.connection.pairing,
+      vaultName: widget.workspace?.vaultStorage.displayName,
+      vaultAuthorizationError: widget.vaultAuthorizationError,
+    );
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '设置进度',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+        ),
+        const Text('“App 已验证”是本机实际检测到的；“你已核对”只记录你的确认。'),
+        for (final step in steps)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(_stepLabels[step.step]!),
+            subtitle: Text(step.detail),
+            trailing: Text(
+              _evidenceLabels[step.evidence]!,
+              style: TextStyle(
+                color: step.evidence == SetupEvidence.needsAttention
+                    ? scheme.error
+                    : null,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _compareBackup() async {
+    final workspace = widget.workspace!;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final old = await _platform.chooseFolderForReading('选择旧库文件夹（只读）');
+      final backup = old == null
+          ? null
+          : await _platform.chooseFolderForReading('选择旧库的完整备份文件夹（只读）');
+      if (old == null || backup == null) {
+        _backupResult = '未选择文件夹，未进行核对。';
+      } else {
+        final r = await workspace.checkOldVaultBackup(
+          oldVault: old,
+          backup: backup,
+        );
+        String mb(int bytes) => (bytes / 1048576).toStringAsFixed(1);
+        final head =
+            'App 已核对：旧库 ${r.oldFileCount} 个文件 / ${mb(r.oldBytes)} MB；'
+            '备份 ${r.backupFileCount} 个文件 / ${mb(r.backupBytes)} MB；'
+            '${r.includesObsidianConfig ? '包含 .obsidian 设置' : '未包含 .obsidian 设置'}。';
+        String list(List<String> items) =>
+            items.take(5).join('、') +
+            (items.length > 5 ? ' 等 ${items.length} 个' : '');
+        _backupResult = r.complete
+            ? head
+            : [
+                '$head\n备份不完整，已撤回之前的备份核对与名额确认。',
+                if (r.missing.isNotEmpty) '缺少：${list(r.missing)}',
+                if (r.sizeMismatched.isNotEmpty)
+                  '大小不一致：${list(r.sizeMismatched)}',
+              ].join('\n');
+      }
+    } on BackupCheckRefused catch (refused) {
+      _backupResult = '未完成核对：${refused.message}';
+    } catch (_) {
+      _backupResult = '无法读取所选文件夹，请重新选择。旧库与备份未被改动。';
+    }
+    if (mounted) setState(() => _busy = false);
+  }
+
   Future<void> _run(Future<void> Function() action) async {
     setState(() {
       _busy = true;
@@ -103,6 +204,8 @@ class _SetupScreenState extends State<SetupScreen> {
                   _error!,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
+              const SizedBox(height: 16),
+              _progress(context),
               const SizedBox(height: 24),
               const Text(
                 '1 / 连接与设备',
@@ -201,6 +304,17 @@ class _SetupScreenState extends State<SetupScreen> {
                 const Text(
                   '完整备份应包括所有 Markdown、截图与其他附件、隐藏的 .obsidian 文件夹及需要的其他文件。复制到与同步库分开的本地位置，打开抽查正文和图片，并核对文件数量或大小。Sync 或版本历史不能代替这份独立备份。\n保留旧库为后续 AI 导入的本地副本；本轮不会批量导入、改写或删除旧库。',
                 ),
+                if (_platform.supportsFolderComparison) ...[
+                  OutlinedButton(
+                    onPressed: _busy ? null : _compareBackup,
+                    child: const Text('选择旧库与备份，只读核对'),
+                  ),
+                  const Text(
+                    '依次选择旧库与备份文件夹。App 只读取文件清单与大小，不复制、移动或删除任何文件，也不会自己寻找旧库。',
+                  ),
+                ] else
+                  const Text('本设备不提供文件夹比对；可在 Mac 上让 App 只读核对，或自行核对后勾选。'),
+                if (_backupResult != null) Text(_backupResult!),
                 _check(SetupCheck.backupComplete, '我已制作并检查独立的完整旧库备份'),
                 _check(
                   SetupCheck.localImportCopyRetained,

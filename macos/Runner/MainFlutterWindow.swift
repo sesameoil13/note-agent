@@ -34,6 +34,7 @@ class MainFlutterWindow: NSWindow {
       switch call.method {
       case "restoreLocation": self.restoreLocation(result)
       case "chooseLocation": self.chooseLocation(result)
+      case "chooseFolder": self.chooseFolder(call.arguments, result)
       case "openInObsidian": self.openInObsidian(call.arguments, result)
       case "chooseSourceFile": self.chooseSourceFile(call.arguments, result)
       case "releaseSourceFile": self.releaseSourceFile(call.arguments, result)
@@ -98,6 +99,23 @@ class MainFlutterWindow: NSWindow {
       } catch {
         result(FlutterError(code: "directory_access", message: "无法获得笔记库读写授权，请选择可写目录。", details: nil))
       }
+    }
+  }
+
+  // One-off read-only pick for the old-vault backup comparison. Not persisted
+  // as a bookmark and never activated as the App's vault.
+  private func chooseFolder(_ arguments: Any?, _ result: @escaping FlutterResult) {
+    let panel = NSOpenPanel()
+    panel.title = (arguments as? [String: Any])?["title"] as? String ?? "选择文件夹"
+    panel.message = "App 只读取文件清单与大小，不复制、移动或删除任何文件。"
+    panel.prompt = "只读核对"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.canCreateDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.beginSheetModal(for: self) { response in
+      guard response == .OK, let url = panel.url else { result(nil); return }
+      result(url.resolvingSymlinksInPath().path)
     }
   }
 

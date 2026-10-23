@@ -260,7 +260,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     try {
       final location = await _platform.restoreLocation();
       _deviceInfo = location.deviceInfo;
-      _error = location.authorizationError;
+      _error = _vaultAuthorizationError = location.authorizationError;
       if (location.hasVault) await _open(location);
     } catch (error) {
       _error = _errorMessage(error);
@@ -290,11 +290,18 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     if (mounted) setState(() => _loading = false);
   }
 
+  /// Kept apart from transient errors so the guide can mark the step.
+  String? _vaultAuthorizationError;
+
   Future<void> _showSetup() async {
     final action = await Navigator.of(context).push<SetupAction>(
       MaterialPageRoute(
         builder: (_) =>
-            SetupScreen(workspace: _workspace, connection: _connection),
+            SetupScreen(
+              workspace: _workspace,
+              connection: _connection,
+              vaultAuthorizationError: _vaultAuthorizationError,
+            ),
       ),
     );
     if (!mounted) return;
@@ -328,7 +335,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     _workspace = workspace;
     _watchNotificationInteractions();
     _deviceInfo = location.deviceInfo;
-    _error = location.authorizationError;
+    _error = _vaultAuthorizationError = location.authorizationError;
     _selectedId = null;
     _editingNoteId = null;
     _search.clear();

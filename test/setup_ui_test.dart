@@ -94,6 +94,13 @@ void main() {
       expect(find.textContaining('笔记库授权已失效'), findsOneWidget);
       await tester.tap(find.text('开始设置'));
       await tester.pumpAndSettle();
+      expect(find.text('需要处理'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('选择或重新授权本地库'),
+        300,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('选择或重新授权本地库'));
       await tester.pumpAndSettle();
       expect(find.text('未更改笔记库，输入已保留。'), findsOneWidget);
