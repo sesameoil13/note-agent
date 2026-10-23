@@ -63,4 +63,35 @@ void main() {
     expect(signals, 1);
     expect(calls.map((c) => c.method), ['takeInteractions']);
   });
+  test('native adapter reports deferred alarm timing and forwards network-return signals', () async {
+    const channel = MethodChannel('dev.noteagent/notifications');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      return {
+        'permission': 'allowed',
+        'pending': ['a'],
+        'accepted': ['a'],
+        'delivered': [],
+        'exactTiming': false,
+      };
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+    final port = MethodChannelNotifications();
+    final snapshot = await port.inspect();
+    expect(snapshot.exactTiming, isFalse);
+    expect(snapshot.pendingIds, {'a'});
+    var network = 0;
+    final subscription = port.connectivitySignals.listen((_) => network++);
+    addTearDown(subscription.cancel);
+    await messenger.handlePlatformMessage(
+      channel.name,
+      const StandardMethodCodec().encodeMethodCall(
+        const MethodCall('networkAvailable'),
+      ),
+      (ByteData? _) {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(network, 1);
+  });
 }
