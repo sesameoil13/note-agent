@@ -121,7 +121,16 @@ void main() {
             () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
             const Duration(seconds: 90),
           );
-          await tester.pumpAndSettle();
+          // Bounded settle: the assertions below decide the outcome, and a
+          // frame that never stops is reported instead of hanging the test.
+          await pumpUntil(tester);
+          if (tester.binding.hasScheduledFrame) {
+            debugPrint(
+              'compact navigation still animating: '
+              '${find.byType(ProgressIndicator).evaluate().map((e) => e.widget.runtimeType).toList()} '
+              'job=${f.workspaces.first.audioJobs.map((j) => j.status).toList()}',
+            );
+          }
           expect(f.audioRequests, 0);
           expect(f.modelRequests, isEmpty);
           expect(f.workspaces.first.budget.reservedCnyMicros, 0);
