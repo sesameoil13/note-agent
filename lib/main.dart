@@ -471,6 +471,21 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     ),
   );
 
+  Future<void> _openBudget() async {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => BudgetPanel(workspace: workspace)),
+    );
+    if (mounted) setState(() => _editingNoteId = null);
+  }
+
+  Future<void> _openConnection() => Navigator.of(context).push<void>(
+    MaterialPageRoute(
+      builder: (_) => ConnectionScreen(connection: _connection),
+    ),
+  );
+
   Widget _header(bool wide) => Container(
     padding: EdgeInsets.symmetric(horizontal: wide ? 24 : 16, vertical: 16),
     decoration: const BoxDecoration(
@@ -501,20 +516,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         const Spacer(),
         if (_workspace != null && wide)
           AccessibleIconButton(
-            onPressed: _saving
-                ? null
-                : () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => BudgetPanel(workspace: _workspace!),
-                      ),
-                    );
-                    if (mounted) {
-                      setState(() {
-                        _editingNoteId = null;
-                      });
-                    }
-                  },
+            onPressed: _saving ? null : _openBudget,
             label: 'AI 与共享预算',
             icon: const Icon(Icons.account_balance_wallet_outlined),
           ),
@@ -533,23 +535,38 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             label: '提醒与默认时间',
             icon: const Icon(Icons.notifications_outlined),
           ),
-        AccessibleIconButton(
-          onPressed: _saving || _loading ? null : _showSetup,
-          label: '设置与首次引导',
-          icon: const Icon(Icons.tune),
-        ),
-        AccessibleIconButton(
-          onPressed: _saving
-              ? null
-              : () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (context) =>
-                        ConnectionScreen(connection: _connection),
-                  ),
-                ),
-          label: '连接与设备',
-          icon: const Icon(Icons.link),
-        ),
+        if (wide) ...[
+          AccessibleIconButton(
+            onPressed: _saving || _loading ? null : _showSetup,
+            label: '设置与首次引导',
+            icon: const Icon(Icons.tune),
+          ),
+          AccessibleIconButton(
+            onPressed: _saving ? null : _openConnection,
+            label: '连接与设备',
+            icon: const Icon(Icons.link),
+          ),
+        ] else
+          PopupMenuButton<String>(
+            tooltip: '更多操作',
+            enabled: !_saving && !_loading,
+            onSelected: (action) async {
+              switch (action) {
+                case 'budget':
+                  await _openBudget();
+                case 'setup':
+                  await _showSetup();
+                case 'connection':
+                  await _openConnection();
+              }
+            },
+            itemBuilder: (_) => [
+              if (_workspace != null)
+                const PopupMenuItem(value: 'budget', child: Text('AI 与共享预算')),
+              const PopupMenuItem(value: 'setup', child: Text('设置与首次引导')),
+              const PopupMenuItem(value: 'connection', child: Text('连接与设备')),
+            ],
+          ),
         if (_workspace != null) ...[
           if (wide) ...[
             DocumentImportButton(
