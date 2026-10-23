@@ -44,7 +44,11 @@ void main() {
         find.widgetWithText(TextField, '无日期／时间待确认'),
         '10:30',
       );
-      await tester.ensureVisible(find.text('保存默认时间（仅新增事项）'));
+      await tester.scrollUntilVisible(
+        find.text('保存默认时间（仅新增事项）'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.runAsync(() async {
         await tester.tap(find.text('保存默认时间（仅新增事项）'));
       });

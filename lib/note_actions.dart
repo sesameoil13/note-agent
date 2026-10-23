@@ -16,10 +16,15 @@ class WorkspaceAction {
     this.reason = 'unclearAction',
     this.timeExpression = '',
     this.timeStatus = ActionTimeStatus.absent,
+    this.completed = false,
   });
   final String id, text, reason, timeExpression;
   final ActionDecision decision;
   final ActionTimeStatus timeStatus;
+
+  /// The checkbox written to the note. The authoritative lifecycle state is
+  /// [NoteWorkspace.actionState]; callers cannot change it through edits.
+  final bool completed;
   bool get actionConfirmed => decision == ActionDecision.confirmed;
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -28,6 +33,7 @@ class WorkspaceAction {
     'reason': reason,
     'timeExpression': timeExpression,
     'timeStatus': timeStatus.name,
+    if (completed) 'completed': true,
   };
   factory WorkspaceAction.fromJson(Map<String, dynamic> v) => WorkspaceAction(
     id: v['id'] as String,
@@ -36,6 +42,7 @@ class WorkspaceAction {
     reason: v['reason'] as String,
     timeExpression: v['timeExpression'] as String,
     timeStatus: ActionTimeStatus.values.byName(v['timeStatus'] as String),
+    completed: v['completed'] == true,
   );
 }
 
@@ -84,6 +91,7 @@ extension _WorkspaceActions on NoteWorkspace {
     required NoteKind kind,
     required List<WorkspaceAction> actions,
     String? body,
+    Map<String, bool> completion = const {},
   }) async {
     if (_hasAssociationChange(noteId)) throw StateError('关联修改尚未写入，请先重试保存关联。');
     if (_hasActionChange(noteId)) {
@@ -129,6 +137,10 @@ extension _WorkspaceActions on NoteWorkspace {
           reason: action.reason,
           timeExpression: action.timeExpression,
           timeStatus: action.timeStatus,
+          completed:
+              completion[id] ??
+              note.actions.where((a) => a.id == id).firstOrNull?.completed ??
+              false,
         ),
       );
     }

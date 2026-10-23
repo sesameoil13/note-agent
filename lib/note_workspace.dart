@@ -156,6 +156,45 @@ class NoteWorkspace {
   }
 
   Future<void> reconcileReminders() => _mutate(() async {});
+
+  /// Lifecycle and completion of a confirmed action, independent of whether
+  /// the note checkbox or any other device has caught up yet.
+  WorkspaceActionState actionState(String noteId, String actionId) =>
+      _actionState(noteId, actionId);
+  Future<void> completeAction(String noteId, String actionId) =>
+      _mutate(() => _completeAction(noteId, actionId));
+
+  /// Postpones the current reminder; [minutes] overrides the default once.
+  Future<void> snoozeReminder(String noteId, String actionId, {int? minutes}) =>
+      _mutate(() => _snoozeReminder(noteId, actionId, minutes: minutes));
+
+  /// Explicitly starts a new lifecycle with its own reminder time.
+  Future<void> reopenAction(String noteId, String actionId, DateTime time) =>
+      _mutate(() => _reopenAction(noteId, actionId, time));
+  Future<void> retryActionCompletionSave(String noteId) =>
+      _mutate(() => _mirrorActionCompletion(noteId));
+
+  /// Applies completion and snooze responses from system notifications through
+  /// the same rules as the App. Returns a note opened by tapping an alert.
+  Future<String?> takeReminderInteractions() {
+    if (_notifications is! NotificationInteractionPort) {
+      return Future.value(null);
+    }
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _trackText(_takeReminderInteractions());
+  }
+
+  Future<String?> _takeReminderInteractions() async {
+    final responses = await (_notifications as NotificationInteractionPort)
+        .takeInteractions(kind: 'actionReminder', vault: vaultStorage.identity);
+    // Opening a note is navigation only; it never waits behind mutations.
+    if (responses.every((r) => r.actionIdentifier == 'default')) {
+      return _reminderInteractionNote(responses);
+    }
+    // Drained responses exist nowhere else, so apply them even while closing.
+    return _mutate(() => _applyReminderInteractions(responses), accepted: true);
+  }
+
   Future<void>? _notificationPermissionRequest;
   bool _notificationPermissionWaiting = false;
   int _notificationPermissionEpoch = 0;
@@ -222,6 +261,9 @@ class NoteWorkspace {
       if (defaults.toJson().values.any((v) => v < 0 || v >= 1440)) {
         throw ArgumentError('提醒时间必须在 00:00–23:59。');
       }
+      if (defaults.snoozeMinutes < 1) {
+        throw ArgumentError('稍后提醒需在 1–1439 分钟之间。');
+      }
       _database.execute(
         'INSERT OR REPLACE INTO reminder_defaults(vault,payload) VALUES (?,?)',
         [vaultStorage.identity, jsonEncode(defaults.toJson())],
@@ -269,6 +311,11 @@ class NoteWorkspace {
     final note = notes.firstWhere((n) => n.id == noteId);
     final action = note.actions.firstWhere((a) => a.id == actionId);
     if (!action.actionConfirmed) throw StateError('请先确认行动，再设置提醒。');
+    final key = '$noteId:$actionId';
+    final state = _actionStateRow(key);
+    if (state['completed'] == true) throw StateError('事项已完成；如需继续请重新开启。');
+    // The newer explicit choice replaces a time chosen while reopening.
+    if (state.remove('time') != null) _saveActionState(key, state);
     await _resolveActions(
       noteId,
       kind: note.kind,
@@ -738,6 +785,9 @@ class NoteWorkspace {
       'CREATE TABLE IF NOT EXISTS reminder_defaults(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
     );
     database.execute(
+      'CREATE TABLE IF NOT EXISTS action_states(vault TEXT NOT NULL,action_key TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,action_key))',
+    );
+    database.execute(
       'CREATE TABLE IF NOT EXISTS pending_notice_state(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
     );
     workspace._notifications =
@@ -800,6 +850,7 @@ class NoteWorkspace {
     }
     await workspace._attachments.recover();
     await workspace._recoverActionChanges();
+    await workspace._recoverActionCompletion();
     await workspace._recoverAssociationChanges();
     await workspace._recoverText();
     await workspace._recoverAudioJobs();
@@ -1341,7 +1392,7 @@ class NoteWorkspace {
         : '[完整转写](attachments/note-agent/${note.id}.txt)\n\n${_audioSourceEntry(audio)}';
     final content = note.kind == NoteKind.ordinary
         ? '## 正文\n\n${note.text.trimRight()}'
-        : '## 待办\n\n${note.actions.map((a) => '- [ ] ${_actionMarkdown(a.text)}${a.decision == ActionDecision.pending ? '（待确认）' : ''}').join('\n')}\n\n## 摘要\n\n${_summaryMarkdown(note.text.trimRight())}';
+        : '## 待办\n\n${note.actions.map((a) => '- [${a.completed ? 'x' : ' '}] ${_actionMarkdown(a.text)}${a.decision == ActionDecision.pending ? '（待确认）' : ''}').join('\n')}\n\n## 摘要\n\n${_summaryMarkdown(note.text.trimRight())}';
     return '''$content
 
 ## 关联

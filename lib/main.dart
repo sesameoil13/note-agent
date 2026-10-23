@@ -139,8 +139,26 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   Future<void> _takeNotificationNavigation() async {
     final workspace = _workspace;
     if (workspace == null) return;
+    // Both reads start together; completion and snooze from an alert apply
+    // even when the App was closed when the user responded.
+    final pending = workspace.takePendingConfirmationNavigation();
+    final reminders = workspace.takeReminderInteractions();
     try {
-      final open = await workspace.takePendingConfirmationNavigation();
+      final noteId = await reminders;
+      if (mounted && workspace == _workspace) {
+        setState(() {
+          if (noteId != null && !_saving) {
+            _selectedId = noteId;
+            _composing = false;
+            _recordingPage = false;
+          }
+        });
+      }
+    } catch (_) {
+      /* Unapplied responses stay with the system adapter until next resume. */
+    }
+    try {
+      final open = await pending;
       if (mounted && workspace == _workspace && open) await _openPendingList();
     } catch (_) {
       /* An unread response remains available on next resume. */
@@ -1051,7 +1069,114 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     ),
   );
 
+  Future<void> _actionOperation(Future<void> Function() operation) async {
+    try {
+      await operation();
+      if (mounted) setState(() => _error = null);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = e is StateError ? e.message : _errorMessage(e));
+      }
+    }
+  }
+
+  Future<DateTime?> _pickReopenTime() async {
+    final now = DateTime.now();
+    final day = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: DateTime(now.year + 5),
+      helpText: '重新开启后的提醒日期',
+    );
+    if (day == null || !mounted) return null;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: const TimeOfDay(hour: 9, minute: 0),
+      helpText: '重新开启后的提醒时间',
+    );
+    if (time == null) return null;
+    return DateTime(day.year, day.month, day.day, time.hour, time.minute);
+  }
+
+  Widget _actionControls(WorkspaceNote note, WorkspaceAction action) {
+    if (!action.actionConfirmed) return const SizedBox.shrink();
+    final state = _workspace!.actionState(note.id, action.id);
+    final hasReminder = _workspace!.reminders.any(
+      (r) => r.noteId == note.id && r.actionId == action.id,
+    );
+    final snooze = _workspace!.reminderDefaults.snoozeMinutes;
+    return Wrap(
+      spacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (!state.completed) ...[
+          TextButton(
+            onPressed: _saving
+                ? null
+                : () => _actionOperation(
+                    () => _workspace!.completeAction(note.id, action.id),
+                  ),
+            child: const Text('完成'),
+          ),
+          if (hasReminder)
+            PopupMenuButton<int>(
+              enabled: !_saving,
+              tooltip: '选择稍后提醒时长',
+              onSelected: (minutes) => _actionOperation(
+                () => _workspace!.snoozeReminder(
+                  note.id,
+                  action.id,
+                  minutes: minutes,
+                ),
+              ),
+              itemBuilder: (_) => [
+                for (final m in {snooze, 10, 60, 120, 1440})
+                  PopupMenuItem(
+                    value: m,
+                    child: Text(
+                      '${m == 1440 ? '明天此时' : '$m 分钟后'}${m == snooze ? '（默认）' : ''}',
+                    ),
+                  ),
+              ],
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Text('稍后提醒…'),
+              ),
+            ),
+        ] else
+          TextButton(
+            onPressed: _saving
+                ? null
+                : () async {
+                    final time = await _pickReopenTime();
+                    if (time == null) return;
+                    await _actionOperation(
+                      () => _workspace!.reopenAction(note.id, action.id, time),
+                    );
+                  },
+            child: const Text('重新开启'),
+          ),
+        if (state.notePending)
+          TextButton(
+            onPressed: _saving
+                ? null
+                : () => _actionOperation(
+                    () => _workspace!.retryActionCompletionSave(note.id),
+                  ),
+            child: const Text('重试写入勾选'),
+          ),
+      ],
+    );
+  }
+
   String _actionReminderLabel(WorkspaceNote note, WorkspaceAction action) {
+    final state = action.actionConfirmed
+        ? _workspace!.actionState(note.id, action.id)
+        : null;
+    if (state != null && state.completed) {
+      return ['已完成，提醒已取消', if (state.notePending) '笔记中的勾选尚未写入'].join(' · ');
+    }
     final reminder = _workspace!.reminders
         .where((r) => r.noteId == note.id && r.actionId == action.id)
         .firstOrNull;
@@ -1059,7 +1184,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     return [
       reminderStatusLabel(reminder.status),
       reminderTimeLabel(reminder.time),
+      if (reminder.snoozed) '已稍后提醒',
       if (reminder.timeNeedsConfirmation) '时间待确认，当前使用默认提醒',
+      if (state != null && state.notePending) '笔记中的勾选尚未写入',
     ].join(' · ');
   }
 
@@ -1193,7 +1320,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '□ ${a.text}',
+                          '${a.actionConfirmed && _workspace!.actionState(note.id, a.id).completed ? '■' : '□'} ${a.text}',
                           style: const TextStyle(fontSize: 16),
                         ),
                         Text(
@@ -1204,6 +1331,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                           _actionReminderLabel(note, a),
                           style: const TextStyle(color: ash, fontSize: 12),
                         ),
+                        _actionControls(note, a),
                       ],
                     ),
                   ),

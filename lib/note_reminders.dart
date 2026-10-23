@@ -13,13 +13,33 @@ class WorkspaceReminder {
     required this.status,
     required this.immediate,
     required this.timeNeedsConfirmation,
+    this.snoozed = false,
+    this.lifecycle = 1,
     this.error,
   });
   final String id, noteId, actionId, text;
   final DateTime time;
-  final bool explicitTime, immediate, timeNeedsConfirmation;
+  final bool explicitTime, immediate, timeNeedsConfirmation, snoozed;
+  final int lifecycle;
   final ReminderStatus status;
   final String? error;
+}
+
+/// One to-do lifecycle. Completion wins within a lifecycle; only an explicit
+/// reopen starts a new one, so stale notification actions cannot revive it.
+class WorkspaceActionState {
+  const WorkspaceActionState({
+    required this.lifecycle,
+    required this.completed,
+    required this.notePending,
+    this.completedAt,
+  });
+  final int lifecycle;
+  final bool completed;
+
+  /// The note checkbox does not yet match; the local state is still durable.
+  final bool notePending;
+  final DateTime? completedAt;
 }
 
 extension _WorkspaceReminders on NoteWorkspace {
@@ -32,7 +52,7 @@ extension _WorkspaceReminders on NoteWorkspace {
       [vaultStorage.identity],
     )) {
       final v = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
-      if (v['explicit'] == true) continue;
+      if (v['explicit'] == true || v['snoozed'] == true) continue;
       final note = notes.firstWhere((n) => n.id == v['noteId']);
       final action = note.actions.firstWhere((a) => a.id == v['actionId']);
       final next = _reminderTime(
@@ -77,6 +97,8 @@ extension _WorkspaceReminders on NoteWorkspace {
             status: ReminderStatus.values.byName(v['status']),
             immediate: v['immediate'],
             timeNeedsConfirmation: v['timeNeedsConfirmation'] == true,
+            snoozed: v['snoozed'] == true,
+            lifecycle: v['lifecycle'] as int? ?? 1,
             error: v['error'],
           );
         }),
@@ -89,6 +111,192 @@ extension _WorkspaceReminders on NoteWorkspace {
     );
   }
 
+  Map<String, dynamic> _actionStateRow(String key) {
+    final rows = _database.select(
+      'SELECT payload FROM action_states WHERE vault=? AND action_key=?',
+      [vaultStorage.identity, key],
+    );
+    return rows.isEmpty
+        ? {'lifecycle': 1, 'completed': false}
+        : jsonDecode(rows.single['payload'] as String) as Map<String, dynamic>;
+  }
+
+  void _saveActionState(String key, Map<String, dynamic> state) =>
+      _database.execute(
+        'INSERT OR REPLACE INTO action_states(vault,action_key,payload) VALUES (?,?,?)',
+        [vaultStorage.identity, key, jsonEncode(state)],
+      );
+
+  WorkspaceActionState _actionState(String noteId, String actionId) {
+    final note = notes.firstWhere((n) => n.id == noteId);
+    final action = note.actions.firstWhere((a) => a.id == actionId);
+    final v = _actionStateRow('$noteId:$actionId');
+    final completed = v['completed'] == true;
+    return WorkspaceActionState(
+      lifecycle: v['lifecycle'] as int,
+      completed: completed,
+      notePending: action.completed != completed,
+      completedAt: completed ? DateTime.parse(v['completedAt']) : null,
+    );
+  }
+
+  WorkspaceAction _confirmedAction(String noteId, String actionId) {
+    final note = notes.where((n) => n.id == noteId).firstOrNull;
+    final action = note?.actions.where((a) => a.id == actionId).firstOrNull;
+    if (action == null) throw StateError('该行动已不存在。');
+    if (!action.actionConfirmed) throw StateError('请先确认行动。');
+    return action;
+  }
+
+  Future<void> _completeAction(
+    String noteId,
+    String actionId, {
+    int? lifecycle,
+  }) async {
+    _confirmedAction(noteId, actionId);
+    final key = '$noteId:$actionId';
+    final state = _actionStateRow(key);
+    // A notification from an earlier lifecycle must not close a reopened item.
+    if (lifecycle != null && lifecycle != state['lifecycle']) return;
+    if (state['completed'] != true) {
+      state['completed'] = true;
+      state['completedAt'] = _clock().toIso8601String();
+      state.remove('time');
+      _saveActionState(key, state);
+    }
+    await _mirrorActionCompletion(noteId);
+  }
+
+  Future<void> _reopenAction(
+    String noteId,
+    String actionId,
+    DateTime time,
+  ) async {
+    _confirmedAction(noteId, actionId);
+    final key = '$noteId:$actionId';
+    final state = _actionStateRow(key);
+    if (state['completed'] != true) throw StateError('事项尚未完成，无需重新开启。');
+    _saveActionState(key, {
+      'lifecycle': (state['lifecycle'] as int) + 1,
+      'completed': false,
+      'time': time.toIso8601String(),
+    });
+    await _mirrorActionCompletion(noteId);
+  }
+
+  Future<void> _snoozeReminder(
+    String noteId,
+    String actionId, {
+    int? minutes,
+    String? notificationId,
+  }) async {
+    final fromNotification = notificationId != null;
+    _confirmedAction(noteId, actionId);
+    final key = '$noteId:$actionId';
+    final rows = _database.select(
+      'SELECT payload,removed FROM reminder_plans WHERE vault=? AND action_id=?',
+      [vaultStorage.identity, key],
+    );
+    if (_actionStateRow(key)['completed'] == true) {
+      if (fromNotification) return;
+      throw StateError('事项已完成，不再安排提醒。');
+    }
+    if (rows.isEmpty || rows.single['removed'] == 1) {
+      if (fromNotification) return;
+      throw StateError('该行动没有可延后的提醒。');
+    }
+    final v =
+        jsonDecode(rows.single['payload'] as String) as Map<String, dynamic>;
+    // Only the current notification may snooze; a duplicate or superseded
+    // delivery must not replace a newer time chosen elsewhere.
+    if (fromNotification && notificationId != v['id']) return;
+    final length = minutes ?? reminderDefaults.snoozeMinutes;
+    if (length < 1 || length > 1440) throw ArgumentError('稍后提醒需在 1–1440 分钟之间。');
+    final oldId = v['id'] as String;
+    v['revision'] = (v['revision'] as int) + 1;
+    v['id'] = '${oldId.substring(0, oldId.lastIndexOf(':'))}:${v['revision']}';
+    v['time'] = _clock().add(Duration(minutes: length)).toIso8601String();
+    v['status'] = ReminderStatus.pending.name;
+    v['immediate'] = false;
+    v['snoozed'] = true;
+    v['cancel'] = [...?v['cancel'] as List?, oldId];
+    _saveReminder(v);
+  }
+
+  /// Writes the authoritative completion state into the note checkbox. A
+  /// write failure keeps the durable state and is retried on the next open.
+  Future<void> _mirrorActionCompletion(String noteId) async {
+    final note = notes.firstWhere((n) => n.id == noteId);
+    final completion = {
+      for (final a in note.actions)
+        a.id: _actionStateRow('$noteId:${a.id}')['completed'] == true,
+    };
+    if (note.actions.every((a) => a.completed == completion[a.id])) return;
+    try {
+      await _resolveActions(
+        noteId,
+        kind: note.kind,
+        actions: note.actions,
+        completion: completion,
+      );
+    } on FileSystemException {
+      /* Reported through actionState().notePending. */
+    } on StateError {
+      /* A pending write or rename finishes first; retried later. */
+    }
+  }
+
+  Future<void> _recoverActionCompletion() async {
+    for (final note in notes.where((n) => n.kind == NoteKind.todo)) {
+      await _mirrorActionCompletion(note.id);
+    }
+  }
+
+  bool _validReminderInteraction(NotificationInteraction r) {
+    final p = r.payload;
+    final scope = base64Url.encode(utf8.encode(vaultStorage.identity));
+    return p['kind'] == 'actionReminder' &&
+        p['vault'] == vaultStorage.identity &&
+        p['noteId'] != null &&
+        p['actionId'] != null &&
+        int.tryParse(p['lifecycle'] ?? '1') != null &&
+        r.id.startsWith('note-agent:$scope:${p['noteId']}:${p['actionId']}:');
+  }
+
+  String? _reminderInteractionNote(List<NotificationInteraction> responses) =>
+      responses
+          .where(
+            (r) =>
+                r.actionIdentifier == 'default' &&
+                _validReminderInteraction(r) &&
+                notes.any((n) => n.id == r.payload['noteId']),
+          )
+          .lastOrNull
+          ?.payload['noteId'];
+
+  Future<String?> _applyReminderInteractions(
+    List<NotificationInteraction> responses,
+  ) async {
+    for (final r in responses.where(_validReminderInteraction)) {
+      final noteId = r.payload['noteId']!, actionId = r.payload['actionId']!;
+      final lifecycle = int.parse(r.payload['lifecycle'] ?? '1');
+      try {
+        switch (r.actionIdentifier) {
+          case 'complete':
+            await _completeAction(noteId, actionId, lifecycle: lifecycle);
+          case 'snooze':
+            if (_actionStateRow('$noteId:$actionId')['lifecycle'] ==
+                lifecycle) {
+              await _snoozeReminder(noteId, actionId, notificationId: r.id);
+            }
+        }
+      } on StateError {
+        /* The action was removed or unconfirmed since this alert was shown. */
+      }
+    }
+    return _reminderInteractionNote(responses);
+  }
+
   Future<void> _reconcileReminders() async {
     // Desired state is durable before any OS interaction. Action decisions and
     // their file-write recovery remain independent from notification failures.
@@ -96,6 +304,9 @@ extension _WorkspaceReminders on NoteWorkspace {
     for (final note in notes) {
       for (final action in note.actions.where((a) => a.actionConfirmed)) {
         final key = '${note.id}:${action.id}';
+        final state = _actionStateRow(key);
+        // Completed items are inactive; their plans are cancelled below.
+        if (state['completed'] == true) continue;
         active.add(key);
         final rows = _database.select(
           'SELECT payload,removed FROM reminder_plans WHERE vault=? AND action_id=?',
@@ -105,7 +316,14 @@ extension _WorkspaceReminders on NoteWorkspace {
             ? null
             : jsonDecode(rows.single['payload'] as String)
                   as Map<String, dynamic>;
-        final signature = '${action.timeStatus.name}:${action.timeExpression}';
+        final lifecycle = state['lifecycle'] as int;
+        final reopenTime = state['time'] as String?;
+        var signature = '${action.timeStatus.name}:${action.timeExpression}';
+        // First-lifecycle plans keep their original signature so upgrades do
+        // not reapply changed defaults to existing reminders.
+        if (lifecycle > 1 || reopenTime != null) {
+          signature = '$lifecycle:${reopenTime ?? ''}:$signature';
+        }
         if (old != null &&
             rows.single['removed'] == 0 &&
             old['signature'] == signature) {
@@ -127,16 +345,15 @@ extension _WorkspaceReminders on NoteWorkspace {
           }
           continue;
         }
-        final computed = _reminderTime(
-          action,
-          note.createdAt.toLocal(),
-          reminderDefaults,
-        );
+        final computed = reopenTime != null
+            ? _ReminderTime(DateTime.parse(reopenTime), true, 'explicit')
+            : _reminderTime(action, note.createdAt.toLocal(), reminderDefaults);
         final revision = (old?['revision'] as int? ?? 0) + 1;
         final scope = base64Url.encode(utf8.encode(vaultStorage.identity));
         _saveReminder({
           'id': 'note-agent:$scope:${note.id}:${action.id}:$revision',
           'revision': revision,
+          'lifecycle': lifecycle,
           'key': key,
           'noteId': note.id,
           'actionId': action.id,
@@ -146,9 +363,10 @@ extension _WorkspaceReminders on NoteWorkspace {
           'explicit': computed.explicitTime,
           'rule': computed.rule,
           'timeNeedsConfirmation':
-              action.timeStatus == ActionTimeStatus.unresolved ||
-              action.timeStatus == ActionTimeStatus.explicit &&
-                  computed.rule == 'tomorrow',
+              reopenTime == null &&
+              (action.timeStatus == ActionTimeStatus.unresolved ||
+                  action.timeStatus == ActionTimeStatus.explicit &&
+                      computed.rule == 'tomorrow'),
           'immediate': !computed.time.isAfter(_clock()),
           'status': ReminderStatus.pending.name,
           'cancel': [...?old?['cancel'] as List?, if (old != null) old['id']],
@@ -217,8 +435,10 @@ extension _WorkspaceReminders on NoteWorkspace {
               immediate: !time.isAfter(_clock()),
               payload: {
                 'kind': 'actionReminder',
+                'vault': vaultStorage.identity,
                 'noteId': v['noteId'],
                 'actionId': v['actionId'],
+                'lifecycle': '${v['lifecycle'] ?? 1}',
               },
             ),
           );
@@ -263,18 +483,21 @@ class ReminderDefaults {
     this.afternoonMinute = 840,
     this.eveningMinute = 1200,
     this.tomorrowMinute = 540,
+    this.snoozeMinutes = 30,
   });
   final int dateMinute,
       morningMinute,
       afternoonMinute,
       eveningMinute,
-      tomorrowMinute;
+      tomorrowMinute,
+      snoozeMinutes;
   Map<String, dynamic> toJson() => {
     'date': dateMinute,
     'morning': morningMinute,
     'afternoon': afternoonMinute,
     'evening': eveningMinute,
     'tomorrow': tomorrowMinute,
+    'snooze': snoozeMinutes,
   };
   factory ReminderDefaults.fromJson(Map<String, dynamic> v) => ReminderDefaults(
     dateMinute: v['date'],
@@ -282,6 +505,7 @@ class ReminderDefaults {
     afternoonMinute: v['afternoon'],
     eveningMinute: v['evening'],
     tomorrowMinute: v['tomorrow'],
+    snoozeMinutes: v['snooze'] ?? 30,
   );
 }
 

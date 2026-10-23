@@ -9,10 +9,23 @@ final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
   private var channel: FlutterMethodChannel?
   private let interactionKey = "noteAgent.notificationInteractions.v1"
   private let acceptedKey = "noteAgent.notificationAcceptedIDs.v1"
+  private let reminderCategory = "noteAgent.actionReminder"
 
   init(messenger: FlutterBinaryMessenger) {
     super.init()
     center.delegate = self
+    // Background actions are recorded durably and applied by the workspace,
+    // which decides whether a completion or snooze still matches the lifecycle.
+    center.setNotificationCategories([
+      UNNotificationCategory(
+        identifier: reminderCategory,
+        actions: [
+          UNNotificationAction(identifier: "complete", title: "完成", options: []),
+          UNNotificationAction(identifier: "snooze", title: "稍后提醒", options: []),
+        ],
+        intentIdentifiers: [],
+        options: [])
+    ])
     let channel = FlutterMethodChannel(name: "dev.noteagent/notifications", binaryMessenger: messenger)
     channel.setMethodCallHandler { [weak self] call, result in
       self?.handle(call, result: result)
@@ -85,6 +98,7 @@ final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
         content.body = body
         content.sound = .default
         content.userInfo = payload
+        if payload["kind"] == "actionReminder" { content.categoryIdentifier = self.reminderCategory }
         let date = Date(timeIntervalSince1970: millis.doubleValue / 1000)
         let trigger: UNNotificationTrigger
         if immediate || date <= Date() {

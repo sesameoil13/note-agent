@@ -34,6 +34,7 @@ class ReminderScreen extends StatefulWidget {
 
 class _ReminderScreenState extends State<ReminderScreen> {
   late final List<TextEditingController> defaults;
+  late final TextEditingController snooze;
   bool busy = false;
   String? message;
   @override
@@ -55,6 +56,7 @@ class _ReminderScreenState extends State<ReminderScreen> {
               ),
             )
             .toList();
+    snooze = TextEditingController(text: '${d.snoozeMinutes}');
   }
 
   @override
@@ -62,6 +64,7 @@ class _ReminderScreenState extends State<ReminderScreen> {
     for (final c in defaults) {
       c.dispose();
     }
+    snooze.dispose();
     super.dispose();
   }
 
@@ -90,6 +93,10 @@ class _ReminderScreenState extends State<ReminderScreen> {
       if (m == null) throw ArgumentError('请以 HH:mm 输入 00:00–23:59 的时间。');
       return int.parse(m[1]!) * 60 + int.parse(m[2]!);
     }).toList();
+    final snoozeMinutes = int.tryParse(snooze.text.trim());
+    if (snoozeMinutes == null || snoozeMinutes < 1 || snoozeMinutes > 1439) {
+      throw ArgumentError('稍后提醒请填写 1–1439 分钟。');
+    }
     await widget.workspace.setReminderDefaults(
       ReminderDefaults(
         dateMinute: minutes[0],
@@ -97,6 +104,7 @@ class _ReminderScreenState extends State<ReminderScreen> {
         afternoonMinute: minutes[2],
         eveningMinute: minutes[3],
         tomorrowMinute: minutes[4],
+        snoozeMinutes: snoozeMinutes,
       ),
     );
     message = '默认时间已保存，仅影响新增事项。';
@@ -229,6 +237,18 @@ class _ReminderScreenState extends State<ReminderScreen> {
               ),
             ),
           ),
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: TextField(
+            enabled: !busy,
+            controller: snooze,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: '稍后提醒（分钟）',
+              helperText: '通知中的“稍后提醒”使用此时长；详情页可单次延后。',
+            ),
+          ),
+        ),
         const SizedBox(height: 12),
         FilledButton(
           onPressed: busy ? null : saveDefaults,
@@ -256,6 +276,7 @@ class _ReminderScreenState extends State<ReminderScreen> {
                   Text(r.text),
                   Text(reminderTimeLabel(r.time)),
                   Text(reminderStatusLabel(r.status)),
+                  if (r.snoozed) const Text('已稍后提醒'),
                   if (r.timeNeedsConfirmation) const Text('时间待确认，当前使用默认提醒'),
                   if (r.error != null) Text(r.error!),
                   TextButton(
