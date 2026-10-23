@@ -57,6 +57,14 @@ enum NoteSyncStatus { notPublished, unverified, attachmentBlocked }
 /// The lightweight task-status connection is independent of note-file Sync.
 enum TaskStatusSync { notConnected }
 
+/// Whether the retained input is ready for the shared, explicitly confirmed
+/// text-model pipeline. No quote, reservation or model call happens here.
+class ProcessingReadiness {
+  const ProcessingReadiness(this.canPrepare, this.message);
+  final bool canPrepare;
+  final String message;
+}
+
 /// A collected note, exposed without storage or processing implementation details.
 class WorkspaceNote {
   const WorkspaceNote({
@@ -297,6 +305,40 @@ class NoteWorkspace {
   Future<WorkspaceTextJob> cancelTextProcessing(String id) =>
       _trackText(_cancelText(id));
   List<WorkspaceTextJob> get textJobs => _textJobs();
+  ProcessingReadiness textProcessingReadiness(String noteId) {
+    final note = notes.firstWhere((n) => n.id == noteId);
+    if (note.status != NoteStatus.localSaved) {
+      return const ProcessingReadiness(false, '请先完成笔记库写入。');
+    }
+    final doc = note.document;
+    if (doc == null) {
+      return note.attachments.isEmpty
+          ? const ProcessingReadiness(true, '')
+          : const ProcessingReadiness(false, '录音请使用录音的转写与整理流程。');
+    }
+    final result = doc.result;
+    if (_activeDocuments.containsKey(noteId) ||
+        _retryingDocuments.contains(noteId) ||
+        doc.status != DocumentImportStatus.ready ||
+        result == null) {
+      return const ProcessingReadiness(false, '请先完成文档提取与保存；尚未发送 AI。');
+    }
+    if (![
+          DocumentCompletion.complete,
+          DocumentCompletion.partial,
+        ].contains(result.completion) ||
+        result.markdown.trim().isEmpty) {
+      return const ProcessingReadiness(
+        false,
+        '没有可整理的提取文字。扫描页与图片尚未识别，原件保留；不会发送占位文字或预留费用。',
+      );
+    }
+    return ProcessingReadiness(
+      true,
+      '${result.summary} AI 仅整理已提取的文字和表格；扫描页、图片及其他未处理区域不会被补写。',
+    );
+  }
+
   List<WorkspaceNote> get pendingActionNotes => List.unmodifiable(
     notes.where(
       (n) =>
@@ -1387,6 +1429,9 @@ $source
     DocumentExtractionOptions options = const DocumentExtractionOptions(),
   }) {
     options.validate();
+    if (!canRetryDocumentExtraction(noteId)) {
+      return Future.error(StateError('已有 AI 处理任务，请保留当前提取版本；重新提取不会覆盖其来源。'));
+    }
     if (_activeDocuments.containsKey(noteId) ||
         !_retryingDocuments.add(noteId)) {
       return Future.error(StateError('此文档正在提取。'));
@@ -1431,6 +1476,27 @@ $source
       if (publication != null) return publication;
       return _extractDocument(noteId, options);
     }).whenComplete(() => _retryingDocuments.remove(noteId));
+  }
+
+  /// Re-extraction must never mutate an input already reserved or sent to AI.
+  /// A cancelled, provably unsent attempt may safely obtain a new local input.
+  bool canRetryDocumentExtraction(String noteId) {
+    if (_preparingText.containsKey(noteId)) return false;
+    for (final job in textJobs.where((j) => j.noteId == noteId)) {
+      final payload = _textPayload(job.id);
+      final receipts = payload['receipts'] as Map? ?? {};
+      if (job.status != TextProcessingStatus.cancelled ||
+          payload['reply'] != null ||
+          payload['result'] != null ||
+          (payload['attempts'] as List).any(
+            (attempt) =>
+                receipts[attempt] is! Map ||
+                receipts[attempt]['released'] != true,
+          )) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void cancelDocumentExtraction(String noteId) {

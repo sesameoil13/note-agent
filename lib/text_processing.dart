@@ -92,7 +92,22 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     final existing = textJobs.where((j) => j.noteId == noteId).firstOrNull;
     if (existing != null) {
       if (existing.status == TextProcessingStatus.cancelled) {
+        final readiness = textProcessingReadiness(noteId);
+        if (!readiness.canPrepare) throw StateError(readiness.message);
         final payload = _textPayload(existing.id);
+        final note = notes.firstWhere((n) => n.id == noteId);
+        payload['noteSnapshot'] = await vaultStorage.readText(
+          vaultStorage.relativePath(note.notePath),
+        );
+        if (note.document != null) {
+          payload['modifiedAt'] = note.modifiedAt.toIso8601String();
+          if (payload['original'] != note.text) {
+            payload['original'] = note.text;
+            payload.remove('associationCandidates');
+            payload.remove('request');
+            payload.remove('pendingReservation');
+          }
+        }
         await _reserveNextText(existing.id, noteId, payload);
         return textJobs.firstWhere((j) => j.id == existing.id);
       }
@@ -105,16 +120,16 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       }
       return existing;
     }
+    final readiness = textProcessingReadiness(noteId);
+    if (!readiness.canPrepare) throw StateError(readiness.message);
     final note = notes.firstWhere((n) => n.id == noteId);
-    if (note.status != NoteStatus.localSaved ||
-        note.document != null ||
-        note.attachments.isNotEmpty) {
-      throw StateError('请先保存文字笔记。');
-    }
     final id = _createId();
     final payload = <String, dynamic>{
       'original': note.text,
       'modifiedAt': note.modifiedAt.toIso8601String(),
+      'noteSnapshot': await vaultStorage.readText(
+        vaultStorage.relativePath(note.notePath),
+      ),
       'attempts': <dynamic>[],
     };
     await _mutate(() async {
@@ -253,6 +268,10 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         as String,
   ) as Map<String, dynamic>;
   String? _originalTextFor(String noteId) {
+    final documentSource = _document(noteId)?.result?.markdown;
+    if (documentSource != null) {
+      return documentSource.isEmpty ? '尚未提取正文。' : documentSource;
+    }
     final rows = _database.select(
       'SELECT payload FROM text_jobs WHERE note_id=? AND vault=?',
       [noteId, vaultStorage.identity],
@@ -576,11 +595,40 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           notePath: note.notePath,
           sourcePath: note.sourcePath,
           status: NoteStatus.localSaved,
+          document: note.document,
+          attachments: note.attachments,
           presentation: _resultPresentation(result, noteId, note.originalText),
         );
+        // Associations, attachment entries and extraction limitations may have
+        // been edited independently. Compare only the known content prefix,
+        // then retain their exact tail rather than regenerating the source.
+        const anchor = '\n## 关联\n';
+        final before = await vaultStorage.readText(
+          vaultStorage.relativePath(note.notePath),
+        );
+        final position = before.indexOf(anchor);
+        if (position < 0 ||
+            position != before.lastIndexOf(anchor) ||
+            before != (payload['noteSnapshot'] ?? _markdown(note)) ||
+            before.substring(0, position) !=
+                _markdown(note).split(anchor).first) {
+          _database.execute(
+            'UPDATE text_jobs SET status=?,error=? WHERE id=?',
+            [TextProcessingStatus.review.name, '笔记文件已在其他位置修改，结果未覆盖，请核对原文。', id],
+          );
+          return;
+        }
+        var after =
+            _markdown(next).split(anchor).first + before.substring(position);
+        final oldTime =
+            '\n记录：${formatNoteTime(note.createdAt)} · 修改：${formatNoteTime(note.modifiedAt)}\n';
+        if (after.endsWith(oldTime)) {
+          after =
+              '${after.substring(0, after.length - oldTime.length)}\n记录：${formatNoteTime(note.createdAt)} · 修改：${formatNoteTime(now)}\n';
+        }
         plan = {
-          'before': _markdown(note),
-          'after': _markdown(next),
+          'before': before,
+          'after': after,
           'body': next.text,
           'modifiedAt': now.toIso8601String(),
           'presentation': next.presentation.toJson(),

@@ -412,6 +412,9 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     final textPayload = <String, dynamic>{
       'original': p['transcript'],
       'modifiedAt': note.modifiedAt.toIso8601String(),
+      'noteSnapshot': await vaultStorage.readText(
+        vaultStorage.relativePath(note.notePath),
+      ),
       'quote': p['textQuote'],
       'request': request,
       'attempts': [p['textAttempt']],

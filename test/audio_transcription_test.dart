@@ -8,6 +8,73 @@ import 'support/budget_fixture.dart';
 import 'audio_queue_test.dart' show wave;
 
 void main() {
+  for (final changedAfterPreparation in [false, true]) {
+    test(
+      'deferred audio organization freezes the complete note and protects later edits ($changedAfterPreparation)',
+      () async {
+        final f = BudgetFixture();
+        await f.start();
+        addTearDown(f.close);
+        f.omitAudioCost = true;
+        final w = f.workspaces.first;
+        final source = await w.importAudio(
+          original: await File('${f.root.path}/synthetic.wav')
+              .writeAsBytes(wave()),
+          submissionId: 'audio-note-snapshot',
+        );
+        await w.prepareAudioProcessing(source.id);
+        await w.confirmAudioProcessing(source.id);
+        expect(w.audioJobs.single.status, AudioJobStatus.paused);
+        expect(f.modelRequests, isEmpty);
+        final note = w.notes.single;
+        final retained = (await File(note.notePath).readAsString())
+            .replaceFirst('暂无关联', '- [[手工关联]]')
+            .replaceFirst('\n记录：', '\n[手工来源](manual.txt)\n\n记录：');
+        await File(note.notePath).writeAsString(retained);
+        f.generationAvailable = true;
+        f.generationCost = 0.00001;
+        await w.reconcileAudioProcessing(source.id);
+        await w.prepareAudioOrganization(source.id);
+        expect(w.audioJobs.single.status, AudioJobStatus.prepared);
+        final external = '$retained\n准备后在外部补充。\n';
+        if (changedAfterPreparation) {
+          f.beforeReply = () async {
+            await File(note.notePath).writeAsString(external);
+          };
+        }
+        await w.confirmAudioProcessing(source.id);
+        expect(f.audioRequests, 1);
+        expect(f.modelRequests, hasLength(1));
+        expect(
+          w.textJobs.single.status,
+          changedAfterPreparation
+              ? TextProcessingStatus.review
+              : TextProcessingStatus.completed,
+        );
+        final saved = w.notes.single;
+        final md = await File(saved.notePath).readAsString();
+        if (changedAfterPreparation) {
+          expect(md, external);
+          expect(saved.text, f.transcript);
+        } else {
+          expect(saved.text, '整理后的普通想法。');
+          expect(md, contains('[[手工关联]]'));
+          expect(md, contains('[手工来源](manual.txt)'));
+          expect(md, contains('synthetic.wav'));
+        }
+        expect(saved.originalText, f.transcript);
+        expect(await File(saved.sourcePath).readAsString(), f.transcript);
+        expect(await File(source.originalPath).readAsBytes(), wave());
+        await f.reopen(0);
+        expect(
+          await File(f.workspaces.first.notes.single.notePath).readAsString(),
+          md,
+        );
+        expect(f.audioRequests, 1);
+        expect(f.modelRequests, hasLength(1));
+      },
+    );
+  }
   test('one consent transcribes then organizes with both templates and durable full sources', () async {
     final f = BudgetFixture();
     await f.start();
