@@ -6,7 +6,7 @@ class PendingNotifications
     implements NotificationPort, NotificationInteractionPort {
   NotificationPermission permission = NotificationPermission.allowed;
   int schedules = 0, permissionRequests = 0;
-  bool failInspect = false, failSchedule = false;
+  bool failInspect = false, failSchedule = false, exactTiming = true;
   final pending = <String, NotificationRequest>{};
   final accepted = <String>{};
   final interactions = <NotificationInteraction>[];
@@ -40,6 +40,7 @@ class PendingNotifications
       permission: permission,
       pendingIds: pending.keys.toSet(),
       acceptedIds: accepted,
+      exactTiming: exactTiming,
     );
   }
 

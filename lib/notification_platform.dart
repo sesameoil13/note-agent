@@ -4,15 +4,20 @@ import 'package:flutter/services.dart';
 
 import 'notifications.dart';
 
-/// macOS local notification adapter; no permission prompt occurs in inspect.
+/// macOS and Android local notification adapter; inspect never prompts.
 class MethodChannelNotifications
     implements NotificationPort, NotificationInteractionPort {
   MethodChannelNotifications() {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'interactionAvailable') _signals.add(null);
+      if (call.method == 'networkAvailable') _network.add(null);
     });
   }
   final _signals = StreamController<void>.broadcast();
+  final _network = StreamController<void>.broadcast();
+
+  /// Android reports a regained network so the App can re-check reminders.
+  Stream<void> get connectivitySignals => _network.stream;
   @override
   Stream<void> get interactionSignals => _signals.stream;
   @override
@@ -47,6 +52,7 @@ class MethodChannelNotifications
       pendingIds: ids('pending'),
       acceptedIds: ids('accepted'),
       deliveredIds: ids('delivered'),
+      exactTiming: value['exactTiming'] as bool? ?? true,
     );
   }
 

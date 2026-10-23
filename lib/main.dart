@@ -124,6 +124,25 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   bool _composing = true;
   bool _recordingPage = false;
   StreamSubscription<void>? _notificationInteractions;
+  StreamSubscription<void>? _networkReturn;
+
+  /// Android re-checks local reminders when the network comes back, as it does
+  /// on resume; the OS reports it through the same notification adapter.
+  MethodChannelNotifications _systemNotifications() {
+    final port = MethodChannelNotifications();
+    unawaited(_networkReturn?.cancel());
+    _networkReturn = port.connectivitySignals.listen((_) {
+      final workspace = _workspace;
+      if (workspace == null) return;
+      unawaited(
+        workspace.reconcileReminders().then((_) {
+          if (mounted) setState(() {});
+        }, onError: (Object _) {}),
+      );
+    });
+    return port;
+  }
+
   bool _pendingListOpen = false;
 
   void _watchNotificationInteractions() {
@@ -195,6 +214,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_notificationInteractions?.cancel());
+    unawaited(_networkReturn?.cancel());
     _title.dispose();
     _text.dispose();
     _search.dispose();
@@ -288,7 +308,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       vaultDirectory: location.vaultDirectory,
       vaultStorage: location.vaultStorage,
       connection: _connection,
-      notifications: Platform.isMacOS ? MethodChannelNotifications() : null,
+      notifications: Platform.isMacOS || Platform.isAndroid
+          ? _systemNotifications()
+          : null,
       audioPlatform:
           (Platform.isMacOS && location.vaultDirectory != null) ||
               Platform.isAndroid
