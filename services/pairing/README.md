@@ -1,6 +1,6 @@
 # Personal device pairing service
 
-Worker + D1, limited to enrolling one owner and pairing explicitly approved devices. It does not store plaintext OpenRouter credentials, notes, audio or Cloudflare management tokens. The App supplies no management credential.
+Worker + D1, limited to enrolling one owner, pairing explicitly approved devices, the shared budget ledger, and to-do lifecycle coordination (`POST /v1/todos/sync`, migration 0004; see [T23](../../docs/development/t23-todo-sync.md)). It does not store plaintext OpenRouter credentials, notes, audio or Cloudflare management tokens. The App supplies no management credential.
 
 The deployment and protocol reference is [T12 connection and pairing](../../docs/development/t12-connection-pairing.md). Current `wrangler.toml` contains a placeholder D1 UUID and is intentionally not deployable to a real database as-is. No automatic deployment or paid plan configuration is present.
 

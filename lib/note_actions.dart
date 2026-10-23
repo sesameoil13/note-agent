@@ -199,10 +199,31 @@ extension _WorkspaceActions on NoteWorkspace {
       'path': vaultStorage.relativePath(note.notePath),
       'operation': _createId(),
     };
-    _database.execute(
-      'INSERT INTO note_action_changes(note_id,vault,payload) VALUES (?,?,?)',
-      [noteId, vaultStorage.identity, jsonEncode(plan)],
-    );
+    _database.execute('BEGIN IMMEDIATE');
+    try {
+      _database.execute(
+        'INSERT INTO note_action_changes(note_id,vault,payload) VALUES (?,?,?)',
+        [noteId, vaultStorage.identity, jsonEncode(plan)],
+      );
+      // A removed action becomes a tombstone on every paired device, so a
+      // delayed completion, snooze or reopen elsewhere cannot revive it.
+      for (final removed in note.actions.where((a) => !ids.contains(a.id))) {
+        final key = '$noteId:${removed.id}';
+        final state = _actionStateRow(key)..['removed'] = true;
+        final op = _todoOperation();
+        _saveActionState(key, state);
+        _enqueueTodo(noteId, removed.id, {
+          'opId': op.opId,
+          'kind': 'remove',
+          'lifecycle': state['lifecycle'],
+          'at': op.at,
+        });
+      }
+      _database.execute('COMMIT');
+    } catch (_) {
+      _database.execute('ROLLBACK');
+      rethrow;
+    }
     await _finishActionChange(noteId);
     return notes.firstWhere((n) => n.id == noteId);
   }

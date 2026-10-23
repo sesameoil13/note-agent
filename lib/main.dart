@@ -208,6 +208,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     if (state == AppLifecycleState.resumed) {
       _resumeAudioQueue();
       unawaited(_takeNotificationNavigation());
+      unawaited(_syncTodos());
       final workspace = _workspace;
       if (workspace != null) {
         unawaited(
@@ -884,6 +885,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
               },
             ),
           ),
+          TodoAwaitingNoteBanner(sync: _workspace!.todoSync),
           const Divider(height: 1),
           Expanded(
             child: notes.isEmpty
@@ -1078,6 +1080,20 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         setState(() => _error = e is StateError ? e.message : _errorMessage(e));
       }
     }
+    unawaited(_syncTodos());
+  }
+
+  /// Coordinates to-do lifecycle states with paired devices as soon as the
+  /// network allows; queued operations stay local and status is shown honestly.
+  Future<void> _syncTodos() async {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    try {
+      await workspace.syncTodos();
+    } catch (_) {
+      /* Reported through todoSync; operations stay queued. */
+    }
+    if (mounted && workspace == _workspace) setState(() {});
   }
 
   Future<DateTime?> _pickReopenTime() async {
@@ -1275,7 +1291,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                 ],
               ),
               const SizedBox(height: 8),
-              NoteSyncSummary(note: note),
+              NoteSyncSummary(note: note, todoSync: _workspace!.todoSync),
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(

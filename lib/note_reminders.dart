@@ -33,9 +33,14 @@ class WorkspaceActionState {
     required this.completed,
     required this.notePending,
     this.completedAt,
+    this.removed = false,
   });
   final int lifecycle;
   final bool completed;
+
+  /// The action was removed (here or on a paired device); its reminders are
+  /// cancelled and later operations cannot revive it.
+  final bool removed;
 
   /// The note checkbox does not yet match; the local state is still durable.
   final bool notePending;
@@ -137,6 +142,7 @@ extension _WorkspaceReminders on NoteWorkspace {
       completed: completed,
       notePending: action.completed != completed,
       completedAt: completed ? DateTime.parse(v['completedAt']) : null,
+      removed: v['removed'] == true,
     );
   }
 
@@ -158,11 +164,21 @@ extension _WorkspaceReminders on NoteWorkspace {
     final state = _actionStateRow(key);
     // A notification from an earlier lifecycle must not close a reopened item.
     if (lifecycle != null && lifecycle != state['lifecycle']) return;
+    if (state['removed'] == true) throw StateError('该行动已删除。');
     if (state['completed'] != true) {
+      final op = _todoOperation();
       state['completed'] = true;
-      state['completedAt'] = _clock().toIso8601String();
+      state['completedAt'] = DateTime.fromMillisecondsSinceEpoch(op.at)
+          .toIso8601String();
       state.remove('time');
-      _saveActionState(key, state);
+      state.remove('snoozeUntil');
+      state.remove('snoozeStamp');
+      _commitTodo(noteId, actionId, state, {
+        'opId': op.opId,
+        'kind': 'complete',
+        'lifecycle': state['lifecycle'],
+        'at': op.at,
+      });
     }
     await _mirrorActionCompletion(noteId);
   }
@@ -175,12 +191,29 @@ extension _WorkspaceReminders on NoteWorkspace {
     _confirmedAction(noteId, actionId);
     final key = '$noteId:$actionId';
     final state = _actionStateRow(key);
+    if (state['removed'] == true) throw StateError('该行动已删除。');
     if (state['completed'] != true) throw StateError('事项尚未完成，无需重新开启。');
-    _saveActionState(key, {
-      'lifecycle': (state['lifecycle'] as int) + 1,
-      'completed': false,
-      'time': time.toIso8601String(),
-    });
+    final op = _todoOperation();
+    final lifecycle = (state['lifecycle'] as int) + 1;
+    final reopenTime = time.millisecondsSinceEpoch;
+    _commitTodo(
+      noteId,
+      actionId,
+      {
+        'lifecycle': lifecycle,
+        'completed': false,
+        'time': time.toIso8601String(),
+        'reopenTime': reopenTime,
+        'reopenStamp': op.stamp,
+      },
+      {
+        'opId': op.opId,
+        'kind': 'reopen',
+        'lifecycle': lifecycle,
+        'at': op.at,
+        'time': reopenTime,
+      },
+    );
     await _mirrorActionCompletion(noteId);
   }
 
@@ -197,7 +230,8 @@ extension _WorkspaceReminders on NoteWorkspace {
       'SELECT payload,removed FROM reminder_plans WHERE vault=? AND action_id=?',
       [vaultStorage.identity, key],
     );
-    if (_actionStateRow(key)['completed'] == true) {
+    final state = _actionStateRow(key);
+    if (state['completed'] == true || state['removed'] == true) {
       if (fromNotification) return;
       throw StateError('事项已完成，不再安排提醒。');
     }
@@ -220,7 +254,18 @@ extension _WorkspaceReminders on NoteWorkspace {
     v['immediate'] = false;
     v['snoozed'] = true;
     v['cancel'] = [...?v['cancel'] as List?, oldId];
-    _saveReminder(v);
+    final op = _todoOperation();
+    final until = DateTime.parse(v['time']).millisecondsSinceEpoch;
+    v['snoozeStamp'] = op.stamp;
+    state['snoozeUntil'] = until;
+    state['snoozeStamp'] = op.stamp;
+    _commitTodo(noteId, actionId, state, {
+      'opId': op.opId,
+      'kind': 'snooze',
+      'lifecycle': state['lifecycle'],
+      'at': op.at,
+      'until': until,
+    }, plan: v);
   }
 
   /// Writes the authoritative completion state into the note checkbox. A
@@ -305,8 +350,8 @@ extension _WorkspaceReminders on NoteWorkspace {
       for (final action in note.actions.where((a) => a.actionConfirmed)) {
         final key = '${note.id}:${action.id}';
         final state = _actionStateRow(key);
-        // Completed items are inactive; their plans are cancelled below.
-        if (state['completed'] == true) continue;
+        // Completed or removed items are inactive; plans are cancelled below.
+        if (state['completed'] == true || state['removed'] == true) continue;
         active.add(key);
         final rows = _database.select(
           'SELECT payload,removed FROM reminder_plans WHERE vault=? AND action_id=?',
@@ -343,6 +388,7 @@ extension _WorkspaceReminders on NoteWorkspace {
             }
             _saveReminder(old);
           }
+          _applySyncedSnooze(key, state);
           continue;
         }
         final computed = reopenTime != null
@@ -371,6 +417,7 @@ extension _WorkspaceReminders on NoteWorkspace {
           'status': ReminderStatus.pending.name,
           'cancel': [...?old?['cancel'] as List?, if (old != null) old['id']],
         });
+        _applySyncedSnooze(key, state);
       }
     }
     for (final row in _database.select(

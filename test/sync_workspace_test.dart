@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:note_agent/connection.dart';
 import 'package:note_agent/note_workspace.dart';
+
+import 'support/budget_fixture.dart' show BudgetMemoryStore;
 
 void main() {
   test(
@@ -34,6 +37,41 @@ void main() {
       addTearDown(workspace.close);
       expect(workspace.notes.single.syncStatus, NoteSyncStatus.unverified);
       expect(await File(saved.notePath).exists(), isTrue);
+    },
+  );
+  test(
+    'without a paired device to-do operations stay queued locally',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'note-agent-todo-unpaired-',
+      );
+      addTearDown(() => temporary.delete(recursive: true));
+      final vault = await Directory('${temporary.path}/vault').create();
+      final store = BudgetMemoryStore();
+      final workspace = await NoteWorkspace.open(
+        localDirectory: Directory('${temporary.path}/local'),
+        vaultDirectory: vault,
+        connection: WorkspaceConnection(secureStore: store),
+      );
+      addTearDown(workspace.close);
+      final note = await workspace.captureText(title: '安排', text: '联系物业。');
+      await workspace.resolveNoteActions(
+        note.id,
+        kind: NoteKind.todo,
+        actions: const [
+          WorkspaceAction(
+            id: 'call',
+            text: '联系物业',
+            decision: ActionDecision.confirmed,
+            reason: 'none',
+          ),
+        ],
+      );
+      await workspace.completeAction(note.id, 'call');
+      expect(await workspace.syncTodos(), TaskStatusSync.notConnected);
+      expect(workspace.todoSync.pendingOperations, 1);
+      expect(workspace.todoSync.message, contains('保留在本机'));
+      expect(workspace.actionState(note.id, 'call').completed, isTrue);
     },
   );
   test(

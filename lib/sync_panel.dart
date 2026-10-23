@@ -4,8 +4,9 @@ import 'note_workspace.dart';
 import 'workspace_platform.dart';
 
 class NoteSyncSummary extends StatelessWidget {
-  const NoteSyncSummary({super.key, required this.note});
+  const NoteSyncSummary({super.key, required this.note, this.todoSync});
   final WorkspaceNote note;
+  final WorkspaceTodoSync? todoSync;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -17,13 +18,46 @@ class NoteSyncSummary extends StatelessWidget {
             : '笔记同步：尚未核实',
       ),
       const SizedBox(height: 4),
-      const Text('待办状态同步：尚未连接'),
+      Text('待办状态同步：${todoStatusLabel(todoSync)}'),
       if (note.syncStatus == NoteSyncStatus.attachmentBlocked) ...[
         const SizedBox(height: 4),
         const Text('部分原件仅本机，未同步'),
       ],
     ],
   );
+}
+
+/// To-do coordination is reported separately from note Sync; a coordinated
+/// state never claims that the note body or its attachments arrived.
+String todoStatusLabel(WorkspaceTodoSync? sync) {
+  if (sync == null) return '尚未连接';
+  final queued = sync.pendingOperations;
+  return switch (sync.status) {
+    TaskStatusSync.notConnected => queued > 0 ? '尚未连接，$queued 项保留在本机' : '尚未连接',
+    TaskStatusSync.pending => '$queued 项等待上传',
+    TaskStatusSync.offline => '离线，$queued 项保留在本机，联网后自动协调',
+    TaskStatusSync.synced => '已与其他设备协调（不代表笔记已到达）',
+  };
+}
+
+/// States from another device whose note body has not arrived yet.
+class TodoAwaitingNoteBanner extends StatelessWidget {
+  const TodoAwaitingNoteBanner({super.key, required this.sync});
+  final WorkspaceTodoSync sync;
+
+  @override
+  Widget build(BuildContext context) {
+    final waiting = sync.awaitingNote;
+    if (waiting.isEmpty) return const SizedBox.shrink();
+    final done = waiting.where((w) => w.completed).length;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Text(
+        '已收到其他设备的 ${waiting.length} 项待办状态（$done 项已完成），笔记正文尚未到达本机。'
+        '正文由 Obsidian Sync 同步，到达后自动对应提醒。',
+      ),
+    );
+  }
 }
 
 String sourceSize(int bytes) {

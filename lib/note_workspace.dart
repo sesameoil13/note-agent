@@ -40,6 +40,7 @@ part 'note_actions.dart';
 part 'note_reminders.dart';
 part 'pending_confirmations.dart';
 part 'note_associations.dart';
+part 'todo_sync.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -55,7 +56,9 @@ enum NoteStatus {
 enum NoteSyncStatus { notPublished, unverified, attachmentBlocked }
 
 /// The lightweight task-status connection is independent of note-file Sync.
-enum TaskStatusSync { notConnected }
+/// [synced] means lifecycle states were coordinated, never that note bodies
+/// arrived. [offline] keeps operations queued locally for the next attempt.
+enum TaskStatusSync { notConnected, pending, offline, synced }
 
 /// Whether the retained input is ready for the shared, explicitly confirmed
 /// text-model pipeline. No quote, reservation or model call happens here.
@@ -649,7 +652,23 @@ class NoteWorkspace {
   final WorkspaceConnection connection;
   final VaultStorage vaultStorage;
 
-  TaskStatusSync get taskStatusSync => TaskStatusSync.notConnected;
+  TaskStatusSync get taskStatusSync => todoSync.status;
+  WorkspaceTodoSync get todoSync => _todoSyncState();
+
+  /// Push queued to-do lifecycle operations and pull states from paired
+  /// devices, then reconcile reminders. Without a paired identity nothing is
+  /// sent and operations stay queued. Network failures are reported through
+  /// [todoSync]; they are not thrown.
+  Future<TaskStatusSync> syncTodos() async {
+    bool available;
+    try {
+      available = await connection.todoSyncAvailable();
+    } catch (_) {
+      available = false;
+    }
+    if (!available) return todoSync.status;
+    return _mutate(_syncTodos);
+  }
 
   Future<SyncStorageOverview> inspectSyncStorage() async {
     final storage = vaultStorage;
@@ -789,6 +808,12 @@ class NoteWorkspace {
     );
     database.execute(
       'CREATE TABLE IF NOT EXISTS pending_notice_state(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
+    );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS todo_outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,vault TEXT NOT NULL,op_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL)',
+    );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS todo_sync(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
     );
     workspace._notifications =
         notifications ?? const UnavailableNotifications();

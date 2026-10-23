@@ -1,4 +1,5 @@
 import { budgetRequest } from "./budget.mjs";
+import { todoRequest } from "./todos.mjs";
 const response = (data, status = 200) =>
   Response.json(data, {
     status,
@@ -107,6 +108,16 @@ export default {
       if (url.pathname.startsWith("/v1/budget")) {
         const own = await device(request, env);
         return await budgetRequest(request, env, {
+          own,
+          now,
+          body,
+          fail,
+          response,
+        });
+      }
+      if (url.pathname.startsWith("/v1/todos")) {
+        const own = await device(request, env);
+        return await todoRequest(request, env, {
           own,
           now,
           body,

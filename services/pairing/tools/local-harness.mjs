@@ -1,6 +1,6 @@
 // Local system-boundary integration harness. No external service or credentials.
 import { Miniflare } from "miniflare";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 const setupToken = "local-test-setup-only";
 const mf = new Miniflare({
@@ -14,9 +14,12 @@ const mf = new Miniflare({
   port: 0,
   host: "127.0.0.1",
 });
-await (
-  await mf.getD1Database("DB")
-).exec(await readFile("migrations/0001_pairing.sql", "utf8"));
+const db = await mf.getD1Database("DB");
+for (const file of (await readdir("migrations")).sort())
+  for (const sql of (await readFile("migrations/" + file, "utf8"))
+    .split(";")
+    .filter((s) => s.trim()))
+    await db.prepare(sql).run();
 console.log((await mf.ready).origin);
 process.on("SIGTERM", async () => {
   await mf.dispose();
