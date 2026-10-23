@@ -6,6 +6,7 @@ import 'package:note_agent/main.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'support/pending_notification_fixture.dart';
+import 'support/async_settle.dart';
 
 void main() {
   testWidgets(
@@ -71,6 +72,7 @@ void main() {
         await tester.tap(find.text('仅保留为普通笔记'));
         await Future<void>.delayed(const Duration(milliseconds: 50));
       });
+      await pumpUntil(tester, () => w.pendingConfirmationNotes.isEmpty);
       await tester.pumpAndSettle();
       // Action screen closes after the local decision; the common list refreshes.
       expect(w.pendingConfirmationNotes, isEmpty);

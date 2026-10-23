@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
@@ -127,7 +128,13 @@ Future<void> _worker(
       ),
     );
     if (document == nullptr) {
-      final error = GuardedPdfium.FPDF_GetLastError();
+      var error = GuardedPdfium.FPDF_GetLastError();
+      // On Windows PDFium keeps this code in the thread's Win32 last error,
+      // which the Dart runtime may overwrite between the two FFI calls.
+      if (Platform.isWindows &&
+          (error == FPDF_ERR_SUCCESS || error == FPDF_ERR_UNKNOWN)) {
+        error = await _windowsOpenError(path);
+      }
       output.send(
         DocumentExtraction(
           engine: _engine,
@@ -412,4 +419,18 @@ class _PageProblem implements Exception {
   const _PageProblem(this.code, this.message);
   final String code;
   final String message;
+}
+
+/// Classifies a PDF PDFium refused to open from its bytes: an `/Encrypt`
+/// dictionary means a password or security handler; otherwise the file is
+/// treated as damaged. Used only when PDFium's own code was lost.
+Future<int> _windowsOpenError(String path) async {
+  try {
+    final bytes = await File(path).readAsBytes();
+    final text = latin1.decode(bytes, allowInvalid: true);
+    if (text.contains('/Encrypt')) return FPDF_ERR_PASSWORD;
+    return text.startsWith('%PDF') ? FPDF_ERR_FORMAT : FPDF_ERR_UNKNOWN;
+  } on FileSystemException {
+    return FPDF_ERR_FILE;
+  }
 }

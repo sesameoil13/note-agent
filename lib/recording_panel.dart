@@ -283,6 +283,19 @@ class _RecordingPanelState extends State<RecordingPanel> {
                       '支持 15 秒至 10 分钟；达到 10 分钟自动结束保存。',
                       style: TextStyle(color: Color(0xFF767C82), fontSize: 12),
                     ),
+                    if (Platform.isWindows)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Windows 录音约 0.7 MB/分钟；超过约 6 分 50 秒的原音频超出'
+                          '笔记库附件 5 MB 上限，只保存在本机。关闭窗口会结束并保存录音。',
+                          style: TextStyle(
+                            color: Color(0xFF767C82),
+                            fontSize: 12,
+                            height: 1.5,
+                          ),
+                        ),
+                      ),
                     if (Platform.isAndroid)
                       const Padding(
                         padding: EdgeInsets.only(top: 8),

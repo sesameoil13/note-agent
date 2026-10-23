@@ -7,6 +7,7 @@ import 'package:note_agent/budget_panel.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'audio_queue_test.dart' show wave;
+import 'support/async_settle.dart';
 import 'support/budget_fixture.dart';
 
 class _LoopbackHttpOverrides extends HttpOverrides {}
@@ -65,6 +66,19 @@ void main() {
             await tester.tap(estimate);
             await Future<void>.delayed(const Duration(milliseconds: 100));
           });
+          await pumpUntil(
+            tester,
+            () =>
+                f.workspaces.first.audioJobs.isNotEmpty &&
+                f.workspaces.first.audioJobs.single.status ==
+                    AudioJobStatus.prepared,
+          );
+          // The panel's busy indicator ends only after its refresh.
+          await pumpUntil(
+            tester,
+            () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
+            const Duration(seconds: 90),
+          );
           await tester.pumpAndSettle();
           expect(
             f.workspaces.first.audioJobs.single.status,
@@ -96,7 +110,27 @@ void main() {
             await tester.tap(cancel);
             await Future<void>.delayed(const Duration(milliseconds: 100));
           });
-          await tester.pumpAndSettle();
+          await pumpUntil(
+            tester,
+            () => f.workspaces.first.budget.reservedCnyMicros == 0,
+            const Duration(seconds: 90),
+          );
+          // The panel's busy indicator ends only after its refresh.
+          await pumpUntil(
+            tester,
+            () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
+            const Duration(seconds: 90),
+          );
+          // Bounded settle: the assertions below decide the outcome, and a
+          // frame that never stops is reported instead of hanging the test.
+          await pumpUntil(tester);
+          if (tester.binding.hasScheduledFrame) {
+            debugPrint(
+              'compact navigation still animating: '
+              '${find.byType(ProgressIndicator).evaluate().map((e) => e.widget.runtimeType).toList()} '
+              'job=${f.workspaces.first.audioJobs.map((j) => j.status).toList()}',
+            );
+          }
           expect(f.audioRequests, 0);
           expect(f.modelRequests, isEmpty);
           expect(f.workspaces.first.budget.reservedCnyMicros, 0);

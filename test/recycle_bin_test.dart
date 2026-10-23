@@ -229,25 +229,31 @@ void main() {
     expect(w.notes.map((n) => n.id).toSet(), {a.id, b.id});
   });
 
-  test('a deletion interrupted before the note file is removed finishes after restart', () async {
-    var w = await open();
-    final n = await todo(w);
-    final vaultDir = Directory('${root.path}/vault');
-    await Process.run('chmod', ['555', vaultDir.path]);
-    addTearDown(() => Process.run('chmod', ['755', vaultDir.path]));
+  test(
+    'a deletion interrupted before the note file is removed finishes after restart',
+    () async {
+      var w = await open();
+      final n = await todo(w);
+      final vaultDir = Directory('${root.path}/vault');
+      await Process.run('chmod', ['555', vaultDir.path]);
+      addTearDown(() => Process.run('chmod', ['755', vaultDir.path]));
 
-    await w.deleteNote(n.id);
-    expect(w.notes, isEmpty);
-    expect(alerts(), isEmpty);
-    expect(vault('安排.md').existsSync(), isTrue);
+      await w.deleteNote(n.id);
+      expect(w.notes, isEmpty);
+      expect(alerts(), isEmpty);
+      expect(vault('安排.md').existsSync(), isTrue);
 
-    await w.close();
-    await Process.run('chmod', ['755', vaultDir.path]);
-    w = await open();
-    expect(vault('安排.md').existsSync(), isFalse);
-    expect(w.recycleBin.single.noteId, n.id);
-    expect(alerts(), isEmpty);
-  });
+      await w.close();
+      await Process.run('chmod', ['755', vaultDir.path]);
+      w = await open();
+      expect(vault('安排.md').existsSync(), isFalse);
+      expect(w.recycleBin.single.noteId, n.id);
+      expect(alerts(), isEmpty);
+    },
+    skip: Platform.isWindows
+        ? 'simulates an unwritable vault with POSIX chmod; the Dart retry logic is covered on macOS/Linux'
+        : false,
+  );
 
   test(
     'deleted notes leave associations and topic suggestions until restored',
@@ -319,5 +325,8 @@ void main() {
       expect(await vault('安排.md').readAsString(), markdown);
       expect(alerts(), hasLength(1));
     },
+    skip: Platform.isWindows
+        ? 'simulates an unwritable vault with POSIX chmod; the Dart retry logic is covered on macOS/Linux'
+        : false,
   );
 }

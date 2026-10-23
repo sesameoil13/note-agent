@@ -58,10 +58,15 @@ class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
   String get displayName => p.basename(directory.path);
   @override
   String reference(String relativePath) =>
-      p.join(directory.path, _safe(relativePath));
+      p.joinAll([directory.path, ...p.split(_safe(relativePath))]);
+
+  /// Vault-relative paths always use `/`, as Obsidian links do, on every OS.
   @override
   String relativePath(String reference) =>
-      _safe(p.relative(reference, from: directory.path));
+      _safe(_portable(p.relative(reference, from: directory.path)));
+
+  static String _portable(String relative) =>
+      p.posix.joinAll(p.split(relative));
 
   String _safe(String relativePath) {
     if (p.isAbsolute(relativePath) ||
@@ -170,7 +175,7 @@ class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
       recursive: true,
       followLinks: false,
     )) {
-      final relative = p.relative(entity.path, from: directory.path);
+      final relative = _portable(p.relative(entity.path, from: directory.path));
       if (entity is File &&
           relative.toLowerCase().endsWith('.md') &&
           !p.split(relative).any((part) => part.startsWith('.'))) {

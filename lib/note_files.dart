@@ -1,6 +1,8 @@
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+
 import 'package:ffi/ffi.dart';
 
 /// File-system boundary. Staging files belong exclusively to this capture.
@@ -141,7 +143,9 @@ class AtomicNoteFilePublisher implements NoteFilePublisher {
   }
 
   String _windowsPath(File file) {
-    final path = file.absolute.path;
+    // `\\?\` disables Win32 normalization, so `/` separators and `.` parts
+    // must be resolved here first.
+    final path = p.normalize(file.absolute.path);
     if (path.startsWith(r'\\?\')) return path;
     if (path.startsWith(r'\\')) return r'\\?\UNC\' + path.substring(2);
     return r'\\?\' + path;

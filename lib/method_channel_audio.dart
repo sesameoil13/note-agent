@@ -5,13 +5,19 @@ import 'package:flutter/services.dart';
 import 'audio_platform.dart';
 import 'audio_sources.dart';
 
-/// Native macOS / Android recorder and player boundary.
+/// Native macOS / Android / Windows recorder and player boundary.
 class MethodChannelAudioPlatform
     implements
         AudioPlatform,
         AudioSourceInspector,
         AudioSourcePlayer,
         AudioRecordingRecovery {
+  /// Android's service outlives the activity; Windows finalizes the container
+  /// when its window closes. macOS keeps no recording outside its process.
+  MethodChannelAudioPlatform({bool? nativeRecovery})
+    : _nativeRecovery =
+          nativeRecovery ?? (Platform.isAndroid || Platform.isWindows);
+  final bool _nativeRecovery;
   static const _channel = MethodChannel('dev.noteagent/audio');
 
   Future<T?> _invoke<T>(String method, [Object? arguments]) async {
@@ -29,8 +35,7 @@ class MethodChannelAudioPlatform
 
   @override
   Future<AudioCaptureSnapshot?> recoverRecording(String originalPath) async {
-    // macOS does not keep recording outside its application process.
-    if (!Platform.isAndroid) return null;
+    if (!_nativeRecovery) return null;
     final value = await _invoke<Object?>('recoverRecording', {
       'path': originalPath,
     });

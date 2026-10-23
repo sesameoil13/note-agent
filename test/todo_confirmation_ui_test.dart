@@ -6,6 +6,8 @@ import 'package:note_agent/main.dart';
 import 'package:note_agent/note_workspace.dart';
 import 'package:note_agent/action_confirmation_screen.dart';
 
+import 'support/async_settle.dart';
+
 void main() {
   testWidgets(
     'same action screen exposes retry after a failed save and completes the original change',
@@ -46,6 +48,7 @@ void main() {
         await tester.tap(find.text('保存修正（不调用模型）'));
         await Future<void>.delayed(const Duration(milliseconds: 50));
       });
+      await pumpUntil(tester, () => w.notes.single.actionSavePending);
       await tester.pumpAndSettle();
       expect(w.notes.single.actionSavePending, isTrue);
       expect(find.text('重试保存修正'), findsOneWidget);
@@ -56,6 +59,7 @@ void main() {
         await tester.tap(find.text('重试保存修正'));
         await Future<void>.delayed(const Duration(milliseconds: 50));
       });
+      await pumpUntil(tester, () => !w.notes.single.actionSavePending);
       await tester.pumpAndSettle();
       expect(w.notes.single.actionSavePending, isFalse);
       expect(w.notes.single.kind, NoteKind.todo);

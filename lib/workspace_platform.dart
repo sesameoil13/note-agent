@@ -65,7 +65,7 @@ class WorkspacePlatform {
 
   /// Desktop only. A one-off, read-only pick for the backup comparison; it is
   /// never persisted and never becomes the App's vault.
-  bool get supportsFolderComparison => Platform.isMacOS;
+  bool get supportsFolderComparison => Platform.isMacOS || Platform.isWindows;
 
   Future<Directory?> chooseFolderForReading(String title) async {
     final path = await _channel.invokeMethod<String>('chooseFolder', {

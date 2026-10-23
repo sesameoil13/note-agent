@@ -54,7 +54,8 @@ class BudgetFixture {
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .first
-          .timeout(const Duration(seconds: 15)),
+          // Starting the local Worker runtime is slow on Windows CI.
+          .timeout(const Duration(seconds: 60)),
     );
     router = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     router.listen((r) async {

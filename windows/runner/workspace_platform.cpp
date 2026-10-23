@@ -1,5 +1,7 @@
 #include "workspace_platform.h"
 
+#include "native_paths.h"
+
 #include <flutter/standard_method_codec.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -15,34 +17,12 @@ namespace {
 using flutter::EncodableMap;
 using flutter::EncodableValue;
 using Microsoft::WRL::ComPtr;
+using native_paths::ExistingPath;
+using native_paths::LocalDirectory;
+using native_paths::Utf16;
+using native_paths::Utf8;
 constexpr wchar_t kRegistryKey[] = L"Software\\NoteAgent";
 constexpr wchar_t kVaultValue[] = L"VaultDirectory";
-
-std::string Utf8(const std::wstring& text) {
-  if (text.empty()) return {};
-  const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
-                                       text.data(), static_cast<int>(text.size()),
-                                       nullptr, 0, nullptr, nullptr);
-  if (length == 0) return {};
-  std::string converted(length, '\0');
-  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
-                          static_cast<int>(text.size()), converted.data(),
-                          length, nullptr, nullptr) == 0) return {};
-  return converted;
-}
-
-std::optional<std::wstring> Utf16(const std::string& text) {
-  if (text.empty() || text.find('\0') != std::string::npos) return std::nullopt;
-  const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
-                                       text.data(), static_cast<int>(text.size()),
-                                       nullptr, 0);
-  if (length == 0) return std::nullopt;
-  std::wstring converted(length, L'\0');
-  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                          static_cast<int>(text.size()), converted.data(),
-                          length) == 0) return std::nullopt;
-  return converted;
-}
 
 std::string EncodeQueryValue(const std::wstring& path) {
   constexpr char digits[] = "0123456789ABCDEF";
@@ -59,52 +39,6 @@ std::string EncodeQueryValue(const std::wstring& path) {
     }
   }
   return encoded;
-}
-
-// Resolve junctions/symlinks from an existing handle, not a string prefix alone.
-std::optional<std::wstring> ExistingPath(const std::wstring& path,
-                                       bool directory) {
-  HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                             nullptr, OPEN_EXISTING,
-                             FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-  if (handle == INVALID_HANDLE_VALUE) return std::nullopt;
-  BY_HANDLE_FILE_INFORMATION information{};
-  if (!GetFileInformationByHandle(handle, &information) ||
-      ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) !=
-          directory) {
-    CloseHandle(handle);
-    return std::nullopt;
-  }
-  const DWORD length = GetFinalPathNameByHandleW(handle, nullptr, 0,
-                                                FILE_NAME_NORMALIZED);
-  std::vector<wchar_t> buffer(static_cast<size_t>(length) + 1);
-  const DWORD written = length == 0 ? 0 : GetFinalPathNameByHandleW(
-      handle, buffer.data(), static_cast<DWORD>(buffer.size()),
-      FILE_NAME_NORMALIZED);
-  CloseHandle(handle);
-  if (written == 0 || written >= buffer.size()) return std::nullopt;
-  std::wstring resolved(buffer.data(), written);
-  if (resolved.rfind(L"\\\\?\\UNC\\", 0) == 0) {
-    resolved = L"\\\\" + resolved.substr(8);
-  } else if (resolved.rfind(L"\\\\?\\", 0) == 0) {
-    resolved.erase(0, 4);
-  }
-  return resolved;
-}
-
-std::optional<std::wstring> LocalDirectory() {
-  PWSTR known = nullptr;
-  const HRESULT status = SHGetKnownFolderPath(FOLDERID_LocalAppData,
-                                              KF_FLAG_CREATE, nullptr, &known);
-  if (FAILED(status)) return std::nullopt;
-  const auto directory = std::filesystem::path(known) /
-                         L"dev.noteagent" / L"workspace";
-  CoTaskMemFree(known);
-  std::error_code error;
-  std::filesystem::create_directories(directory, error);
-  if (error) return std::nullopt;
-  return ExistingPath(directory.native(), true);
 }
 
 bool ReadVault(std::wstring* path) {
@@ -175,6 +109,8 @@ void WorkspacePlatform::HandleMethodCall(
     RestoreLocation(std::move(result));
   } else if (call.method_name() == "chooseLocation") {
     ChooseLocation(std::move(result));
+  } else if (call.method_name() == "chooseFolder") {
+    ChooseFolder(call.arguments(), std::move(result));
   } else if (call.method_name() == "chooseSourceFile") {
     ChooseSourceFile(call.arguments(), std::move(result));
   } else if (call.method_name() == "releaseSourceFile") {
@@ -250,6 +186,49 @@ void WorkspacePlatform::ChooseLocation(std::unique_ptr<Result> result) {
   result->Success(Location(*local, vault_directory_));
 }
 
+// A one-off, read-only pick for the backup comparison; never persisted.
+void WorkspacePlatform::ChooseFolder(const EncodableValue* arguments,
+                                     std::unique_ptr<Result> result) {
+  const auto* values = arguments ? std::get_if<EncodableMap>(arguments) : nullptr;
+  std::wstring title = L"选择文件夹";
+  if (values) {
+    const auto entry = values->find(EncodableValue("title"));
+    const auto* text = entry == values->end()
+        ? nullptr : std::get_if<std::string>(&entry->second);
+    if (text) title = Utf16(*text).value_or(title);
+  }
+  ComPtr<IFileOpenDialog> dialog;
+  HRESULT status = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                                    CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+  FILEOPENDIALOGOPTIONS options = 0;
+  if (SUCCEEDED(status)) status = dialog->GetOptions(&options);
+  if (SUCCEEDED(status)) {
+    status = dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                                FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+  }
+  if (SUCCEEDED(status)) status = dialog->SetTitle(title.c_str());
+  if (SUCCEEDED(status)) status = dialog->SetOkButtonLabel(L"只读核对");
+  if (SUCCEEDED(status)) status = dialog->Show(window_);
+  if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+    result->Success();
+    return;
+  }
+  ComPtr<IShellItem> selected;
+  if (SUCCEEDED(status)) status = dialog->GetResult(&selected);
+  PWSTR selected_path = nullptr;
+  if (SUCCEEDED(status)) {
+    status = selected->GetDisplayName(SIGDN_FILESYSPATH, &selected_path);
+  }
+  const auto directory = SUCCEEDED(status) && selected_path
+      ? ExistingPath(selected_path, true) : std::nullopt;
+  CoTaskMemFree(selected_path);
+  if (!directory) {
+    result->Error("directory_access", "无法读取所选文件夹，请重新选择。");
+    return;
+  }
+  result->Success(EncodableValue(Utf8(*directory)));
+}
+
 void WorkspacePlatform::ChooseSourceFile(const EncodableValue* arguments, std::unique_ptr<Result> result) {
   const auto* values = arguments ? std::get_if<EncodableMap>(arguments) : nullptr;
   bool pdf_only = false;
@@ -321,7 +300,7 @@ void WorkspacePlatform::RevealLocalSource(const EncodableValue* arguments,
   PIDLIST_ABSOLUTE parent = item ? ILCloneFull(item) : nullptr;
   HRESULT status = E_FAIL;
   if (parent && ILRemoveLastID(parent)) {
-    const ITEMIDLIST* child = ILFindLastID(item);
+    PCUITEMID_CHILD child = ILFindLastID(item);
     status = SHOpenFolderAndSelectItems(parent, 1, &child, 0);
   }
   CoTaskMemFree(parent);

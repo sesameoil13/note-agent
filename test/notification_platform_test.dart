@@ -94,4 +94,25 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(network, 1);
   });
+  test(
+    'native adapter forwards a system wake as a reminder re-check signal',
+    () async {
+      const channel = MethodChannel('dev.noteagent/notifications');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final port = MethodChannelNotifications();
+      var rechecks = 0;
+      final subscription = port.connectivitySignals.listen((_) => rechecks++);
+      addTearDown(subscription.cancel);
+      await messenger.handlePlatformMessage(
+        channel.name,
+        const StandardMethodCodec().encodeMethodCall(
+          const MethodCall('systemResumed'),
+        ),
+        (ByteData? _) {},
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(rechecks, 1);
+    },
+  );
 }

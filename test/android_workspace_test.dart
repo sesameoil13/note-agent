@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 import 'package:note_agent/workspace_platform.dart';
 
+import 'support/async_settle.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -159,11 +161,13 @@ void main() {
             .setMockMethodCallHandler(channel, null),
       );
       await tester.pumpWidget(const NoteAgentApp());
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       await tester.runAsync(() async {
         await tester.tap(find.text('先选择本地笔记库'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       expect(find.widgetWithText(TextField, '正文'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -177,12 +181,14 @@ void main() {
         await tester.tap(find.text('保存文字'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       expect(find.text('拒绝授权后仍保留中文。'), findsOneWidget);
       expect(find.textContaining('授权已失效'), findsOneWidget);
       expect(find.text('本机已保存'), findsNothing);
       cancelPicker = true;
       await tester.tap(find.text('选择笔记库'));
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       expect(find.text('拒绝授权后仍保留中文。'), findsOneWidget);
       cancelPicker = false;
@@ -191,12 +197,14 @@ void main() {
         await tester.tap(find.text('选择笔记库'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('保存文字'));
       await tester.runAsync(() async {
         await tester.tap(find.text('保存文字'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       expect(find.text('本机已保存'), findsOneWidget);
       expect(

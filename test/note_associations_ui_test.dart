@@ -6,6 +6,8 @@ import 'package:note_agent/main.dart';
 
 import 'support/budget_fixture.dart';
 
+import 'support/async_settle.dart';
+
 class _LoopbackHttpOverrides extends HttpOverrides {}
 
 void main() {
@@ -48,12 +50,17 @@ void main() {
         await tester.tap(find.text('确认创建主题').first);
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
+      await pumpUntil(tester, () => w.pendingTopicSuggestions.length == 1);
       await tester.pumpAndSettle();
       expect(w.pendingTopicSuggestions.single.title, '新手研究');
       await tester.runAsync(() async {
         await tester.tap(find.text('忽略主题建议'));
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
+      await pumpUntil(
+        tester,
+        () => find.text('没有待确认内容。').evaluate().isNotEmpty,
+      );
       await tester.pumpAndSettle();
       expect(find.text('没有待确认内容。'), findsOneWidget);
       await tester.pageBack();

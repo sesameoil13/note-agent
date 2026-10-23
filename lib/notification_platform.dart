@@ -4,19 +4,24 @@ import 'package:flutter/services.dart';
 
 import 'notifications.dart';
 
-/// macOS and Android local notification adapter; inspect never prompts.
+/// macOS, Android and Windows local notification adapter; inspect never prompts.
 class MethodChannelNotifications
     implements NotificationPort, NotificationInteractionPort {
   MethodChannelNotifications() {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'interactionAvailable') _signals.add(null);
-      if (call.method == 'networkAvailable') _network.add(null);
+      // Windows also reports waking from sleep: due toasts and plans need the
+      // same re-check as a regained network.
+      if (call.method == 'networkAvailable' || call.method == 'systemResumed') {
+        _network.add(null);
+      }
     });
   }
   final _signals = StreamController<void>.broadcast();
   final _network = StreamController<void>.broadcast();
 
-  /// Android reports a regained network so the App can re-check reminders.
+  /// Android and Windows report a regained network, and Windows a wake from
+  /// sleep, so the App can re-check reminders.
   Stream<void> get connectivitySignals => _network.stream;
   @override
   Stream<void> get interactionSignals => _signals.stream;

@@ -28,6 +28,10 @@ bool FlutterWindow::OnCreate() {
   secure_credentials_ = std::make_unique<SecureCredentials>(flutter_controller_->engine()->messenger());
   workspace_platform_ = std::make_unique<WorkspacePlatform>(
       flutter_controller_->engine()->messenger(), GetHandle());
+  native_audio_ = std::make_unique<NativeAudio>(
+      flutter_controller_->engine()->messenger());
+  native_notifications_ = std::make_unique<NativeNotifications>(
+      flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -43,6 +47,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  native_audio_.reset();  // Finalizes an in-progress recording.
+  native_notifications_.reset();
   secure_credentials_.reset();
   workspace_platform_.reset();
   if (flutter_controller_) {
@@ -66,7 +72,18 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     }
   }
 
+  if (native_notifications_) {
+    if (const auto handled =
+            native_notifications_->HandleMessage(message, wparam, lparam)) {
+      return *handled;
+    }
+  }
+
   switch (message) {
+    case WM_ENDSESSION:
+      // Sign-out/shutdown may end the process without destroying the window.
+      if (wparam && native_audio_) native_audio_->FinishForExit();
+      break;
     case WM_GETMINMAXINFO: {
       auto* size = reinterpret_cast<MINMAXINFO*>(lparam);
       size->ptMinTrackSize = {640, 640};

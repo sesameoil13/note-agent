@@ -7,6 +7,7 @@ import 'package:note_agent/document_panel.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'support/budget_fixture.dart';
+import 'support/async_settle.dart';
 
 class _LoopbackHttpOverrides extends HttpOverrides {}
 
@@ -37,6 +38,7 @@ void main() {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)),
       );
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
         find.text('预估并预留（不调用模型）'),
@@ -57,6 +59,7 @@ void main() {
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }, _LoopbackHttpOverrides()),
       );
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       expect(w.textJobs.single.status, TextProcessingStatus.prepared);
       expect(f.modelRequests, isEmpty);
@@ -76,6 +79,7 @@ void main() {
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }, _LoopbackHttpOverrides()),
       );
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       expect(w.textJobs.single.status, TextProcessingStatus.completed);
       expect(f.modelRequests, hasLength(1));
@@ -90,6 +94,7 @@ void main() {
           ),
         ),
       );
+      await pumpUntil(tester);
       await tester.pumpAndSettle();
       expect(
         tester
@@ -127,6 +132,7 @@ void main() {
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
+    await pumpUntil(tester);
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.text('预估并预留（不调用模型）'),

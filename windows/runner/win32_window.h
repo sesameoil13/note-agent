@@ -39,6 +39,10 @@ class Win32Window {
   // Show the current window. Returns true if the window was successfully shown.
   bool Show();
 
+  // The ShowWindow command used by |Show|; a toast-action launch starts
+  // minimized without taking focus.
+  void SetShowCommand(int command) { show_command_ = command; }
+
   // Release OS resources associated with window.
   void Destroy();
 
@@ -94,6 +98,7 @@ class Win32Window {
 
   // window handle for top level window.
   HWND window_handle_ = nullptr;
+  int show_command_ = SW_SHOWNORMAL;
 
   // window handle for hosted content.
   HWND child_content_ = nullptr;

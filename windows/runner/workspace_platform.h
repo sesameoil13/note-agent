@@ -23,6 +23,8 @@ class WorkspacePlatform {
       std::unique_ptr<Result> result);
   void RestoreLocation(std::unique_ptr<Result> result);
   void ChooseLocation(std::unique_ptr<Result> result);
+  void ChooseFolder(const flutter::EncodableValue* arguments,
+                    std::unique_ptr<Result> result);
   void ChooseSourceFile(const flutter::EncodableValue* arguments, std::unique_ptr<Result> result);
   void RevealLocalSource(const flutter::EncodableValue* arguments,
                          std::unique_ptr<Result> result);

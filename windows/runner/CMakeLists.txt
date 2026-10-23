@@ -13,14 +13,22 @@ add_executable(${BINARY_NAME} WIN32
   "win32_window.cpp"
   "workspace_platform.cpp"
   "secure_credentials.cpp"
+  "native_paths.cpp"
+  "native_audio.cpp"
+  "native_notifications.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"
   "runner.exe.manifest"
 )
 
-# Apply the standard set of build settings. This can be removed for applications
-# that need different build settings.
-apply_standard_settings(${BINARY_NAME})
+# The standard settings, except C++ exceptions stay enabled (C++/WinRT toast
+# notifications report failures by throwing) and C++20, which C++/WinRT needs
+# for coroutine support without the removed /await headers. Warnings in SDK/Flutter headers
+# included with angle brackets are not treated as this target's errors.
+target_compile_features(${BINARY_NAME} PUBLIC cxx_std_20)
+target_compile_options(${BINARY_NAME} PRIVATE /W4 /WX /wd"4100" /EHsc
+  /external:anglebrackets /external:W0)
+target_compile_definitions(${BINARY_NAME} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
 
 # Add preprocessor definitions for the build version.
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
@@ -35,7 +43,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
-target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "ole32.lib" "advapi32.lib" "crypt32.lib" "uuid.lib")
+target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "ole32.lib" "advapi32.lib" "crypt32.lib" "uuid.lib"
+  "mf.lib" "mfplat.lib" "mfreadwrite.lib" "mfuuid.lib" "windowsapp.lib")
 target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
