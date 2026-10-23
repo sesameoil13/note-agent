@@ -141,6 +141,45 @@ void main() {
   );
 
   test(
+    'an edit in the same second as the App write is compared at whole seconds',
+    () async {
+      // The App wrote at 08:00:00.700; a file system with one-second mtimes
+      // reports an Obsidian edit made in that second as 08:00:00.
+      now = DateTime(2026, 10, 21, 8, 0, 0, 700);
+      final w = await open();
+      final n = await w.captureText(title: '读书', text: '乙');
+      final file = noteFile(w, n.id);
+      final mine = await file.readAsString();
+
+      await externalWrite(
+        file,
+        mine.replaceFirst('乙', '甲'),
+        DateTime(2026, 10, 21, 8),
+      );
+      expect(await w.readVaultEdits(), [n.id]);
+      expect(w.notes.single.text, '甲');
+
+      // The tie is decided by content, the same on every device.
+      final adopted = await file.readAsString();
+      final written = w.notes.single.modifiedAt;
+      await externalWrite(
+        file,
+        adopted.replaceFirst('甲', '丙'),
+        DateTime(
+          written.year,
+          written.month,
+          written.day,
+          written.hour,
+          written.minute,
+          written.second,
+        ),
+      );
+      expect(await w.readVaultEdits(), isEmpty);
+      expect(w.notes.single.text, '甲');
+    },
+  );
+
+  test(
     'ticking a to-do in Obsidian completes it and cancels its reminder',
     () async {
       final w = await open();
@@ -307,7 +346,7 @@ void main() {
     expect(await w.readVaultEdits(), isEmpty);
   });
 
-  test('to-do text edited or added in Obsidian keeps identities and plans reminders', () async {
+  test('to-do text edited in Obsidian keeps identities; an added line waits for confirmation without a reminder', () async {
     final w = await open();
     final n = await todo(w);
     final file = noteFile(w, n.id);
@@ -324,11 +363,41 @@ void main() {
     final actions = w.notes.single.actions;
     expect(actions.map((a) => a.text), ['买电池', '联系物业维修', '交电费']);
     expect(actions[1].id, 'call');
-    expect(actions[2].actionConfirmed, true);
+    // A line typed in Obsidian has not been confirmed as an action yet.
+    expect(actions[2].actionConfirmed, false);
+    expect(actions[2].timeExpression, '明天20:00');
+    expect(w.reminders.map((r) => r.actionId), ['buy', 'call']);
+    expect(
+      port.pending.values.where((r) => r.payload['actionId'] == actions[2].id),
+      isEmpty,
+    );
+    expect(w.pendingConfirmationItems.map((i) => (i.kind, i.subjectId)), [
+      (PendingConfirmationKind.action, actions[2].id),
+    ]);
+    expect(w.reminders.firstWhere((r) => r.actionId == 'call').text, '联系物业维修');
+    // The note shows the line as pending, and that rewrite is not an edit.
+    expect(await file.readAsString(), contains('- [ ] 交电费 ⏰ 明天20:00（待确认）\n'));
+    expect(await w.readVaultEdits(), isEmpty);
+    expect(w.notes.single.actions[2].actionConfirmed, false);
+
+    // Confirming it in the App starts its reminder.
+    await w.resolveNoteActions(
+      n.id,
+      kind: NoteKind.todo,
+      actions: [
+        for (final a in w.notes.single.actions)
+          WorkspaceAction(
+            id: a.id,
+            text: a.text,
+            decision: ActionDecision.confirmed,
+            reason: 'none',
+            timeExpression: a.timeExpression,
+            timeStatus: a.timeStatus,
+          ),
+      ],
+    );
     final added = w.reminders.firstWhere((r) => r.actionId == actions[2].id);
     expect(added.time, DateTime(2026, 10, 22, 20));
-    expect(w.reminders.firstWhere((r) => r.actionId == 'call').text, '联系物业维修');
-    expect(await w.readVaultEdits(), isEmpty);
   });
 
   test('deleting to and restoring from the recycle bin is not read as an Obsidian edit or rename', () async {
@@ -350,7 +419,10 @@ void main() {
     await file.setLastModified(DateTime(2026, 10, 21, 9, 30));
     expect(await w.readVaultEdits(), isEmpty);
     expect(await file.readAsString(), restoredText);
-    expect(restoredText.split('\n## 关联\n').first, markdown.split('\n## 关联\n').first);
+    expect(
+      restoredText.split('\n## 关联\n').first,
+      markdown.split('\n## 关联\n').first,
+    );
     expect(w.notes.firstWhere((x) => x.id == n.id).title, '安排 (2)');
     expect(w.notes.firstWhere((x) => x.id == other.id).title, '读书');
     expect(w.actionState(n.id, 'buy').completed, isFalse);

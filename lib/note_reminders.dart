@@ -135,7 +135,7 @@ extension _WorkspaceReminders on NoteWorkspace {
   WorkspaceActionState _actionState(String noteId, String actionId) {
     final note = notes.firstWhere((n) => n.id == noteId);
     final action = note.actions.firstWhere((a) => a.id == actionId);
-    final v = _actionStateRow('$noteId:$actionId');
+    final v = _actionStateRow(_actionKey(noteId, actionId));
     final completed = v['completed'] == true;
     return WorkspaceActionState(
       lifecycle: v['lifecycle'] as int,
@@ -160,7 +160,7 @@ extension _WorkspaceReminders on NoteWorkspace {
     int? lifecycle,
   }) async {
     _confirmedAction(noteId, actionId);
-    final key = '$noteId:$actionId';
+    final key = _actionKey(noteId, actionId);
     final state = _actionStateRow(key);
     // A notification from an earlier lifecycle must not close a reopened item.
     if (lifecycle != null && lifecycle != state['lifecycle']) return;
@@ -191,7 +191,7 @@ extension _WorkspaceReminders on NoteWorkspace {
     DateTime time,
   ) async {
     _confirmedAction(noteId, actionId);
-    final key = '$noteId:$actionId';
+    final key = _actionKey(noteId, actionId);
     final state = _actionStateRow(key);
     if (state['removed'] == true) throw StateError('该行动已删除。');
     if (state['completed'] != true) throw StateError('事项尚未完成，无需重新开启。');
@@ -231,7 +231,7 @@ extension _WorkspaceReminders on NoteWorkspace {
   }) async {
     final fromNotification = notificationId != null;
     _confirmedAction(noteId, actionId);
-    final key = '$noteId:$actionId';
+    final key = _actionKey(noteId, actionId);
     final rows = _database.select(
       'SELECT payload,removed FROM reminder_plans WHERE vault=? AND action_id=?',
       [vaultStorage.identity, key],
@@ -290,7 +290,7 @@ extension _WorkspaceReminders on NoteWorkspace {
     final note = notes.firstWhere((n) => n.id == noteId);
     final completion = {
       for (final a in note.actions)
-        a.id: _actionStateRow('$noteId:${a.id}')['completed'] == true,
+        a.id: _actionStateRow(_actionKey(noteId, a.id))['completed'] == true,
     };
     if (note.actions.every((a) => a.completed == completion[a.id])) return;
     try {
@@ -346,7 +346,7 @@ extension _WorkspaceReminders on NoteWorkspace {
           case 'complete':
             await _completeAction(noteId, actionId, lifecycle: lifecycle);
           case 'snooze':
-            if (_actionStateRow('$noteId:$actionId')['lifecycle'] ==
+            if (_actionStateRow(_actionKey(noteId, actionId))['lifecycle'] ==
                 lifecycle) {
               final armed = int.tryParse(r.payload['snoozedUntilMs'] ?? '');
               await _snoozeReminder(
@@ -372,7 +372,7 @@ extension _WorkspaceReminders on NoteWorkspace {
     final active = <String>{};
     for (final note in notes) {
       for (final action in note.actions.where((a) => a.actionConfirmed)) {
-        final key = '${note.id}:${action.id}';
+        final key = _actionKey(note.id, action.id);
         final state = _actionStateRow(key);
         // Completed or removed items are inactive; their plans are cancelled
         // below. So are reminders missed in the 回收站 until the user decides.

@@ -128,7 +128,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   StreamSubscription<void>? _networkReturn;
 
   /// Android re-checks local reminders when the network comes back, as it does
-  /// on resume; the OS reports it through the same notification adapter.
+  /// on resume, and sends the to-do operations queued while offline; the OS
+  /// reports it through the same notification adapter. macOS has no such
+  /// signal here: queued operations go out on the next resume or local change.
   MethodChannelNotifications _systemNotifications() {
     final port = MethodChannelNotifications();
     unawaited(_networkReturn?.cancel());
@@ -136,9 +138,12 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       final workspace = _workspace;
       if (workspace == null) return;
       unawaited(
-        workspace.reconcileReminders().then((_) {
-          if (mounted) setState(() {});
-        }, onError: (Object _) {}),
+        workspace
+            .reconcileReminders()
+            .then((_) {
+              if (mounted) setState(() {});
+            }, onError: (Object _) {})
+            .whenComplete(_syncTodos),
       );
     });
     return port;
@@ -166,6 +171,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     final reminders = workspace.takeReminderInteractions();
     try {
       final noteId = await reminders;
+      // A completion or snooze chosen on the alert reaches paired devices now.
+      if (workspace.todoSync.pendingOperations > 0) unawaited(_syncTodos());
       if (mounted && workspace == _workspace) {
         setState(() {
           if (noteId != null && !_saving) {
@@ -1184,6 +1191,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+    // Deletion marks and removed reminders reach paired devices now.
+    unawaited(_syncTodos());
   }
 
   Future<DateTime?> _pickReopenTime() async {

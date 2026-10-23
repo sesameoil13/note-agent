@@ -123,6 +123,7 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
     final markdown = await vaultStorage.exists(path)
         ? await vaultStorage.readText(path)
         : null;
+    final inbound = await _inboundLinkers(path);
     _database.execute('BEGIN IMMEDIATE');
     try {
       _saveDisposal(noteId, 'deleted', {
@@ -132,6 +133,7 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
         'notePath': path,
         'markdown': markdown,
         'archived': note.archived,
+        'inbound': inbound,
       });
       if (!remote) _recordNoteMark(noteId, 'trash');
       // Plans are kept, marked as recycled, so restore can revive them as-is.
@@ -155,6 +157,26 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
 
   /// Removes only the note file. Its source text, attachments and any file
   /// shared with other notes stay in the vault until 永久清除.
+  /// Notes that link to [path] when it is deleted. Only these links are moved
+  /// if the note comes back under a numbered title; links made later point at
+  /// whichever note then holds the name.
+  Future<List<String>> _inboundLinkers(String path) async {
+    const probe = '\u0000probe.md';
+    final found = <String>[];
+    for (final other in await vaultStorage.listNotePaths()) {
+      if (other == path) continue;
+      try {
+        final text = await vaultStorage.readText(other);
+        if (rewriteNoteLinks(text, other, path, probe) != text) {
+          found.add(other);
+        }
+      } on FileSystemException {
+        /* Unreadable notes keep their links as they are. */
+      }
+    }
+    return found;
+  }
+
   Future<void> _finishDelete(String noteId) async {
     final v = _disposal(noteId)!;
     final path = v['notePath'] as String;
@@ -283,6 +305,19 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
       );
       path = '${naming.title}.md';
       v['restorePath'] = path;
+      // As in a rename: links that pointed at the note follow it to the new
+      // title. Planned before publishing so a retry replays the same edits.
+      final oldPath = v['notePath'] as String;
+      final updates = <Map<String, String>>[];
+      for (final linker in (v['inbound'] as List? ?? const []).cast<String>()) {
+        if (path == oldPath || !await vaultStorage.exists(linker)) continue;
+        final before = await vaultStorage.readText(linker);
+        final after = rewriteNoteLinks(before, linker, oldPath, path);
+        if (after != before) {
+          updates.add({'path': linker, 'before': before, 'after': after});
+        }
+      }
+      v['linkUpdates'] = updates;
       _database.execute('BEGIN IMMEDIATE');
       try {
         _saveDisposal(noteId, 'restoring', v);
@@ -313,6 +348,31 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
       ]);
       return notes.firstWhere((n) => n.id == noteId);
     }
+    for (final update in (v['linkUpdates'] as List? ?? const []).cast<Map>()) {
+      final linker = update['path'] as String;
+      try {
+        await vaultStorage.replaceText(
+          linker,
+          update['before'] as String,
+          update['after'] as String,
+          'restore-$noteId',
+        );
+        _inboundNoteContentsChanged(linker, update['after'] as String);
+      } on FileSystemException catch (error) {
+        // Edited or removed since: never overwrite, keep that note's links.
+        if (await vaultStorage.exists(linker) &&
+            await vaultStorage.readText(linker) == update['before']) {
+          v['error'] = error.message;
+          _saveDisposal(noteId, 'restoring', v);
+          _database.execute('UPDATE notes SET status=?, error=? WHERE id=?', [
+            NoteStatus.exportFailed.name,
+            error.message,
+            noteId,
+          ]);
+          return notes.firstWhere((n) => n.id == noteId);
+        }
+      }
+    }
     _database.execute('BEGIN IMMEDIATE');
     try {
       _database.execute(
@@ -336,7 +396,7 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
   List<ReminderDecision> _reminderDecisions() => List.unmodifiable([
     for (final note in notes)
       for (final action in note.actions.where((a) => a.actionConfirmed))
-        if (_actionStateRow('${note.id}:${action.id}')['held']
+        if (_actionStateRow(_actionKey(note.id, action.id))['held']
             case final String held)
           ReminderDecision(
             noteId: note.id,
@@ -352,7 +412,7 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
     DateTime? time,
   ) async {
     _confirmedAction(noteId, actionId);
-    final key = '$noteId:$actionId';
+    final key = _actionKey(noteId, actionId);
     final state = _actionStateRow(key);
     if (state.remove('held') == null) throw StateError('该提醒无需决定。');
     if (time == null) {
@@ -373,21 +433,6 @@ const _noteMarkNames = {
   'purge': 'purged',
 };
 
-/// The Worker's joinMark: a purge is final; otherwise the later device time
-/// (operation id as tiebreak) wins between deletion and restore.
-Map<String, dynamic> _joinNoteMark(
-  Map<String, dynamic>? a,
-  Map<String, dynamic> b,
-) {
-  if (a == null) return b;
-  String stamp(Map m) => m['markStamp'] as String? ?? '';
-  final purged = [a, b].where((m) => m['mark'] == 'purged').toList();
-  if (purged.isNotEmpty) {
-    return purged.reduce((x, y) => stamp(y).compareTo(stamp(x)) > 0 ? y : x);
-  }
-  return stamp(b).compareTo(stamp(a)) > 0 ? b : a;
-}
-
 extension _WorkspacePurge on NoteWorkspace {
   Map<String, dynamic>? _noteMark(String noteId) {
     final row = _database.select(
@@ -403,7 +448,7 @@ extension _WorkspacePurge on NoteWorkspace {
   /// changed anything.
   bool _mergeNoteMark(String noteId, Map<String, dynamic> incoming) {
     final before = _noteMark(noteId);
-    final next = _joinNoteMark(before, {
+    final next = joinNoteMarks(before, {
       'mark': incoming['mark'],
       'markStamp': incoming['markStamp'],
     });
@@ -428,7 +473,7 @@ extension _WorkspacePurge on NoteWorkspace {
     final at = max(op.at, after + 1);
     _mergeNoteMark(noteId, {
       'mark': _noteMarkNames[kind],
-      'markStamp': _todoStamp(at, op.opId),
+      'markStamp': todoStamp(at, op.opId),
     });
     _enqueueTodo(noteId, _noteMarkId, {
       'opId': op.opId,
@@ -544,7 +589,7 @@ extension _WorkspacePurge on NoteWorkspace {
       );
       _database.execute(
         'DELETE FROM action_states WHERE vault=? AND substr(action_key,1,?)=?',
-        [vault, noteId.length + 1, '$noteId:'],
+        [vault, _actionKeyPrefix(noteId).length, _actionKeyPrefix(noteId)],
       );
       for (final table in [
         'attachments',
@@ -581,6 +626,12 @@ extension _WorkspacePurge on NoteWorkspace {
           row['id'],
         ]);
       }
+      // The recording's queue entry holds its transcript and private
+      // original; without it nothing can reprocess or list the recording.
+      _database.execute(
+        'DELETE FROM audio_queue WHERE vault=? AND output_note_id=?',
+        [vault, noteId],
+      );
       if (!remote) _recordNoteMark(noteId, 'purge');
       _database.execute('COMMIT');
     } catch (_) {
@@ -590,8 +641,9 @@ extension _WorkspacePurge on NoteWorkspace {
     await _finishPurge(noteId);
   }
 
-  /// Files the App created for this note: its source text, attachment copies
-  /// and anything under the App's attachment folder its last copy links to.
+  /// Files the App created for this note: its source text, attachment copies,
+  /// a recording's App-private original and anything under the App's
+  /// attachment folder its last copy links to.
   /// Files outside that folder belong to the user and are never purged.
   ({List<String> vault, List<String> local}) _ownedFiles(
     String noteId,
@@ -611,6 +663,11 @@ extension _WorkspacePurge on NoteWorkspace {
       vault.add(vaultStorage.relativePath(a.sourcePath));
       if (a.copyPath != null) vault.add(vaultStorage.relativePath(a.copyPath!));
       local.add(a.originalPath);
+    }
+    for (final s in _audioQueue.sources.where(
+      (s) => s.outputNoteId == noteId,
+    )) {
+      local.add(s.originalPath);
     }
     for (final m in RegExp(
       r'attachments/note-agent/[^\s)\]|#]+',
@@ -643,6 +700,7 @@ extension _WorkspacePurge on NoteWorkspace {
       }
       final stillUsed = {
         for (final a in _attachments.attachments) a.originalPath,
+        for (final s in _audioQueue.sources) s.originalPath,
       };
       for (final path in (v['localFiles'] as List).cast<String>()) {
         if (stillUsed.contains(path)) continue;

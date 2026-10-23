@@ -31,6 +31,14 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
     } finally {
       if (mounted) setState(() => busy = false);
     }
+    // Restores, purges and reminder decisions reach paired devices now;
+    // failures are reported through todoSync and the operations stay queued.
+    try {
+      await w.syncTodos();
+    } catch (_) {
+      /* Reported through todoSync. */
+    }
+    if (mounted) setState(() {});
   }
 
   Future<DateTime?> _pickTime() async {

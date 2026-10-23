@@ -20,6 +20,7 @@ import 'cloud_budget.dart';
 export 'cloud_budget.dart';
 import 'attachments.dart';
 import 'note_links.dart';
+import 'todo_merge.dart';
 export 'attachments.dart' hide WorkspaceAttachments;
 import 'vault_storage.dart';
 import 'sync_policy.dart';
@@ -47,6 +48,18 @@ part 'recycle_bin.dart';
 part 'vault_edits.dart';
 part 'processing_recovery.dart';
 part 'reorganization.dart';
+
+/// The `action_states` / reminder-plan key of one action of one note. Note
+/// ids never contain ':', so the first ':' separates the two.
+String _actionKey(String noteId, String actionId) => '$noteId:$actionId';
+
+/// Prefix matching every [_actionKey] of [noteId].
+String _actionKeyPrefix(String noteId) => _actionKey(noteId, '');
+
+({String noteId, String actionId}) _parseActionKey(String key) {
+  final split = key.indexOf(':');
+  return (noteId: key.substring(0, split), actionId: key.substring(split + 1));
+}
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -332,7 +345,7 @@ class NoteWorkspace {
     final note = notes.firstWhere((n) => n.id == noteId);
     final action = note.actions.firstWhere((a) => a.id == actionId);
     if (!action.actionConfirmed) throw StateError('请先确认行动，再设置提醒。');
-    final key = '$noteId:$actionId';
+    final key = _actionKey(noteId, actionId);
     final state = _actionStateRow(key);
     if (state['completed'] == true) throw StateError('事项已完成；如需继续请重新开启。');
     // The newer explicit choice replaces a time chosen while reopening or a
@@ -1392,10 +1405,31 @@ class NoteWorkspace {
       [vaultStorage.identity, vaultStorage.reference(relativePath)],
     );
     if (owners.isEmpty) return;
+    // A link the App moved inside an ordinary note's body is the App's own
+    // write: the stored body follows it, so it is never read back as an
+    // Obsidian edit (to-do lines and summaries escape links, so hold none).
+    const prefix = '## 正文\n\n', anchor = '\n## 关联\n';
+    final head = text.contains(anchor)
+        ? text.substring(0, text.indexOf(anchor))
+        : null;
+    final body = head != null && head.startsWith(prefix)
+        ? head.substring(prefix.length).trimRight()
+        : null;
     _database.execute('BEGIN IMMEDIATE');
     try {
       for (final owner in owners) {
-        _attachments.noteContentsChanged(owner['id'] as String, text);
+        final id = owner['id'] as String;
+        if (body != null &&
+            body.trim().isNotEmpty &&
+            notes.where((n) => n.id == id).firstOrNull?.kind ==
+                NoteKind.ordinary) {
+          _database.execute('UPDATE notes SET body=? WHERE id=? AND vault=?', [
+            body,
+            id,
+            vaultStorage.identity,
+          ]);
+        }
+        _attachments.noteContentsChanged(id, text);
       }
       _database.execute('COMMIT');
     } catch (_) {
