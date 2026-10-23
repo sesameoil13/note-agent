@@ -322,7 +322,8 @@ class _BudgetPanelState extends State<BudgetPanel> {
                 spacing: 12,
                 runSpacing: 8,
                 children: [
-                  if (job.status == TextProcessingStatus.prepared)
+                  if (job.status == TextProcessingStatus.prepared &&
+                      !job.reorganization)
                     FilledButton(
                       onPressed: _busy
                           ? null
@@ -331,11 +332,12 @@ class _BudgetPanelState extends State<BudgetPanel> {
                             }),
                       child: const Text('确认发送并整理（可能产生费用）'),
                     ),
-                  if ([
-                    TextProcessingStatus.failed,
-                    TextProcessingStatus.queued,
-                    TextProcessingStatus.cancelled,
-                  ].contains(job.status))
+                  if (!job.reorganization &&
+                      [
+                        TextProcessingStatus.failed,
+                        TextProcessingStatus.queued,
+                        TextProcessingStatus.cancelled,
+                      ].contains(job.status))
                     OutlinedButton(
                       onPressed: _busy
                           ? null

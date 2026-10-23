@@ -356,6 +356,11 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       if (e is TextNetworkFailure && e.generationId != null) {
         p['generationId'] = e.generationId;
       }
+      p['failureKind'] = e is TextNetworkFailure
+          ? e.code ?? (e.recoverable ? 'recoverable' : 'outcomeUnknown')
+          : e is ConnectionFailure
+          ? e.code ?? 'unknown'
+          : 'outcomeUnknown';
       await _releaseUnsentAudio(p);
       await _saveAudioJob(
         id,

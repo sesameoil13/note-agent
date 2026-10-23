@@ -40,6 +40,7 @@ class WorkspaceAudioSource {
     required this.nextAttemptAt,
     required this.transcript,
     required this.stage,
+    this.failureKind,
   });
   final String id,
       submissionId,
@@ -52,6 +53,9 @@ class WorkspaceAudioSource {
   final int byteLength, attempts, automaticRetries;
   final String? digest, processingReason, publicationError, transcript;
   final String stage;
+
+  /// Classified kind of the last processing failure, e.g. `credentials`.
+  final String? failureKind;
   final AudioSourceMetadata? metadata;
   final AudioProcessingStatus processingStatus;
   final AudioPublicationStatus publicationStatus;
@@ -197,6 +201,7 @@ class WorkspaceAudioQueue {
                 : DateTime.parse(row['next_attempt_at'] as String),
             transcript: row['transcript'] as String?,
             stage: row['stage'] as String,
+            failureKind: row['failure_kind'] as String?,
           ),
         ),
   );

@@ -298,9 +298,13 @@ class TextNetworkFailure implements Exception {
     this.message, {
     this.recoverable = false,
     this.generationId,
+    this.code,
   });
   final String message;
   final bool recoverable;
+
+  /// `credentials` or `balance` when the account must be fixed first.
+  final String? code;
   final String? generationId;
 }
 
@@ -339,10 +343,16 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
         }
       }
       if (response.statusCode == 401 || response.statusCode == 403) {
-        throw const TextNetworkFailure('Key 无效或权限不足，请在 App 重新连接。');
+        throw const TextNetworkFailure(
+          'Key 无效或权限不足，请在 App 重新连接。',
+          code: 'credentials',
+        );
       }
       if (response.statusCode == 402) {
-        throw const TextNetworkFailure('OpenRouter 余额不足，请在官网核对；App 不自动充值。');
+        throw const TextNetworkFailure(
+          'OpenRouter 余额不足，请在官网核对；App 不自动充值。',
+          code: 'balance',
+        );
       }
       if (response.statusCode != 200) {
         throw TextNetworkFailure(

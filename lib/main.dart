@@ -16,6 +16,7 @@ import 'workspace_platform.dart';
 import 'document_panel.dart';
 import 'setup_screen.dart';
 import 'budget_panel.dart';
+import 'processing_recovery_screen.dart';
 import 'action_confirmation_screen.dart';
 import 'reminder_screen.dart';
 import 'notification_platform.dart';
@@ -537,6 +538,22 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             onPressed: _saving ? null : _openBudget,
             label: 'AI 与共享预算',
             icon: const Icon(Icons.account_balance_wallet_outlined),
+          ),
+        if (_workspace != null && _workspace!.processingFailures.isNotEmpty)
+          AccessibleIconButton(
+            onPressed: _saving || _loading
+                ? null
+                : () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            ProcessingFailuresScreen(workspace: _workspace!),
+                      ),
+                    );
+                    if (mounted) setState(() {});
+                  },
+            label: '处理失败',
+            icon: const Icon(Icons.error_outline),
           ),
         if (_workspace != null)
           AccessibleIconButton(
@@ -1293,6 +1310,25 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                           if (mounted) setState(() {});
                         },
                   child: const Text('修正类型与行动'),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: _saving || note.status != NoteStatus.localSaved
+                      ? null
+                      : () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => ReorganizeScreen(
+                                workspace: _workspace!,
+                                noteId: note.id,
+                              ),
+                            ),
+                          );
+                          if (mounted) setState(() {});
+                        },
+                  child: const Text('更正转写与重新整理'),
                 ),
               ),
               if (note.status != NoteStatus.localSaved) ...[

@@ -40,6 +40,8 @@ part 'note_actions.dart';
 part 'note_reminders.dart';
 part 'pending_confirmations.dart';
 part 'note_associations.dart';
+part 'processing_recovery.dart';
+part 'reorganization.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -373,9 +375,7 @@ class NoteWorkspace {
     await _mutate(() => _finishAssociationChange(noteId));
     for (final job in textJobs.where((j) => j.noteId == noteId)) {
       final payload = _textPayload(job.id);
-      if (payload['result'] is Map && payload['applyPhase'] != 'applied') {
-        await _applyText(job.id, payload);
-      }
+      if (_awaitsApply(payload)) await _applyText(job.id, payload);
     }
   }
 
@@ -489,6 +489,67 @@ class NoteWorkspace {
         });
     _textOperations.add(tracked);
     return result;
+  }
+
+  /// Failed audio, document and text processing that can be recovered in the
+  /// App. Items needing only cost reconciliation of an applied result stay in
+  /// the budget panel instead.
+  List<WorkspaceProcessingFailure> get processingFailures =>
+      _processingFailures();
+
+  /// Performs the next safe step for [id]. [original] is only used to choose
+  /// a document again when its original was never completely retained.
+  Future<void> recoverProcessingFailure(String id, {File? original}) =>
+      _recoverFailure(id, original);
+
+  /// Corrects an audio note's complete transcript in the App. The audio
+  /// original and the organized body are unchanged and no model is called;
+  /// a transcript changed elsewhere is never overwritten.
+  Future<WorkspaceNote> correctTranscript(String noteId, String text) =>
+      _mutate(() => _correctTranscript(noteId, text));
+
+  /// Estimates and reserves a re-organization of [noteId] from its current
+  /// complete source (for audio: the possibly corrected transcript). No model
+  /// is called until [previewReorganization].
+  Future<WorkspaceTextJob> prepareReorganization(String noteId) async {
+    final job = await _mutate(() => _prepareReorganization(noteId));
+    final payload = _textPayload(job.id);
+    await _trackText(_reserveTextJob(job.id, noteId, payload));
+    return textJobs.firstWhere((j) => j.id == job.id);
+  }
+
+  /// Sends a prepared re-organization (may be charged) and keeps the
+  /// validated result as a preview; the note is not changed.
+  Future<WorkspaceReorganizationPreview> previewReorganization(String jobId) {
+    final job = textJobs.firstWhere((j) => j.id == jobId);
+    return _runTextAction(job.noteId, () async {
+      await _runReorganizationPreview(jobId);
+      return textJobs.firstWhere((j) => j.id == jobId);
+    }).then(
+      (_) =>
+          _reorganizationPreview(jobId) ??
+          (throw StateError('未取得可用的整理结果，原文保留。')),
+    );
+  }
+
+  List<WorkspaceReorganizationPreview> get reorganizationPreviews =>
+      List.unmodifiable(_reorganizationPreviews());
+
+  /// Applies a preview if the note has not changed since its base content.
+  Future<WorkspaceNote> applyReorganization(String jobId) {
+    final job = textJobs.firstWhere((j) => j.id == jobId);
+    return _runTextAction(job.noteId, () async {
+      await _applyReorganization(jobId);
+      return textJobs.firstWhere((j) => j.id == jobId);
+    }).then((_) => notes.firstWhere((n) => n.id == job.noteId));
+  }
+
+  Future<void> discardReorganization(String jobId) {
+    final job = textJobs.firstWhere((j) => j.id == jobId);
+    return _runTextAction(job.noteId, () async {
+      await _discardReorganization(jobId);
+      return textJobs.firstWhere((j) => j.id == jobId);
+    });
   }
 
   late final WorkspaceRecordings _recordings;
@@ -769,6 +830,9 @@ class NoteWorkspace {
       'CREATE TABLE IF NOT EXISTS note_associations (note_id TEXT PRIMARY KEY,vault TEXT NOT NULL,payload TEXT NOT NULL)',
     );
     database.execute(
+      'CREATE TABLE IF NOT EXISTS source_corrections (note_id TEXT PRIMARY KEY,vault TEXT NOT NULL,payload TEXT NOT NULL)',
+    );
+    database.execute(
       'CREATE TABLE IF NOT EXISTS note_association_changes (note_id TEXT PRIMARY KEY,vault TEXT NOT NULL,payload TEXT NOT NULL)',
     );
     final workspace = NoteWorkspace._(
@@ -852,6 +916,7 @@ class NoteWorkspace {
     await workspace._recoverActionChanges();
     await workspace._recoverActionCompletion();
     await workspace._recoverAssociationChanges();
+    await workspace._recoverCorrections();
     await workspace._recoverText();
     await workspace._recoverAudioJobs();
     await workspace._reconcileReminders();
@@ -1267,7 +1332,8 @@ class NoteWorkspace {
       }
       await vaultStorage.publishText(
         vaultStorage.relativePath(note.sourcePath),
-        _audioQueue.sources
+        _correctedSource(note.id) ??
+            _audioQueue.sources
                 .where((s) => s.outputNoteId == note.id)
                 .firstOrNull
                 ?.transcript ??
@@ -1355,6 +1421,7 @@ class NoteWorkspace {
     title: row['title'] as String,
     text: row['body'] as String,
     sourceText:
+        _correctedSource(row['id'] as String) ??
         _originalTextFor(row['id'] as String) ??
         _presentation(row['presentation'] as String?).original ??
         _audioQueue.sources
