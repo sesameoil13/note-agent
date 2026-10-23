@@ -165,9 +165,14 @@ extension _WorkspaceReminders on NoteWorkspace {
         _saveReminder(v, removed: true);
       }
     }
+    // The system may keep its permission callback open indefinitely. Desired
+    // plans above are durable; OS inspection must not hold local mutations.
+    if (_notificationPermissionWaiting) return;
     NotificationSnapshot snapshot;
     try {
-      snapshot = await _notifications.inspect();
+      final inspected = await _inspectNotifications();
+      if (inspected == null) return;
+      snapshot = inspected;
       _notificationPermission = snapshot.permission;
       _notificationError = null;
     } catch (error) {

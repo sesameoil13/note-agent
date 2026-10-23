@@ -71,7 +71,7 @@ extension _WorkspacePendingConfirmations on NoteWorkspace {
     final now = _clock();
     NotificationSnapshot? snapshot;
     try {
-      snapshot = await _notifications.inspect();
+      snapshot = await _inspectNotifications();
     } catch (_) {
       /* Unknown never permits a send. */
     }
