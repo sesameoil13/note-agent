@@ -139,6 +139,10 @@ class NoteWorkspace {
   NotificationPermission _notificationPermission =
       NotificationPermission.unknown;
   NotificationPermission get notificationPermission => _notificationPermission;
+  bool _notificationTimingExact = true;
+
+  /// False after the last OS check reported that alarms may be deferred.
+  bool get notificationTimingExact => _notificationTimingExact;
   String? _notificationError;
   String? get notificationError => _notificationError;
   List<WorkspaceReminder> get reminders => _reminderList();

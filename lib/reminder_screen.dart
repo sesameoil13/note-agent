@@ -199,6 +199,8 @@ class _ReminderScreenState extends State<ReminderScreen> {
       padding: const EdgeInsets.all(24),
       children: [
         Text(permissionLabel),
+        if (!widget.workspace.notificationTimingExact)
+          const Text('精确闹钟未允许：提醒仍已安排，但系统可能推迟送达。点“允许系统通知”可前往系统页面开启“闹钟和提醒”。'),
         if (widget.workspace.notificationError != null)
           Text(widget.workspace.notificationError!),
         Wrap(
