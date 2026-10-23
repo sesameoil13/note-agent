@@ -2,6 +2,14 @@ import 'package:flutter/material.dart';
 
 import 'note_workspace.dart';
 
+String reminderStatusLabel(ReminderStatus status) => switch (status) {
+  ReminderStatus.pending => '等待安排',
+  ReminderStatus.scheduled => '系统已接受计划',
+  ReminderStatus.elapsed => '提醒时间已过',
+  ReminderStatus.blocked => '等待通知权限',
+  ReminderStatus.failed => '安排未完成，可重试',
+};
+
 String reminderTimeLabel(DateTime time) {
   final t = time.toLocal();
   String two(int n) => n.toString().padLeft(2, '0');
@@ -247,13 +255,7 @@ class _ReminderScreenState extends State<ReminderScreen> {
                 children: [
                   Text(r.text),
                   Text(reminderTimeLabel(r.time)),
-                  Text(switch (r.status) {
-                    ReminderStatus.pending => '等待安排',
-                    ReminderStatus.scheduled => '系统已接受计划',
-                    ReminderStatus.elapsed => '提醒时间已过',
-                    ReminderStatus.blocked => '等待通知权限',
-                    ReminderStatus.failed => '安排未完成，可重试',
-                  }),
+                  Text(reminderStatusLabel(r.status)),
                   if (r.timeNeedsConfirmation) const Text('时间待确认，当前使用默认提醒'),
                   if (r.error != null) Text(r.error!),
                   TextButton(

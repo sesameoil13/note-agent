@@ -1034,6 +1034,18 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     ),
   );
 
+  String _actionReminderLabel(WorkspaceNote note, WorkspaceAction action) {
+    final reminder = _workspace!.reminders
+        .where((r) => r.noteId == note.id && r.actionId == action.id)
+        .firstOrNull;
+    if (reminder == null) return '尚未排程提醒';
+    return [
+      reminderStatusLabel(reminder.status),
+      reminderTimeLabel(reminder.time),
+      if (reminder.timeNeedsConfirmation) '时间待确认，当前使用默认提醒',
+    ].join(' · ');
+  }
+
   Widget _detail() {
     final notes = _workspace!.notes;
     if (notes.isEmpty) return _composer();
@@ -1171,9 +1183,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                           '${a.actionConfirmed ? '行动已确认' : '待确认 · ${actionReasonLabel(a.reason)}'} · ${actionTimeLabel(a)}',
                           style: const TextStyle(color: ash),
                         ),
-                        const Text(
-                          '尚未排程提醒',
-                          style: TextStyle(color: ash, fontSize: 12),
+                        Text(
+                          _actionReminderLabel(note, a),
+                          style: const TextStyle(color: ash, fontSize: 12),
                         ),
                       ],
                     ),
