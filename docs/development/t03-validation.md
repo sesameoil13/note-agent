@@ -21,13 +21,15 @@ The native clipboard integration test uses Ctrl+V on Windows and Cmd+V on macOS.
 
 ## Hosted Windows CI (2026-10-24)
 
-Workflow `windows-build.yml` (manual `workflow_dispatch` on `main`, input `ref`, `windows-2025` x64, Flutter 3.47.7) was run against branch `claude/windows-t03-t10-t22`. RESULT_PLACEHOLDER
+Workflow `windows-build.yml` (manual `workflow_dispatch` on `main`, input `ref`, `windows-2025` x64, Flutter 3.47.7) was run against branch `claude/windows-t03-t10-t22`. **Run [40024648028](https://github.com/sesameoil13/note-agent/actions/runs/40024648028) at `9cf6aa8` is fully green**: `flutter test` 301 passed, 3 skipped (the macOS-only native inspection test and the two `chmod` cases below); `flutter analyze` reports no issues; the x64 release build succeeded; the release bundle was packaged within the 100 MiB cap and uploaded.
 
 Runs and what each revealed:
 
 1. [40015588926](https://github.com/sesameoil13/note-agent/actions/runs/40015588926): first real Windows result. `flutter test`: 284 passed, 19 failed. Build: C++/WinRT needs C++20 (the C++17 `/await` coroutine headers were removed), and `small` is an `rpcndr.h` macro.
 2. [40017022299](https://github.com/sesameoil13/note-agent/actions/runs/40017022299): the release build **compiles and links** (runner, Media Foundation, C++/WinRT). Tests unchanged, plus one more timing-sensitive UI failure.
-3. [40019298687](https://github.com/sesameoil13/note-agent/actions/runs/40019298687): with the fixes below.
+3. [40019298687](https://github.com/sesameoil13/note-agent/actions/runs/40019298687): with the fixes below, 298 passed and 3 failed (timing-sensitive UI tests only).
+4. [40021136981](https://github.com/sesameoil13/note-agent/actions/runs/40021136981) and [40022692622](https://github.com/sesameoil13/note-agent/actions/runs/40022692622): only timing failures remained. The local Worker harness sometimes needs more than 15 s to start on the runner, and a budget release outlasts fixed waits.
+5. [40024648028](https://github.com/sesameoil13/note-agent/actions/runs/40024648028): green.
 
 Windows defects the hosted run found in shared Dart code (none visible on macOS):
 
@@ -36,7 +38,7 @@ Windows defects the hosted run found in shared Dart code (none visible on macOS)
 - **PDF open errors were lost.** PDFium stores its error code in the thread's Win32 last error, and the Dart runtime can overwrite that between the two FFI calls. Locked and damaged PDFs then showed the generic "cannot open" message. When the code is lost, the file is now classified from its bytes (`/Encrypt` means a password is required; otherwise it is treated as damaged).
 - **No Windows folder pick for the read-only backup comparison** (`chooseFolder`). It is now implemented with `IFileOpenDialog`; the choice is never persisted.
 
-Test-only portability changes: separator-neutral path expectations. UI tests that waited a fixed 50 to 100 ms for real file, SQLite or loopback work now poll (`test/support/async_settle.dart`), because the hosted runner's disk is slower. The two recycle-bin cases that make the vault unwritable with POSIX `chmod` are skipped on Windows; their Dart logic is platform-independent and still runs on macOS.
+Test-only portability changes: separator-neutral path expectations. UI tests that waited a fixed 50 to 100 ms for real file, SQLite or loopback work now poll (`test/support/async_settle.dart`), because the hosted runner's disk is slower. The Worker harness startup bound is 60 s. The two recycle-bin cases that make the vault unwritable with POSIX `chmod` are skipped on Windows; their Dart logic is platform-independent and still runs on macOS.
 
 Runner build settings: C++20; `/W4 /WX`; C++ exceptions enabled, because the DPAPI store and C++/WinRT throw; SDK headers compiled with `/external:W0`. Links Media Foundation and `windowsapp`.
 
