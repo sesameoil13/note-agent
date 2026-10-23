@@ -180,6 +180,8 @@ extension _WorkspaceReminders on NoteWorkspace {
       'lifecycle': (state['lifecycle'] as int) + 1,
       'completed': false,
       'time': time.toIso8601String(),
+      // A tick read later from an older copy must not close this lifecycle.
+      'startedAt': _clock().toIso8601String(),
     });
     await _mirrorActionCompletion(noteId);
   }

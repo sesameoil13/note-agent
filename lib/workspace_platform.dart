@@ -200,4 +200,11 @@ class AndroidVaultStorage implements VaultStorage, BinaryVaultStorage {
       _invoke<void>('vaultDeleteText', relativePath, {
         'expectedText': expectedText,
       });
+  @override
+  Future<DateTime?> modifiedTime(String relativePath) async {
+    final millis = await _invoke<int>('vaultModifiedTime', relativePath);
+    return millis == null || millis <= 0
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(millis);
+  }
 }

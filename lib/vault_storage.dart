@@ -26,6 +26,10 @@ abstract interface class VaultStorage {
     String operationId,
   );
   Future<void> deleteText(String relativePath, String expectedText);
+
+  /// The file's modification time as recorded by the device (or preserved by
+  /// Sync), or null when the provider does not report one.
+  Future<DateTime?> modifiedTime(String relativePath);
 }
 
 /// Optional binary source capability; text-only system providers remain valid.
@@ -208,5 +212,11 @@ class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
       throw FileSystemException('笔记已在其他位置修改，保留原文件。', file.path);
     }
     await file.delete();
+  }
+
+  @override
+  Future<DateTime?> modifiedTime(String relativePath) async {
+    final file = await _file(relativePath);
+    return await file.exists() ? file.lastModified() : null;
   }
 }

@@ -210,9 +210,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       unawaited(_takeNotificationNavigation());
       final workspace = _workspace;
       if (workspace != null) {
+        // Returning from Obsidian: read its edits, then reconcile reminders.
         unawaited(
           workspace
-              .reconcileReminders()
+              .readVaultEdits()
               .then((_) {
                 if (mounted) setState(() {});
               })

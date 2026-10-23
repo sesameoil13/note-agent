@@ -40,6 +40,7 @@ part 'note_actions.dart';
 part 'note_reminders.dart';
 part 'pending_confirmations.dart';
 part 'note_associations.dart';
+part 'vault_edits.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -156,6 +157,10 @@ class NoteWorkspace {
   }
 
   Future<void> reconcileReminders() => _mutate(() async {});
+
+  /// Reads Obsidian edits, ticks, time changes, renames and late Sync copies
+  /// of App-managed notes, then reconciles reminders. Returns changed note ids.
+  Future<List<String>> readVaultEdits() => _mutate(_readVaultEdits);
 
   /// Lifecycle and completion of a confirmed action, independent of whether
   /// the note checkbox or any other device has caught up yet.
@@ -854,6 +859,7 @@ class NoteWorkspace {
     await workspace._recoverAssociationChanges();
     await workspace._recoverText();
     await workspace._recoverAudioJobs();
+    await workspace._readVaultEdits();
     await workspace._reconcileReminders();
     await workspace._reconcilePendingConfirmations();
     return workspace;
@@ -1392,7 +1398,7 @@ class NoteWorkspace {
         : '[完整转写](attachments/note-agent/${note.id}.txt)\n\n${_audioSourceEntry(audio)}';
     final content = note.kind == NoteKind.ordinary
         ? '## 正文\n\n${note.text.trimRight()}'
-        : '## 待办\n\n${note.actions.map((a) => '- [${a.completed ? 'x' : ' '}] ${_actionMarkdown(a.text)}${a.decision == ActionDecision.pending ? '（待确认）' : ''}').join('\n')}\n\n## 摘要\n\n${_summaryMarkdown(note.text.trimRight())}';
+        : '## 待办\n\n${note.actions.map((a) => _actionLine(a, note.presentation.timeInNote)).join('\n')}\n\n## 摘要\n\n${_summaryMarkdown(note.text.trimRight())}';
     return '''$content
 
 ## 关联

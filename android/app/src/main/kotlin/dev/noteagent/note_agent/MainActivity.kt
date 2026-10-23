@@ -68,6 +68,7 @@ class MainActivity : FlutterActivity() {
                                     vault(call).replaceText(path(call), expected(call), text(call), operation(call)); null
                                 }
                                 "vaultDeleteText" -> { vault(call).deleteText(path(call), expected(call)); null }
+                                "vaultModifiedTime" -> vault(call).modifiedTime(path(call))
                                 else -> { runOnUiThread { result.notImplemented() }; return@execute }
                             }
                             runOnUiThread { result.success(value) }

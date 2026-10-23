@@ -89,7 +89,7 @@ void main() {
       port.pending.values.where((r) => r.payload['actionId'] == 'buy'),
       isEmpty,
     );
-    expect(await noteFile(w, n), contains('- [x] 买电池\n- [ ] 联系物业'));
+    expect(await noteFile(w, n), contains('- [x] 买电池 ⏰ 明天10:00\n- [ ] 联系物业'));
 
     // A snooze from the same delivery arriving after completion never revives it.
     respond(shown, 'snooze');
