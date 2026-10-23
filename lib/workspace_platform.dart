@@ -63,6 +63,17 @@ class WorkspacePlatform {
   Future<void> revealLocalSource(String path) =>
       _channel.invokeMethod<void>('revealLocalSource', {'path': path});
 
+  /// Desktop only. A one-off, read-only pick for the backup comparison; it is
+  /// never persisted and never becomes the App's vault.
+  bool get supportsFolderComparison => Platform.isMacOS;
+
+  Future<Directory?> chooseFolderForReading(String title) async {
+    final path = await _channel.invokeMethod<String>('chooseFolder', {
+      'title': title,
+    });
+    return path == null ? null : Directory(path);
+  }
+
   Future<void> openSyncPlans() => _channel.invokeMethod<void>('openSyncPlans');
 
   Future<void> openInObsidian(String reference) {

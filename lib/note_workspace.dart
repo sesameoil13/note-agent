@@ -12,7 +12,9 @@ import 'notifications.dart';
 export 'notifications.dart';
 import 'note_files.dart';
 import 'workspace_setup.dart';
+import 'backup_check.dart';
 export 'workspace_setup.dart' hide WorkspaceSetup;
+export 'backup_check.dart' hide compareVaultBackup;
 import 'connection.dart';
 import 'cloud_budget.dart';
 export 'cloud_budget.dart';
@@ -499,6 +501,27 @@ class NoteWorkspace {
   Future<void> confirmRemoteSlotSwitch() =>
       _mutate(() async => _setup.consent());
   Future<void> clearSetupReports() => _mutate(() async => _setup.clear());
+
+  /// Read-only comparison of two folders the user chose; never discovers,
+  /// switches or modifies an old vault.
+  Future<BackupComparison> checkOldVaultBackup({
+    required Directory oldVault,
+    required Directory backup,
+  }) => _mutate(() async {
+    final storage = vaultStorage;
+    try {
+      final result = await compareVaultBackup(
+        oldVault: oldVault,
+        backup: backup,
+        syncVault: storage is DirectoryVaultStorage ? storage.directory : null,
+      );
+      _setup.recordBackupCheck(result.complete);
+      return result;
+    } on BackupCheckRefused {
+      _setup.recordBackupCheck(false);
+      rethrow;
+    }
+  });
   late final WorkspaceAudioQueue _audioQueue;
 
   final Map<String, Future<WorkspaceAudioJob>> _audioOperations = {};
