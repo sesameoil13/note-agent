@@ -9,6 +9,7 @@
 #include "win32_window.h"
 #include "workspace_platform.h"
 #include "native_audio.h"
+#include "native_notifications.h"
 #include "secure_credentials.h"
 
 // A window that does nothing but host a Flutter view.
@@ -34,6 +35,7 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<WorkspacePlatform> workspace_platform_;
   std::unique_ptr<SecureCredentials> secure_credentials_;
   std::unique_ptr<NativeAudio> native_audio_;
+  std::unique_ptr<NativeNotifications> native_notifications_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

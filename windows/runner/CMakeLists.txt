@@ -15,13 +15,14 @@ add_executable(${BINARY_NAME} WIN32
   "secure_credentials.cpp"
   "native_paths.cpp"
   "native_audio.cpp"
+  "native_notifications.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"
   "runner.exe.manifest"
 )
 
-# The standard settings, except C++ exceptions stay enabled: the DPAPI store
-# reports failures by throwing. Warnings in SDK/Flutter headers
+# The standard settings, except C++ exceptions stay enabled: C++/WinRT (toast
+# notifications) reports failures by throwing. Warnings in SDK/Flutter headers
 # included with angle brackets are not treated as this target's errors.
 target_compile_features(${BINARY_NAME} PUBLIC cxx_std_17)
 target_compile_options(${BINARY_NAME} PRIVATE /W4 /WX /wd"4100" /EHsc
@@ -42,7 +43,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "ole32.lib" "advapi32.lib" "crypt32.lib" "uuid.lib"
-  "mf.lib" "mfplat.lib" "mfreadwrite.lib" "mfuuid.lib")
+  "mf.lib" "mfplat.lib" "mfreadwrite.lib" "mfuuid.lib" "windowsapp.lib")
 target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 

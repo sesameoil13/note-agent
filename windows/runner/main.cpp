@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "flutter_window.h"
+#include "native_notifications.h"
 #include "utils.h"
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -16,6 +17,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+  // Toast identity and activator must exist before Windows delivers a toast
+  // action to a process it started for that purpose.
+  NativeNotifications::PrepareProcess();
 
   flutter::DartProject project(L"data");
 
@@ -31,6 +36,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
+  if (NativeNotifications::LaunchedForToast(command_line)) {
+    window.SetShowCommand(SW_SHOWMINNOACTIVE);
+  }
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {
@@ -38,6 +46,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
+  NativeNotifications::ReleaseProcess();
   ::CoUninitialize();
   return EXIT_SUCCESS;
 }
