@@ -102,7 +102,7 @@ extension _WorkspaceAssociations on NoteWorkspace {
 
   Map<String, String>? _associationTarget(String id) {
     final rows = _database.select(
-      'SELECT title,note_path FROM notes WHERE id=? AND vault=?',
+      'SELECT title,note_path FROM notes WHERE id=? AND vault=? AND $_notDeleted',
       [id, vaultStorage.identity],
     );
     if (rows.isNotEmpty) {
@@ -116,8 +116,8 @@ extension _WorkspaceAssociations on NoteWorkspace {
 
   List<WorkspaceTopicSuggestion> _topicSuggestions() => List.unmodifiable([
     for (final row in _database.select(
-      'SELECT note_id,payload FROM note_associations WHERE vault=?',
-      [vaultStorage.identity],
+      "SELECT note_id,payload FROM note_associations WHERE vault=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state='deleted')",
+      [vaultStorage.identity, vaultStorage.identity],
     ))
       for (final s
           in (jsonDecode(row['payload'] as String) as Map)['suggestions']
@@ -154,7 +154,7 @@ extension _WorkspaceAssociations on NoteWorkspace {
   ) async {
     final query = _associationTerms(text);
     final candidates = _database.select(
-      'SELECT id,title,body FROM notes WHERE vault=? AND id<>? AND status=? ORDER BY created_at DESC,id DESC',
+      'SELECT id,title,body FROM notes WHERE vault=? AND id<>? AND status=? AND $_notDeleted ORDER BY created_at DESC,id DESC',
       [vaultStorage.identity, noteId, NoteStatus.localSaved.name],
     );
     final ranked = candidates.map((row) {

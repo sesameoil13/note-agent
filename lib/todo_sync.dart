@@ -134,6 +134,9 @@ extension _WorkspaceTodoSync on NoteWorkspace {
         s['reopenStamp'] == local['reopenStamp']) {
       // A later explicit reminder edit on this device removed the reopen time.
       if (local['time'] != null) next['time'] = local['time'];
+      // A reminder missed in the 回收站 stays local until the user decides.
+      if (local['held'] != null) next['held'] = local['held'];
+      if (local['silenced'] == true) next['silenced'] = true;
     } else if (s['reopenTime'] != null) {
       next['time'] = DateTime.fromMillisecondsSinceEpoch(s['reopenTime'] as int)
           .toIso8601String();

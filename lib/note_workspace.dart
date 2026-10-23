@@ -43,6 +43,7 @@ part 'note_reminders.dart';
 part 'pending_confirmations.dart';
 part 'note_associations.dart';
 part 'todo_sync.dart';
+part 'recycle_bin.dart';
 
 /// Local file publication is separate from any future sync acknowledgement.
 enum NoteStatus {
@@ -90,6 +91,7 @@ class WorkspaceNote {
     this.actionSavePending = false,
     this.associations = const [],
     this.associationSavePending = false,
+    this.archived = false,
   });
 
   final String id;
@@ -113,6 +115,9 @@ class WorkspaceNote {
   final bool actionSavePending;
   final List<WorkspaceAssociation> associations;
   final bool associationSavePending;
+
+  /// 归档: hidden from the daily list; the note file and reminders remain.
+  final bool archived;
   NoteKind get kind => presentation.kind;
   List<WorkspaceAction> get actions => presentation.actions;
 
@@ -323,8 +328,15 @@ class NoteWorkspace {
     final key = '$noteId:$actionId';
     final state = _actionStateRow(key);
     if (state['completed'] == true) throw StateError('事项已完成；如需继续请重新开启。');
-    // The newer explicit choice replaces a time chosen while reopening.
-    if (state.remove('time') != null) _saveActionState(key, state);
+    // The newer explicit choice replaces a time chosen while reopening or a
+    // pending decision about a reminder missed while in the 回收站.
+    if ([
+      state.remove('time'),
+      state.remove('held'),
+      state.remove('silenced'),
+    ].any((v) => v != null)) {
+      _saveActionState(key, state);
+    }
     await _resolveActions(
       noteId,
       kind: note.kind,
@@ -842,6 +854,9 @@ class NoteWorkspace {
     database.execute(
       'CREATE TABLE IF NOT EXISTS todo_sync(vault TEXT PRIMARY KEY,payload TEXT NOT NULL)',
     );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS note_disposals(vault TEXT NOT NULL,note_id TEXT NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',
+    );
     workspace._notifications =
         notifications ?? const UnavailableNotifications();
     workspace._setup = WorkspaceSetup(
@@ -901,6 +916,7 @@ class NoteWorkspace {
       await workspace._finishRename(row['note_id'] as String);
     }
     await workspace._attachments.recover();
+    await workspace._recoverDisposals();
     await workspace._recoverActionChanges();
     await workspace._recoverActionCompletion();
     await workspace._recoverAssociationChanges();
@@ -914,11 +930,39 @@ class NoteWorkspace {
   List<WorkspaceNote> get notes => List.unmodifiable(
     _database
         .select(
-          'SELECT * FROM notes WHERE vault = ? ORDER BY created_at DESC, id DESC',
+          'SELECT * FROM notes WHERE vault = ? AND $_notDeleted ORDER BY created_at DESC, id DESC',
           [vaultStorage.identity],
         )
         .map(_noteFromRow),
   );
+
+  /// Notes for everyday browsing: neither 归档 nor in the 回收站.
+  List<WorkspaceNote> get dailyNotes =>
+      List.unmodifiable(notes.where((n) => !n.archived));
+  List<WorkspaceNote> get archivedNotes =>
+      List.unmodifiable(notes.where((n) => n.archived));
+
+  /// 归档 keeps the note file, its reminders and every link unchanged.
+  Future<void> archiveNote(String id) => _mutate(() => _archive(id, true));
+  Future<void> unarchiveNote(String id) => _mutate(() => _archive(id, false));
+
+  /// Deleting moves a note into the 回收站 and cancels its reminders. The
+  /// 回收站 is never emptied automatically.
+  Future<void> deleteNote(String id) => _mutate(() => _delete(id));
+  List<RecycledNote> get recycleBin => _recycleBin();
+
+  /// Single-item restore. A same-named note or file is never replaced; the
+  /// restored note takes a numbered title instead. Future reminders return;
+  /// past ones wait in [reminderDecisions].
+  Future<WorkspaceNote> restoreNote(String id) => _mutate(() => _restore(id));
+  List<ReminderDecision> get reminderDecisions => _reminderDecisions();
+
+  /// Reschedules a restored past reminder at [time], or silences it (null).
+  Future<void> decideRestoredReminder(
+    String noteId,
+    String actionId,
+    DateTime? time,
+  ) => _mutate(() => _decideReminder(noteId, actionId, time));
 
   /// Find durable originals without requiring an exported note or a network.
   /// An empty query returns recent records in the same order as [notes].
@@ -1281,6 +1325,8 @@ class NoteWorkspace {
 
   Future<WorkspaceNote> _retryNoteExport(String id) async {
     if (_renamePlan(id) != null) return _finishRename(id);
+    // A restore republishes the retained copy, not regenerated markdown.
+    if (_disposalState(id) == 'restoring') return _finishRestore(id);
     var note = notes.firstWhere((note) => note.id == id);
     if (note.document != null && note.document!.result == null) return note;
     try {
@@ -1428,6 +1474,7 @@ class NoteWorkspace {
     associations: _associations(row['id'] as String),
     associationSavePending: _hasAssociationChange(row['id'] as String),
     actionSavePending: _hasActionChange(row['id'] as String),
+    archived: _disposalState(row['id'] as String) == 'archived',
   );
 
   String _audioSourceEntry(WorkspaceAudioSource source) =>

@@ -176,4 +176,27 @@ void main() {
     expect(f.alert(0, 'call'), isNull);
     expect(f.workspaces[0].todoSync.awaitingNote, isEmpty);
   });
+
+  test('a reminder missed in the recycle bin keeps waiting for a decision through a paired snooze, and a paired completion settles it', () async {
+    final n = await f.todo(0);
+    await f.todo(1);
+    final b = f.workspaces[1];
+    await b.deleteNote(n.id);
+    f.now = DateTime(2026, 10, 22, 10, 5);
+    await b.restoreNote(n.id);
+    expect(b.reminderDecisions.map((d) => d.actionId), contains('buy'));
+
+    await f.workspaces[0].snoozeReminder(n.id, 'buy', minutes: 60);
+    await f.workspaces[0].syncTodos();
+    expect(await b.syncTodos(), TaskStatusSync.synced);
+    expect(b.reminderDecisions.map((d) => d.actionId), contains('buy'));
+    expect(f.alert(1, 'buy'), isNull);
+
+    await f.workspaces[0].completeAction(n.id, 'buy');
+    await f.workspaces[0].syncTodos();
+    expect(await b.syncTodos(), TaskStatusSync.synced);
+    expect(b.actionState(n.id, 'buy').completed, isTrue);
+    expect(b.reminderDecisions.map((d) => d.actionId), isNot(contains('buy')));
+    expect(f.alert(1, 'buy'), isNull);
+  });
 }
