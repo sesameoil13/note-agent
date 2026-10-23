@@ -77,7 +77,11 @@ void main() {
       noteId: a.id,
       original: File('${root.path}/binned.pdf')..writeAsBytesSync([3, 3]),
     );
-    String rel(String path) => path.substring(path.indexOf('/vault/') + 7);
+    String rel(String path) {
+      final portable = path.replaceAll(r'\', '/');
+      return portable.substring(portable.indexOf('/vault/') + 7);
+    }
+
     final sharedPath = rel(shared.sourcePath),
         ownPath = rel(own.sourcePath),
         binnedPath = rel(binned.sourcePath);

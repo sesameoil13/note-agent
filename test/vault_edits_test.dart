@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:note_agent/note_workspace.dart';
 
 import 'support/pending_notification_fixture.dart';
@@ -310,7 +311,7 @@ void main() {
     final note = w.notes.single;
     expect(note.id, n.id);
     expect(note.title, '物业事项');
-    expect(note.notePath, endsWith('/vault/项目/物业事项.md'));
+    expect(note.notePath, endsWith(p.join('vault', '项目', '物业事项.md')));
     expect(note.status, NoteStatus.localSaved);
     expect(w.search('物业事项').map((x) => x.id), [n.id]);
     expect(await w.readVaultEdits(), isEmpty);

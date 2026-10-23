@@ -6,6 +6,7 @@ import 'package:note_agent/budget_panel.dart';
 
 import 'audio_queue_test.dart' show wave;
 import 'support/budget_fixture.dart';
+import 'support/async_settle.dart';
 
 class _LoopbackHttpOverrides extends HttpOverrides {}
 
@@ -34,6 +35,7 @@ void main() {
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 100)),
         );
+        await pumpUntil(tester);
         await tester.pumpAndSettle();
         final estimate = find.text('预估转写及整理（不上传）');
         await tester.scrollUntilVisible(
@@ -45,6 +47,7 @@ void main() {
           await tester.tap(estimate);
           await Future<void>.delayed(const Duration(milliseconds: 100));
         });
+        await pumpUntil(tester);
         await tester.pumpAndSettle();
         expect(f.audioRequests, 0);
         expect(f.modelRequests, isEmpty);
@@ -62,11 +65,13 @@ void main() {
           150,
           scrollable: find.byType(Scrollable).first,
         );
+        await pumpUntil(tester);
         await tester.pumpAndSettle();
         await tester.runAsync(() async {
           await tester.tap(cancel);
           await Future<void>.delayed(const Duration(milliseconds: 100));
         });
+        await pumpUntil(tester);
         await tester.pumpAndSettle();
         expect(f.audioRequests, 0);
         expect(f.modelRequests, isEmpty);

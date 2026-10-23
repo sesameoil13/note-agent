@@ -7,6 +7,7 @@ import 'package:note_agent/budget_panel.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'audio_queue_test.dart' show wave;
+import 'support/async_settle.dart';
 import 'support/budget_fixture.dart';
 
 class _LoopbackHttpOverrides extends HttpOverrides {}
@@ -65,6 +66,13 @@ void main() {
             await tester.tap(estimate);
             await Future<void>.delayed(const Duration(milliseconds: 100));
           });
+          await pumpUntil(
+            tester,
+            () =>
+                f.workspaces.first.audioJobs.isNotEmpty &&
+                f.workspaces.first.audioJobs.single.status ==
+                    AudioJobStatus.prepared,
+          );
           await tester.pumpAndSettle();
           expect(
             f.workspaces.first.audioJobs.single.status,
@@ -96,6 +104,10 @@ void main() {
             await tester.tap(cancel);
             await Future<void>.delayed(const Duration(milliseconds: 100));
           });
+          await pumpUntil(
+            tester,
+            () => f.workspaces.first.budget.reservedCnyMicros == 0,
+          );
           await tester.pumpAndSettle();
           expect(f.audioRequests, 0);
           expect(f.modelRequests, isEmpty);

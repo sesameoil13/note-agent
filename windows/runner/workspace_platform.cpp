@@ -109,6 +109,8 @@ void WorkspacePlatform::HandleMethodCall(
     RestoreLocation(std::move(result));
   } else if (call.method_name() == "chooseLocation") {
     ChooseLocation(std::move(result));
+  } else if (call.method_name() == "chooseFolder") {
+    ChooseFolder(call.arguments(), std::move(result));
   } else if (call.method_name() == "chooseSourceFile") {
     ChooseSourceFile(call.arguments(), std::move(result));
   } else if (call.method_name() == "releaseSourceFile") {
@@ -182,6 +184,49 @@ void WorkspacePlatform::ChooseLocation(std::unique_ptr<Result> result) {
   }
   vault_directory_ = *directory;
   result->Success(Location(*local, vault_directory_));
+}
+
+// A one-off, read-only pick for the backup comparison; never persisted.
+void WorkspacePlatform::ChooseFolder(const EncodableValue* arguments,
+                                     std::unique_ptr<Result> result) {
+  const auto* values = arguments ? std::get_if<EncodableMap>(arguments) : nullptr;
+  std::wstring title = L"选择文件夹";
+  if (values) {
+    const auto entry = values->find(EncodableValue("title"));
+    const auto* text = entry == values->end()
+        ? nullptr : std::get_if<std::string>(&entry->second);
+    if (text) title = Utf16(*text).value_or(title);
+  }
+  ComPtr<IFileOpenDialog> dialog;
+  HRESULT status = CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                                    CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+  FILEOPENDIALOGOPTIONS options = 0;
+  if (SUCCEEDED(status)) status = dialog->GetOptions(&options);
+  if (SUCCEEDED(status)) {
+    status = dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                                FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+  }
+  if (SUCCEEDED(status)) status = dialog->SetTitle(title.c_str());
+  if (SUCCEEDED(status)) status = dialog->SetOkButtonLabel(L"只读核对");
+  if (SUCCEEDED(status)) status = dialog->Show(window_);
+  if (status == HRESULT_FROM_WIN32(ERROR_CANCELLED)) {
+    result->Success();
+    return;
+  }
+  ComPtr<IShellItem> selected;
+  if (SUCCEEDED(status)) status = dialog->GetResult(&selected);
+  PWSTR selected_path = nullptr;
+  if (SUCCEEDED(status)) {
+    status = selected->GetDisplayName(SIGDN_FILESYSPATH, &selected_path);
+  }
+  const auto directory = SUCCEEDED(status) && selected_path
+      ? ExistingPath(selected_path, true) : std::nullopt;
+  CoTaskMemFree(selected_path);
+  if (!directory) {
+    result->Error("directory_access", "无法读取所选文件夹，请重新选择。");
+    return;
+  }
+  result->Success(EncodableValue(Utf8(*directory)));
 }
 
 void WorkspacePlatform::ChooseSourceFile(const EncodableValue* arguments, std::unique_ptr<Result> result) {
