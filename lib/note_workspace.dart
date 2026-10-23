@@ -158,6 +158,8 @@ class NoteWorkspace {
   Future<void> reconcileReminders() => _mutate(() async {});
   Future<void>? _notificationPermissionRequest;
   bool _notificationPermissionWaiting = false;
+  int _notificationPermissionEpoch = 0;
+  final _notificationInspectionWaiters = <Completer<void>>{};
   Future<void> requestNotificationPermission() {
     if (_closing) return Future.error(StateError('工作区正在关闭。'));
     return _notificationPermissionRequest ??= _askNotificationPermission()
@@ -167,12 +169,39 @@ class NoteWorkspace {
   Future<void> _askNotificationPermission() async {
     _notificationPermissionWaiting = true;
     _notificationPermission = NotificationPermission.unknown;
+    _notificationPermissionEpoch++;
+    for (final waiter in _notificationInspectionWaiters) {
+      waiter.complete();
+    }
+    _notificationInspectionWaiters.clear();
     try {
       await _notifications.requestPermission();
     } finally {
       _notificationPermissionWaiting = false;
     }
     if (!_closing) await reconcileReminders();
+  }
+
+  Future<NotificationSnapshot?> _inspectNotifications() async {
+    if (_notificationPermissionWaiting) return null;
+    final epoch = _notificationPermissionEpoch;
+    final interrupted = Completer<void>();
+    _notificationInspectionWaiters.add(interrupted);
+    // A read already in flight must yield when permission begins, not only
+    // reads attempted afterwards. Future.any also consumes a late read error.
+    try {
+      final snapshot = await Future.any<NotificationSnapshot?>([
+        Future<NotificationSnapshot>.sync(_notifications.inspect),
+        interrupted.future.then<NotificationSnapshot?>((_) => null),
+      ]);
+      if (_notificationPermissionWaiting ||
+          epoch != _notificationPermissionEpoch) {
+        return null;
+      }
+      return snapshot;
+    } finally {
+      _notificationInspectionWaiters.remove(interrupted);
+    }
   }
 
   ReminderDefaults get reminderDefaults {

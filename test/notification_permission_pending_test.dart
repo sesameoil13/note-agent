@@ -5,6 +5,92 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 void main() {
+  for (final inspectionOffset in [1, 2]) {
+    for (final lateError in [false, true]) {
+      test(
+        'an earlier inspection yields when permission starts and ignores its late result ($inspectionOffset, error: $lateError)',
+        () async {
+          final root = await Directory.systemTemp.createTemp(
+            'permission-earlier-inspection-',
+          );
+          final port = _EarlierInspection();
+          final w = await NoteWorkspace.open(
+            localDirectory: Directory('${root.path}/local'),
+            vaultDirectory: await Directory('${root.path}/vault').create(),
+            notifications: port,
+          );
+          addTearDown(() async {
+            if (!port.answer.isCompleted) {
+              port.answer.complete(NotificationPermission.denied);
+            }
+            if (!port.earlier.isCompleted) {
+              port.earlier.complete(
+                const NotificationSnapshot(
+                  permission: NotificationPermission.denied,
+                ),
+              );
+            }
+            await w.close();
+            await root.delete(recursive: true);
+          });
+          port.holdAt = port.inspections + inspectionOffset;
+          final previous = w.reconcileReminders();
+          await port.earlierEntered.future.timeout(const Duration(seconds: 1));
+          final asking = w.requestNotificationPermission();
+          await port.entered.future;
+          final saving = w.captureText(
+            title: '较早的系统检查',
+            text: '旧检查尚未返回时也可以保存。',
+          );
+          var savedBeforeAnswer = false;
+          try {
+            await saving.timeout(const Duration(seconds: 1));
+            savedBeforeAnswer = true;
+          } on TimeoutException {
+            // Release both external futures on RED, without obscuring the failure.
+          } finally {
+            port.answer.complete(NotificationPermission.denied);
+            if (!savedBeforeAnswer) {
+              port.earlier.complete(
+                const NotificationSnapshot(
+                  permission: NotificationPermission.denied,
+                ),
+              );
+            }
+            await Future.wait([previous, asking, saving]);
+          }
+          expect(
+            savedBeforeAnswer,
+            isTrue,
+            reason: 'an inspection started before permission must yield the local mutation queue',
+          );
+          expect(w.notes.single.status, NoteStatus.localSaved);
+          expect(
+            await File(w.notes.single.sourcePath).readAsString(),
+            '旧检查尚未返回时也可以保存。',
+          );
+          expect(w.notificationPermission, NotificationPermission.denied);
+          await w.close().timeout(const Duration(seconds: 1));
+          final inspections = port.inspections;
+          if (lateError) {
+            port.earlier.completeError(
+              StateError('controlled late inspection failure'),
+            );
+          } else {
+            port.earlier.complete(
+              const NotificationSnapshot(
+                permission: NotificationPermission.allowed,
+              ),
+            );
+          }
+          await Future<void>.delayed(Duration.zero);
+          expect(port.inspections, inspections);
+          expect(w.notificationPermission, NotificationPermission.denied);
+          expect(port.requests, 1);
+        },
+      );
+    }
+  }
   for (final inspectAlsoWaits in [false, true]) {
     test(
       'a pending system permission callback does not block local text capture (inspect waits: $inspectAlsoWaits)',
@@ -189,5 +275,21 @@ class _DeferredPermission implements NotificationPort {
   @override
   Future<void> cancel(String id) async {
     scheduled.remove(id);
+  }
+}
+
+class _EarlierInspection extends _DeferredPermission {
+  _EarlierInspection() : super(inspectAlsoWaits: false);
+  int? holdAt;
+  final earlierEntered = Completer<void>();
+  final earlier = Completer<NotificationSnapshot>();
+  @override
+  Future<NotificationSnapshot> inspect() {
+    if (inspections + 1 == holdAt) {
+      inspections++;
+      earlierEntered.complete();
+      return earlier.future;
+    }
+    return super.inspect();
   }
 }

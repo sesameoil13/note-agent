@@ -170,7 +170,9 @@ extension _WorkspaceReminders on NoteWorkspace {
     if (_notificationPermissionWaiting) return;
     NotificationSnapshot snapshot;
     try {
-      snapshot = await _notifications.inspect();
+      final inspected = await _inspectNotifications();
+      if (inspected == null) return;
+      snapshot = inspected;
       _notificationPermission = snapshot.permission;
       _notificationError = null;
     } catch (error) {
