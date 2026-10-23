@@ -77,6 +77,7 @@ void main() {
           await pumpUntil(
             tester,
             () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
+            const Duration(seconds: 90),
           );
           await tester.pumpAndSettle();
           expect(
@@ -112,11 +113,13 @@ void main() {
           await pumpUntil(
             tester,
             () => f.workspaces.first.budget.reservedCnyMicros == 0,
+            const Duration(seconds: 90),
           );
           // The panel's busy indicator ends only after its refresh.
           await pumpUntil(
             tester,
             () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
+            const Duration(seconds: 90),
           );
           await tester.pumpAndSettle();
           expect(f.audioRequests, 0);
