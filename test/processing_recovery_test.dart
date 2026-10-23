@@ -245,6 +245,30 @@ void main() {
     expect(await File(source.originalPath).readAsBytes(), wave());
   });
 
+  test('re-organizing removes the old actions on paired devices too', () async {
+    final (f, w, _) = await processedAudio(result: todoAt('明天下午两点'));
+    final note = w.notes.single;
+    final old = note.actions.single.id;
+    await w.completeAction(note.id, old);
+    expect(await w.syncTodos(), TaskStatusSync.synced);
+    final other = f.workspaces[1];
+    expect(await other.syncTodos(), TaskStatusSync.synced);
+    expect(other.todoSync.awaitingNote.map((a) => a.actionId), [old]);
+
+    await w.correctTranscript(note.id, '明天下午三点整理会议记录。');
+    f.modelResult = todoAt('明天下午三点');
+    final job = await w.prepareReorganization(note.id);
+    await w.previewReorganization(job.id);
+    final applied = await w.applyReorganization(job.id);
+    expect(applied.actions.single.id, isNot(old));
+    expect(await w.syncTodos(), TaskStatusSync.synced);
+    expect(await other.syncTodos(), TaskStatusSync.synced);
+    expect(
+      other.todoSync.awaitingNote.map((a) => a.actionId),
+      isNot(contains(old)),
+    );
+  });
+
   test('a note changed after its preview keeps the newer content and the preview is only discarded', () async {
     final (f, w, _) = await processedAudio(result: todoAt('明天下午两点'));
     final note = w.notes.single;

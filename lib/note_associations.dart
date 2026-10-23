@@ -116,7 +116,7 @@ extension _WorkspaceAssociations on NoteWorkspace {
 
   List<WorkspaceTopicSuggestion> _topicSuggestions() => List.unmodifiable([
     for (final row in _database.select(
-      "SELECT note_id,payload FROM note_associations WHERE vault=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state='deleted')",
+      "SELECT note_id,payload FROM note_associations WHERE vault=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state IN ('deleted','purged'))",
       [vaultStorage.identity, vaultStorage.identity],
     ))
       for (final s

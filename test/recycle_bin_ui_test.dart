@@ -118,4 +118,93 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+  testWidgets(
+    'purging asks for confirmation first, and the whole 回收站 can be restored or purged at once',
+    (tester) async {
+      final setup = (await tester.runAsync(() async {
+        final root = await Directory.systemTemp.createTemp('recycle-purge-ui-');
+        final w = await NoteWorkspace.open(
+          localDirectory: Directory('${root.path}/local'),
+          vaultDirectory: await Directory('${root.path}/vault').create(),
+        );
+        for (final title in ['甲', '乙', '丙']) {
+          final n = await w.captureText(title: title, text: '$title的内容');
+          await w.deleteNote(n.id);
+        }
+        return (root, w);
+      }))!;
+      final (root, w) = setup;
+      addTearDown(
+        () => tester.runAsync(() async {
+          await w.close();
+          await root.delete(recursive: true);
+        }),
+      );
+      tester.view.physicalSize = const Size(1280, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      Future<void> waitFor(bool Function() done) async {
+        for (var i = 0; i < 100 && !done(); i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 50)),
+          );
+          await tester.pump();
+        }
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+        expect(done(), isTrue);
+      }
+
+      final dialog = find.byType(AlertDialog);
+      Finder inDialog(String text) =>
+          find.descendant(of: dialog, matching: find.text(text));
+      Finder purgeOf(String title) => find.descendant(
+        of: find.widgetWithText(ListTile, title),
+        matching: find.text('永久清除'),
+      );
+
+      await tester.pumpWidget(NoteAgentApp(initialWorkspace: w));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('归档与回收站'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(purgeOf('甲'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('无法恢复'), findsOneWidget);
+      expect(find.textContaining('Obsidian Sync'), findsOneWidget);
+      await tester.tap(inDialog('取消'));
+      await tester.pumpAndSettle();
+      expect(w.recycleBin, hasLength(3));
+
+      // The purge itself does file IO, so the confirming flow runs for real.
+      await tester.runAsync(() => tester.tap(purgeOf('甲')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => tester.tap(inDialog('永久清除')));
+      await waitFor(() => w.recycleBin.length == 2);
+      expect(find.text('甲'), findsNothing);
+
+      await tester.runAsync(() => tester.tap(find.text('全部恢复')));
+      await waitFor(() => w.recycleBin.isEmpty);
+      expect(w.notes.map((n) => n.title).toSet(), {'乙', '丙'});
+
+      await tester.runAsync(() => w.deleteNote(w.notes.first.id));
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('归档与回收站'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => tester.tap(find.text('全部永久清除')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('1 项'), findsOneWidget);
+      await tester.runAsync(() => tester.tap(inDialog('永久清除')));
+      await waitFor(() => w.recycleBin.isEmpty);
+      expect(w.notes, hasLength(1));
+      expect(find.text('回收站是空的。'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }

@@ -1,6 +1,6 @@
 # T25：归档或删除到可恢复的回收站
 
-本票以 NoteWorkspace 为唯一业务入口：`archiveNote`／`unarchiveNote`、`deleteNote`、`restoreNote`、`decideRestoredReminder`，以及只读的 `dailyNotes`、`archivedNotes`、`recycleBin`、`reminderDecisions`。App 的“归档与回收站”页面和笔记详情中的“归档”“移入回收站”按钮都只调用这些方法。批量恢复、永久清除和跨设备删除标记属于 T26，本票没有实现。
+本票以 NoteWorkspace 为唯一业务入口：`archiveNote`／`unarchiveNote`、`deleteNote`、`restoreNote`、`decideRestoredReminder`，以及只读的 `dailyNotes`、`archivedNotes`、`recycleBin`、`reminderDecisions`。App 的“归档与回收站”页面和笔记详情中的“归档”“移入回收站”按钮都只调用这些方法。批量恢复、永久清除和跨设备删除标记见 T26（docs/development/t26-purge-tombstones.md）。
 
 ## 存储
 

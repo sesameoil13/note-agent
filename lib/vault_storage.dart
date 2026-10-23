@@ -39,6 +39,9 @@ abstract interface class BinaryVaultStorage {
     File original,
     String operationId,
   );
+
+  /// Removes a source file during 永久清除; a missing file is not an error.
+  Future<void> deleteFile(String relativePath);
 }
 
 /// Desktop vault storage, preserving the T01 exclusive publication behavior.
@@ -212,6 +215,12 @@ class DirectoryVaultStorage implements VaultStorage, BinaryVaultStorage {
       throw FileSystemException('笔记已在其他位置修改，保留原文件。', file.path);
     }
     await file.delete();
+  }
+
+  @override
+  Future<void> deleteFile(String relativePath) async {
+    final file = await _file(relativePath);
+    if (await file.exists()) await file.delete();
   }
 
   @override

@@ -228,4 +228,10 @@ internal class SafVault(private val resolver: ContentResolver, private val tree:
         check(read(item.uri) == expected) { "笔记已在其他位置修改，保留原文件。" }
         check(DocumentsContract.deleteDocument(resolver, item.uri)) { "无法移除旧笔记。" }
     }
+
+    /** Removes a source file during permanent purge; missing files are fine. */
+    fun deleteFile(path: String) {
+        val item = find(path) ?: return
+        check(DocumentsContract.deleteDocument(resolver, item.uri)) { "无法清除附件。" }
+    }
 }

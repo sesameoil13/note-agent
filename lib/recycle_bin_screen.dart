@@ -4,7 +4,8 @@ import 'note_workspace.dart';
 import 'reminder_screen.dart' show reminderTimeLabel;
 
 /// 归档 and 回收站 in one place. The 回收站 is never emptied automatically;
-/// restore is per item and never replaces a same-named note.
+/// items are restored or purged one by one or all at once. Restore never
+/// replaces a same-named note; 永久清除 always asks first.
 class RecycleBinScreen extends StatefulWidget {
   const RecycleBinScreen({super.key, required this.workspace});
   final NoteWorkspace workspace;
@@ -50,6 +51,32 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
     if (time == null) return null;
     return DateTime(day.year, day.month, day.day, time.hour, time.minute);
   }
+
+  /// 永久清除 is irreversible, so it is confirmed every time. The App cannot
+  /// reach the version history Obsidian Sync keeps on its own.
+  Future<bool> _confirmPurge(String what) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('永久清除？'),
+          content: Text(
+            '$what将从回收站永久清除，无法恢复；已配对的设备也会清除。'
+            '仍被其他笔记引用的附件会保留。'
+            'Obsidian Sync 自身保留的历史版本不在本 App 管理范围内，不会被清除。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('永久清除'),
+            ),
+          ],
+        ),
+      ) ??
+      false;
 
   Widget _section(String title, String hint) => Padding(
     padding: const EdgeInsets.only(top: 24, bottom: 8),
@@ -138,22 +165,75 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
                 child: const Text('取消归档'),
               ),
             ),
-          _section('回收站', '回收站不会自动清空。删除时提醒已取消；来源文字与附件仍保留在笔记库。'),
+          _section('回收站', '回收站不会自动清空。删除时提醒已取消；来源文字与附件仍保留在笔记库，直到永久清除。'),
           if (bin.isEmpty) const Text('回收站是空的。'),
+          if (bin.isNotEmpty)
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton(
+                  onPressed: busy
+                      ? null
+                      : () => _run(() async {
+                          final notes = await w.restoreNotes([
+                            for (final item in bin) item.noteId,
+                          ]);
+                          final renamed = notes.where((n) => n.titleCollision);
+                          return renamed.isEmpty
+                              ? '已恢复 ${notes.length} 项。'
+                              : '已恢复 ${notes.length} 项；${renamed.map((n) => '「${n.title}」').join('、')}因原标题已被使用而改用编号标题。';
+                        }),
+                  child: const Text('全部恢复'),
+                ),
+                TextButton(
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          if (!await _confirmPurge('回收站中的全部 ${bin.length} 项')) {
+                            return;
+                          }
+                          await _run(() async {
+                            await w.purgeNotes([
+                              for (final item in bin) item.noteId,
+                            ]);
+                            return '已永久清除 ${bin.length} 项。';
+                          });
+                        },
+                  child: const Text('全部永久清除'),
+                ),
+              ],
+            ),
           for (final item in bin)
             ListTile(
               title: Text(item.title),
               subtitle: Text('删除于 ${reminderTimeLabel(item.deletedAt)}'),
-              trailing: TextButton(
-                onPressed: busy
-                    ? null
-                    : () => _run(() async {
-                        final note = await w.restoreNote(item.noteId);
-                        return note.titleCollision
-                            ? '已恢复为「${note.title}」：原标题已被其他笔记使用。'
-                            : '已恢复「${note.title}」。';
-                      }),
-                child: const Text('恢复'),
+              trailing: Wrap(
+                spacing: 8,
+                children: [
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () => _run(() async {
+                            final note = await w.restoreNote(item.noteId);
+                            return note.titleCollision
+                                ? '已恢复为「${note.title}」：原标题已被其他笔记使用。'
+                                : '已恢复「${note.title}」。';
+                          }),
+                    child: const Text('恢复'),
+                  ),
+                  TextButton(
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            if (!await _confirmPurge('「${item.title}」')) return;
+                            await _run(() async {
+                              await w.purgeNotes([item.noteId]);
+                              return '已永久清除「${item.title}」。';
+                            });
+                          },
+                    child: const Text('永久清除'),
+                  ),
+                ],
               ),
             ),
         ],
