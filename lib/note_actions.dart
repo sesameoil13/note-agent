@@ -270,6 +270,9 @@ extension _WorkspaceActions on NoteWorkspace {
         final payload =
             jsonDecode(row['payload'] as String) as Map<String, dynamic>;
         if (payload['result'] is! Map) continue;
+        // An unapplied re-organization preview stays a preview; the newer
+        // user decision makes it stale instead of pretending it was applied.
+        if (['preview', 'discarded'].contains(payload['applyPhase'])) continue;
         payload['applyPhase'] = 'applied';
         final pending = _presentation(jsonEncode(plan['presentation']))
             .needsConfirmation;
@@ -324,8 +327,9 @@ String _summaryMarkdown(String value) =>
 NotePresentation _resultPresentation(
   Map<String, dynamic> result,
   String noteId,
-  String original,
-) {
+  String original, {
+  String? actionPrefix,
+}) {
   final actions = (result['actions'] as List?) ?? [];
   return NotePresentation(
     kind: actions.isEmpty ? NoteKind.ordinary : NoteKind.todo,
@@ -333,7 +337,9 @@ NotePresentation _resultPresentation(
     actions: List.unmodifiable([
       for (var i = 0; i < actions.length; i++)
         WorkspaceAction(
-          id: '$noteId-action-$i',
+          id: actionPrefix == null
+              ? '$noteId-action-$i'
+              : '$noteId-$actionPrefix-action-$i',
           text: actions[i]['text'] as String,
           decision: actions[i]['reason'] == 'none'
               ? ActionDecision.confirmed

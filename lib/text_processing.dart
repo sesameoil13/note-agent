@@ -1,5 +1,14 @@
 part of 'note_workspace.dart';
 
+/// A model result still to be written to its note. A re-organization is
+/// only written after the user approved its preview.
+bool _awaitsApply(Map<String, dynamic> payload) =>
+    payload['result'] is Map &&
+    payload['applyPhase'] != 'applied' &&
+    (payload['reorganize'] != true ||
+        payload['applyPhase'] == 'approved' ||
+        payload['applyPhase'] == 'bodyApplied');
+
 extension _WorkspaceTextProcessing on NoteWorkspace {
   List<WorkspaceTextJob> _textJobs() => List.unmodifiable(
     _database
@@ -30,8 +39,10 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
             status: TextProcessingStatus.values.byName(r['status'] as String),
             message: r['error'] as String? ?? '',
             canRetry:
-                r['status'] == TextProcessingStatus.costPending.name &&
-                p['result'] == null,
+                p['result'] == null &&
+                (r['status'] == TextProcessingStatus.costPending.name ||
+                    (r['status'] == TextProcessingStatus.review.name &&
+                        p['validationError'] is String)),
             estimatedCnyMicros: p['estimatedCnyMicros'] as int? ?? 0,
             quoteDescription: _textQuoteDescription(p['quote']),
             attemptCount: (p['attempts'] as List).length,
@@ -45,6 +56,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
                 : costs.fold<int>(0, (a, b) => a + b),
             inputTokens: tokens('prompt_tokens'),
             outputTokens: tokens('completion_tokens'),
+            reorganization: p['reorganize'] == true,
           );
         }),
   );
@@ -91,7 +103,9 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   }
 
   Future<WorkspaceTextJob> _prepareText(String noteId) async {
-    final existing = textJobs.where((j) => j.noteId == noteId).firstOrNull;
+    final existing = textJobs
+        .where((j) => j.noteId == noteId && !j.reorganization)
+        .firstOrNull;
     if (existing != null) {
       if (existing.status == TextProcessingStatus.cancelled) {
         final readiness = textProcessingReadiness(noteId);
@@ -209,6 +223,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         error: state == 'reserved' ? null : '已存在发送或结束记录，不会自动重新发送。',
       );
     } on ConnectionFailure catch (e) {
+      payload['failureKind'] = e.code ?? 'unknown';
       await _saveText(
         id,
         TextProcessingStatus.failed,
@@ -301,10 +316,23 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   }) async {
     final job = await prepareTextProcessing(noteId);
     if (job.status != TextProcessingStatus.prepared) return job;
+    return _sendText(job.id, noteId, maxRetries: maxRetries);
+  }
+
+  Future<WorkspaceTextJob> _sendText(
+    String jobId,
+    String noteId, {
+    int maxRetries = 3,
+  }) async {
+    final job = textJobs.firstWhere((j) => j.id == jobId);
+    if (job.status != TextProcessingStatus.prepared) return job;
     final payload = _textPayload(job.id);
+    payload['autoRetries'] = 0;
     for (var retry = 0; retry <= maxRetries; retry++) {
       final attempt = (payload['attempts'] as List).last as String;
+      payload['autoRetries'] = retry;
       payload.remove('validationError');
+      payload.remove('failureKind');
       await _saveText(job.id, TextProcessingStatus.sending, payload);
       try {
         final reply = await connection.sendReservedText(
@@ -353,10 +381,28 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         if (payload['validationError'] is String) {
           throw ConnectionFailure(payload['validationError'] as String);
         }
+        if (payload['reorganize'] == true) {
+          // A re-organization is only a preview until the user applies it.
+          payload['applyPhase'] = 'preview';
+          await _saveText(
+            job.id,
+            payload['settled'] == true
+                ? TextProcessingStatus.completed
+                : TextProcessingStatus.costPending,
+            payload,
+            error: '再整理预览待确认，尚未应用。',
+          );
+          break;
+        }
         await _saveText(job.id, TextProcessingStatus.costPending, payload);
         await _applyText(job.id, payload);
         break;
       } on ConnectionFailure catch (e) {
+        payload['failureKind'] =
+            e.code ??
+            (payload['validationError'] is String
+                ? 'invalidResult'
+                : 'unknown');
         await _saveText(
           job.id,
           payload['result'] is Map
@@ -368,6 +414,8 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         await refreshBudget();
         break;
       } on TextNetworkFailure catch (e) {
+        payload['failureKind'] =
+            e.code ?? (e.recoverable ? 'recoverable' : 'outcomeUnknown');
         await connection
             .requestSharedBudget(
               '/v1/budget/attempt/$attempt/uncertain',
@@ -389,6 +437,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           await _reserveNextText(job.id, noteId, payload);
           continue;
         } on ConnectionFailure catch (failure) {
+          payload['failureKind'] = failure.code ?? 'unknown';
           await _saveText(
             job.id,
             TextProcessingStatus.costPending,
@@ -401,6 +450,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           break;
         }
       } catch (_) {
+        payload['failureKind'] = 'outcomeUnknown';
         await _saveText(
           job.id,
           TextProcessingStatus.costPending,
@@ -417,13 +467,12 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   Future<WorkspaceTextJob> _retryText(String id) async {
     final job = textJobs.firstWhere((j) => j.id == id);
     final payload = _textPayload(id);
-    if (job.status != TextProcessingStatus.costPending ||
-        payload['result'] != null) {
+    if (!job.canRetry) {
       throw StateError('仅发送失败且没有可用结果的任务可再次付费重试。');
     }
     try {
       await _reserveNextText(id, job.noteId, payload);
-      return await _processText(job.noteId);
+      return await _sendText(id, job.noteId);
     } on ConnectionFailure catch (e) {
       await _saveText(
         id,
@@ -538,7 +587,8 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       ]);
       return;
     }
-    if (notes.firstWhere((n) => n.id == noteId).presentation.userDecided) {
+    if (payload['reorganize'] != true &&
+        notes.firstWhere((n) => n.id == noteId).presentation.userDecided) {
       payload['applyPhase'] = 'applied';
       final pending = notes
           .firstWhere((n) => n.id == noteId)
@@ -580,7 +630,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     if (payload['applyPhase'] != 'bodyApplied') {
       if (plan == null) {
         if (note.modifiedAt.toIso8601String() != payload['modifiedAt'] ||
-            note.text != payload['original']) {
+            note.text != (payload['baseText'] ?? payload['original'])) {
           _database.execute(
             'UPDATE text_jobs SET status=?,error=? WHERE id=?',
             [TextProcessingStatus.review.name, '笔记已修改，AI结果保留但未覆盖新内容。', id],
@@ -599,7 +649,14 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           status: NoteStatus.localSaved,
           document: note.document,
           attachments: note.attachments,
-          presentation: _resultPresentation(result, noteId, note.originalText),
+          presentation: _resultPresentation(
+            result,
+            noteId,
+            note.originalText,
+            // A re-organization creates new action identities, so earlier
+            // reminders are replaced rather than inheriting another action.
+            actionPrefix: payload['reorganize'] == true ? 'r$id' : null,
+          ),
         );
         // Associations, attachment entries and extraction limitations may have
         // been edited independently. Compare only the known content prefix,
@@ -726,7 +783,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
   Future<void> _recoverText() async {
     for (final job in textJobs) {
       final payload = _textPayload(job.id);
-      if (payload['result'] is Map && payload['applyPhase'] != 'applied') {
+      if (_awaitsApply(payload)) {
         await _applyText(job.id, payload);
         continue;
       }
@@ -856,7 +913,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         error: e.message,
       );
     }
-    if (payload['result'] is Map && payload['applyPhase'] != 'applied') {
+    if (_awaitsApply(payload)) {
       await _applyText(id, payload);
     }
     await refreshBudget();

@@ -53,12 +53,20 @@ extension WorkspaceAudioNetwork on WorkspaceConnection {
         }
       }
       if (response.statusCode != 200) {
-        throw TextNetworkFailure(switch (response.statusCode) {
-          401 || 403 => 'Key 无效或无转写权限，请在 App 重新连接。',
-          402 => 'OpenRouter 余额不足，请在官网核对。',
-          413 => '转写服务拒绝此文件大小，原音保留。',
-          _ => '转写服务未返回完整结果，可能已计费；请核对费用。',
-        }, generationId: generationId);
+        throw TextNetworkFailure(
+          switch (response.statusCode) {
+            401 || 403 => 'Key 无效或无转写权限，请在 App 重新连接。',
+            402 => 'OpenRouter 余额不足，请在官网核对。',
+            413 => '转写服务拒绝此文件大小，原音保留。',
+            _ => '转写服务未返回完整结果，可能已计费；请核对费用。',
+          },
+          generationId: generationId,
+          code: switch (response.statusCode) {
+            401 || 403 => 'credentials',
+            402 => 'balance',
+            _ => null,
+          },
+        );
       }
       final decoded = jsonDecode(utf8.decode(body));
       final text = decoded is Map ? decoded['text'] : null;
