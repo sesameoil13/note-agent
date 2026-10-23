@@ -76,6 +76,7 @@ for (const file of [
   "0001_pairing.sql",
   "0002_budget.sql",
   "0003_audio_budget.sql",
+  "0004_todo_sync.sql",
 ]) {
   for (const sql of (await readFile("migrations/" + file, "utf8"))
     .split(";")

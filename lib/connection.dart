@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 part 'pairing.dart';
 part 'budget_connection.dart';
+part 'todo_connection.dart';
 part 'text_model.dart';
 part 'audio_model.dart';
 
