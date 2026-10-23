@@ -19,6 +19,19 @@ The native clipboard integration test uses Ctrl+V on Windows and Cmd+V on macOS.
 - Read-only Parallels inventory identified an existing **stopped Windows 11 ARM64 VM**, with 4 CPUs and 6GB RAM. The root coordinator authorized a CLI boot and task-limited guest inspection. Boot failed because the Parallels activation period had expired. No guest command, installation, license change, or purchase was performed.
 - A manual Windows build workflow draft is retained locally outside the repository. The integration head has no runnable workflow file; the draft has never been registered on the default branch or dispatched. Its reviewed design uses `workflow_dispatch` as the only trigger, one `windows-2025` x64 job with a 30-minute limit, `contents: read`, official actions pinned to commit hashes, checksum-pinned official Flutter 3.47.7, and a release-only ZIP capped at 100 MiB and retained for one day. Registration, repository permissions and explicit bounded-cost authorization must be resolved before any later dispatch. A hosted runner can validate compilation/tests; it cannot establish Windows 11 desktop acceptance.
 
+## Hosted Windows CI (2026-10-24)
+
+Branch `claude/windows-t03-t10-t22` prepares the runner for the hosted `windows-build.yml` workflow (manual `workflow_dispatch` on `main`, input `ref`). At the time of writing that workflow was **not yet registered on `main`** (`GET .../contents/.github/workflows/windows-build.yml?ref=main` → 404; the repository lists no workflows), so **no Windows compile or test result exists yet**. This section is updated with the run URL and outcome once a run completes.
+
+Source changes made for the CI build, without a Windows compiler to check them:
+
+- Shared helpers (`windows/runner/native_paths.*`): UTF-8/UTF-16 conversion, handle-resolved paths, `%LOCALAPPDATA%\dev.noteagent\<child>`, durable small-file replace/read. `workspace_platform.cpp` uses them instead of private copies.
+- `SHOpenFolderAndSelectItems` now receives a typed `PCUITEMID_CHILD` (the previous `const ITEMIDLIST**` relied on an `__unaligned` qualification conversion).
+- The runner target uses the standard Flutter settings (`/W4 /WX /wd4100`, C++17) **with C++ exceptions enabled** instead of `_HAS_EXCEPTIONS=0`: the existing DPAPI store already throws/catches, and C++/WinRT (T22 toasts) reports failures by throwing. SDK/Flutter headers included with angle brackets are compiled with `/external:W0`.
+- Links Media Foundation (`mf`, `mfplat`, `mfreadwrite`, `mfuuid`) for T10 and `windowsapp` for T22.
+
+What a hosted runner can and cannot prove: `flutter test`, `flutter analyze` and `flutter build windows` on an x64 Windows Server image prove compilation, linking and host tests. They do not prove the folder picker, Obsidian handoff, physical keyboard/IME, Windows 11 desktop behaviour or ARM64 execution; the gate below is unchanged.
+
 ## Remaining native gate
 
 Use an available, appropriately licensed Windows 11 machine and a fresh local test vault. Record the actual OS build and processor architecture. Install/configure Flutter 3.47.7 and Visual Studio's required Windows desktop C++ toolchain according to [Flutter's Windows setup instructions](https://docs.flutter.dev/platform-integration/windows/setup); account or license prompts require the machine owner.
