@@ -21,10 +21,11 @@ add_executable(${BINARY_NAME} WIN32
   "runner.exe.manifest"
 )
 
-# The standard settings, except C++ exceptions stay enabled: C++/WinRT (toast
-# notifications) reports failures by throwing. Warnings in SDK/Flutter headers
+# The standard settings, except C++ exceptions stay enabled (C++/WinRT toast
+# notifications report failures by throwing) and C++20, which C++/WinRT needs
+# for coroutine support without the removed /await headers. Warnings in SDK/Flutter headers
 # included with angle brackets are not treated as this target's errors.
-target_compile_features(${BINARY_NAME} PUBLIC cxx_std_17)
+target_compile_features(${BINARY_NAME} PUBLIC cxx_std_20)
 target_compile_options(${BINARY_NAME} PRIVATE /W4 /WX /wd"4100" /EHsc
   /external:anglebrackets /external:W0)
 target_compile_definitions(${BINARY_NAME} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")

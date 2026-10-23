@@ -545,8 +545,8 @@ void NativeNotifications::HandleMethodCall(
               : nullptr;
       std::optional<long long> millis;
       if (values && time_entry != values->end()) {
-        if (const auto* small = std::get_if<int32_t>(&time_entry->second)) millis = *small;
-        if (const auto* large = std::get_if<int64_t>(&time_entry->second)) millis = *large;
+        if (const auto* narrow = std::get_if<int32_t>(&time_entry->second)) millis = *narrow;
+        if (const auto* wide = std::get_if<int64_t>(&time_entry->second)) millis = *wide;
       }
       if (!id || id->rfind("note-agent:", 0) != 0 || !title || !body ||
           !payload || !immediate || !millis) {
