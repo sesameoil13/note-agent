@@ -70,10 +70,12 @@ extension _WorkspacePendingConfirmations on NoteWorkspace {
     final groups = state['groups'] as List;
     final now = _clock();
     NotificationSnapshot? snapshot;
-    try {
-      snapshot = await _notifications.inspect();
-    } catch (_) {
-      /* Unknown never permits a send. */
+    if (!_notificationPermissionWaiting) {
+      try {
+        snapshot = await _notifications.inspect();
+      } catch (_) {
+        /* Unknown never permits a send. */
+      }
     }
     for (final group in groups.cast<Map>()) {
       if (snapshot?.pendingIds.contains(group['id']) == true ||

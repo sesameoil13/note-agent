@@ -156,9 +156,25 @@ class NoteWorkspace {
   }
 
   Future<void> reconcileReminders() => _mutate(() async {});
-  Future<void> requestNotificationPermission() => _mutate(() async {
-    await _notifications.requestPermission();
-  });
+  Future<void>? _notificationPermissionRequest;
+  bool _notificationPermissionWaiting = false;
+  Future<void> requestNotificationPermission() {
+    if (_closing) return Future.error(StateError('工作区正在关闭。'));
+    return _notificationPermissionRequest ??= _askNotificationPermission()
+        .whenComplete(() => _notificationPermissionRequest = null);
+  }
+
+  Future<void> _askNotificationPermission() async {
+    _notificationPermissionWaiting = true;
+    _notificationPermission = NotificationPermission.unknown;
+    try {
+      await _notifications.requestPermission();
+    } finally {
+      _notificationPermissionWaiting = false;
+    }
+    if (!_closing) await reconcileReminders();
+  }
+
   ReminderDefaults get reminderDefaults {
     final rows = _database.select(
       'SELECT payload FROM reminder_defaults WHERE vault=?',
