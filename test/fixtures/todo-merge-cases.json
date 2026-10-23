@@ -1,0 +1,73 @@
+{
+  "comment": "Shared by test/todo_merge_test.dart (lib/todo_merge.dart) and services/pairing/test/merge-cases.test.mjs (src/todos.mjs). Each case's states are partial states as produced by single operations; every order of them, with duplicates, must merge to expected.",
+  "todo": [
+    {
+      "name": "completion wins within a lifecycle over a later snooze",
+      "states": [
+        { "lifecycle": 1, "completed": true, "completedAt": 2000 },
+        { "lifecycle": 1, "snoozeUntil": 5000, "snoozeStamp": "0000000000003000:op-snooze" }
+      ],
+      "expected": { "lifecycle": 1, "completed": true, "completedAt": 2000, "removed": false, "snoozeUntil": null, "snoozeStamp": null, "reopenTime": null, "reopenStamp": null }
+    },
+    {
+      "name": "a reopen (higher lifecycle) beats an older completion",
+      "states": [
+        { "lifecycle": 1, "completed": true, "completedAt": 2000 },
+        { "lifecycle": 2, "reopenTime": 9000, "reopenStamp": "0000000000004000:op-reopen" }
+      ],
+      "expected": { "lifecycle": 2, "completed": false, "completedAt": null, "removed": false, "snoozeUntil": null, "snoozeStamp": null, "reopenTime": 9000, "reopenStamp": "0000000000004000:op-reopen" }
+    },
+    {
+      "name": "the later snooze wins and the operation id breaks a tie",
+      "states": [
+        { "lifecycle": 1, "snoozeUntil": 5000, "snoozeStamp": "0000000000003000:op-a" },
+        { "lifecycle": 1, "snoozeUntil": 6000, "snoozeStamp": "0000000000003000:op-b" },
+        { "lifecycle": 1, "snoozeUntil": 7000, "snoozeStamp": "0000000000002000:op-z" }
+      ],
+      "expected": { "lifecycle": 1, "completed": false, "completedAt": null, "removed": false, "snoozeUntil": 6000, "snoozeStamp": "0000000000003000:op-b", "reopenTime": null, "reopenStamp": null }
+    },
+    {
+      "name": "the earliest completion time is kept",
+      "states": [
+        { "lifecycle": 1, "completed": true, "completedAt": 3000 },
+        { "lifecycle": 1, "completed": true, "completedAt": 2000 }
+      ],
+      "expected": { "lifecycle": 1, "completed": true, "completedAt": 2000, "removed": false, "snoozeUntil": null, "snoozeStamp": null, "reopenTime": null, "reopenStamp": null }
+    },
+    {
+      "name": "removal is a tombstone a later lifecycle cannot revive",
+      "states": [
+        { "lifecycle": 0, "removed": true },
+        { "lifecycle": 2, "reopenTime": 9000, "reopenStamp": "0000000000004000:op-reopen" }
+      ],
+      "expected": { "lifecycle": 2, "completed": false, "completedAt": null, "removed": true, "snoozeUntil": null, "snoozeStamp": null, "reopenTime": 9000, "reopenStamp": "0000000000004000:op-reopen" }
+    }
+  ],
+  "mark": [
+    {
+      "name": "the later device time wins between trash and restore",
+      "states": [
+        { "lifecycle": 0, "mark": "trashed", "markStamp": "0000000000001000:op-trash" },
+        { "lifecycle": 0, "mark": "restored", "markStamp": "0000000000002000:op-restore" }
+      ],
+      "expected": { "lifecycle": 0, "mark": "restored", "markStamp": "0000000000002000:op-restore" }
+    },
+    {
+      "name": "a purge is final even against later trash and restore",
+      "states": [
+        { "lifecycle": 0, "mark": "purged", "markStamp": "0000000000001000:op-purge" },
+        { "lifecycle": 0, "mark": "restored", "markStamp": "0000000000002000:op-restore" },
+        { "lifecycle": 0, "mark": "trashed", "markStamp": "0000000000003000:op-trash" }
+      ],
+      "expected": { "lifecycle": 0, "mark": "purged", "markStamp": "0000000000001000:op-purge" }
+    },
+    {
+      "name": "at the same device time the operation id decides",
+      "states": [
+        { "lifecycle": 0, "mark": "trashed", "markStamp": "0000000000001000:op-b" },
+        { "lifecycle": 0, "mark": "restored", "markStamp": "0000000000001000:op-a" }
+      ],
+      "expected": { "lifecycle": 0, "mark": "trashed", "markStamp": "0000000000001000:op-b" }
+    }
+  ]
+}

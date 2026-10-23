@@ -35,62 +35,10 @@ class TodoAwaitingNote {
   final bool completed;
 }
 
-/// Stable ordering for "later device time wins" (ADR 0002); the operation id
-/// breaks ties. Identical to the Worker's stamp.
-String _todoStamp(int at, String opId) =>
-    '${at.toString().padLeft(16, '0')}:$opId';
-
-/// The same commutative, idempotent join the Worker applies: a higher
-/// lifecycle wins, completion wins within a lifecycle, later stamps win between
-/// snoozes or reopen times, and removal is a tombstone. Joining an older or
-/// duplicated state never moves a newer one backwards.
-Map<String, dynamic> _joinTodo(Map<String, dynamic> a, Map<String, dynamic> b) {
-  final la = a['lifecycle'] as int, lb = b['lifecycle'] as int;
-  Map<String, dynamic> r;
-  if (la != lb) {
-    r = la > lb ? a : b;
-  } else {
-    String stamp(Map m, String f) => (m['${f}Stamp'] as String?) ?? '';
-    final s = stamp(b, 'snooze').compareTo(stamp(a, 'snooze')) > 0 ? b : a;
-    final o = stamp(b, 'reopen').compareTo(stamp(a, 'reopen')) > 0 ? b : a;
-    final done = [a, b]
-        .where((x) => x['completed'] == true && x['completedAt'] != null)
-        .map((x) => x['completedAt'] as int);
-    r = {
-      'lifecycle': la,
-      'completed': a['completed'] == true || b['completed'] == true,
-      'completedAt': done.isEmpty ? null : done.reduce(min),
-      'snoozeUntil': s['snoozeUntil'],
-      'snoozeStamp': s['snoozeStamp'],
-      'reopenTime': o['reopenTime'],
-      'reopenStamp': o['reopenStamp'],
-    };
-  }
-  return _normalizeTodo({
-    ...r,
-    'removed': a['removed'] == true || b['removed'] == true,
-  });
-}
-
-Map<String, dynamic> _normalizeTodo(Map<String, dynamic> s) {
-  final completed = s['completed'] == true;
-  return {
-    'lifecycle': s['lifecycle'],
-    'completed': completed,
-    'completedAt': completed ? s['completedAt'] : null,
-    'removed': s['removed'] == true,
-    // Completion closes the lifecycle, so its snooze no longer applies.
-    'snoozeUntil': completed ? null : s['snoozeUntil'],
-    'snoozeStamp': completed ? null : s['snoozeStamp'],
-    'reopenTime': s['reopenTime'],
-    'reopenStamp': s['reopenStamp'],
-  };
-}
-
 extension _WorkspaceTodoSync on NoteWorkspace {
   /// The synced view of a local `action_states` row.
   Map<String, dynamic> _todoShape(Map<String, dynamic> local) =>
-      _normalizeTodo({
+      normalizeTodoState({
         'lifecycle': local['lifecycle'],
         'completed': local['completed'] == true,
         'completedAt': local['completedAt'] == null
@@ -164,7 +112,7 @@ extension _WorkspaceTodoSync on NoteWorkspace {
   }) {
     _database.execute('BEGIN IMMEDIATE');
     try {
-      _saveActionState('$noteId:$actionId', state);
+      _saveActionState(_actionKey(noteId, actionId), state);
       if (plan != null) _saveReminder(plan);
       _enqueueTodo(noteId, actionId, op);
       _database.execute('COMMIT');
@@ -189,7 +137,7 @@ extension _WorkspaceTodoSync on NoteWorkspace {
   ({String opId, int at, String stamp}) _todoOperation() {
     final opId = NoteWorkspace._randomId();
     final at = _clock().millisecondsSinceEpoch;
-    return (opId: opId, at: at, stamp: _todoStamp(at, opId));
+    return (opId: opId, at: at, stamp: todoStamp(at, opId));
   }
 
   Map<String, dynamic> _todoSyncRow() {
@@ -246,10 +194,7 @@ extension _WorkspaceTodoSync on NoteWorkspace {
       'SELECT action_key,payload FROM action_states WHERE vault=? ORDER BY action_key',
       [vaultStorage.identity],
     )) {
-      final key = row['action_key'] as String;
-      final split = key.indexOf(':');
-      final noteId = key.substring(0, split),
-          actionId = key.substring(split + 1);
+      final (:noteId, :actionId) = _parseActionKey(row['action_key'] as String);
       final v = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
       if (v['removed'] == true || disposed.contains(noteId)) continue;
       if (byId[noteId]?.actions.any((a) => a.id == actionId) ?? false) continue;
@@ -298,10 +243,10 @@ extension _WorkspaceTodoSync on NoteWorkspace {
               _mergeNoteMark(noteId, s);
               continue;
             }
-            final key = '$noteId:${s['actionId']}';
+            final key = _actionKey(noteId, s['actionId'] as String);
             final local = _actionStateRow(key);
             final before = _todoShape(local);
-            final merged = _joinTodo(before, s);
+            final merged = joinTodoStates(before, s);
             if (jsonEncode(merged) == jsonEncode(before)) continue;
             _saveActionState(key, _fromTodoShape(merged, local));
             if (merged['completed'] != before['completed']) {

@@ -350,7 +350,7 @@ extension _WorkspaceActionTombstones on NoteWorkspace {
   /// inside the transaction that drops the actions from the note.
   void _tombstoneActions(String noteId, Iterable<String> actionIds) {
     for (final actionId in actionIds) {
-      final key = '$noteId:$actionId';
+      final key = _actionKey(noteId, actionId);
       final state = _actionStateRow(key)..['removed'] = true;
       final op = _todoOperation();
       _saveActionState(key, state);

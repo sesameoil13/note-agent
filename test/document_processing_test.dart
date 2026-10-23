@@ -284,10 +284,16 @@ void main() {
     expect(await File(note.sourcePath).readAsString(), original);
     expect(w.notes.single.text, note.text);
     await f.reopen(0);
+    // Reopening reads the external edit (T24) and may update the footer's
+    // 修改 time to the file's own time; everything above it stays as edited.
+    String withoutTimes(String markdown) =>
+        markdown.replaceFirst(RegExp(r'\n记录：[^\n]*\n$'), '\n');
+    final reopened = f.workspaces.first.notes.single;
     expect(
-      await File(f.workspaces.first.notes.single.notePath).readAsString(),
-      changed,
+      withoutTimes(await File(reopened.notePath).readAsString()),
+      withoutTimes(changed),
     );
+    expect(reopened.text, startsWith('外部修改\n'));
     expect(f.modelRequests.length, 1);
   });
 }

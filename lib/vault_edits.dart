@@ -109,8 +109,11 @@ extension _VaultEdits on NoteWorkspace {
     final expected = _markdown(note).split(_anchor).first;
     if (head == expected) return false;
     final mtime = await vaultStorage.modifiedTime(path) ?? _clock();
-    final theirs = mtime.millisecondsSinceEpoch;
-    final ours = note.modifiedAt.millisecondsSinceEpoch;
+    // Whole seconds: FAT, some SAF providers and Sync report coarse mtimes,
+    // so an edit in the same second as the App's write is a tie decided by
+    // content, never silently reverted because of the missing fraction.
+    final theirs = mtime.millisecondsSinceEpoch ~/ 1000;
+    final ours = note.modifiedAt.millisecondsSinceEpoch ~/ 1000;
     final externalWins =
         theirs > ours || theirs == ours && head.compareTo(expected) > 0;
     final parsed = _parseHead(note, head);
@@ -134,7 +137,7 @@ extension _VaultEdits on NoteWorkspace {
       final old = note.actions.where((a) => a.id == action.id).firstOrNull;
       if (old != null && old.timeExpression != action.timeExpression) {
         // A newer explicit time replaces one chosen while reopening.
-        final key = '${note.id}:${action.id}';
+        final key = _actionKey(note.id, action.id);
         final state = _actionStateRow(key);
         if (state['completed'] != true && state.remove('time') != null) {
           _saveActionState(key, state);
@@ -149,10 +152,21 @@ extension _VaultEdits on NoteWorkspace {
       timeInNote: note.presentation.timeInNote,
     );
     final timeLine = RegExp(r'\n记录：([^\n]*) · 修改：[^\n]*\n$');
-    final updated = text.replaceFirstMapped(
+    var updated = text.replaceFirstMapped(
       timeLine,
       (m) => '\n记录：${m[1]} · 修改：${formatNoteTime(mtime)}\n',
     );
+    // Lines added in Obsidian are shown as pending, the way the App writes
+    // them; rewriting only the to-do lines keeps the summary as typed.
+    const todoHeading = '## 待办\n\n';
+    final summaryAt = updated.indexOf('\n\n## 摘要\n\n');
+    if (note.kind != NoteKind.ordinary &&
+        updated.startsWith(todoHeading) &&
+        summaryAt > 0) {
+      updated =
+          '$todoHeading${parsed.actions.map((a) => _actionLine(a, note.presentation.timeInNote)).join('\n')}'
+          '${updated.substring(summaryAt)}';
+    }
     _database.execute('BEGIN IMMEDIATE');
     try {
       _database.execute(
@@ -170,7 +184,7 @@ extension _VaultEdits on NoteWorkspace {
       // when the action is removed in the App.
       final kept = {for (final a in parsed.actions) a.id};
       for (final removed in note.actions.where((a) => !kept.contains(a.id))) {
-        final key = '${note.id}:${removed.id}';
+        final key = _actionKey(note.id, removed.id);
         final state = _actionStateRow(key)..['removed'] = true;
         final op = _todoOperation();
         _saveActionState(key, state);
@@ -204,7 +218,7 @@ extension _VaultEdits on NoteWorkspace {
     for (final action in parsed.actions.where((a) => a.completed)) {
       final old = note.actions.where((a) => a.id == action.id).firstOrNull;
       if (old == null || old.completed || !old.actionConfirmed) continue;
-      final key = '${note.id}:${action.id}';
+      final key = _actionKey(note.id, action.id);
       final state = _actionStateRow(key);
       final started = state['startedAt'] as String?;
       if (state['completed'] == true ||
@@ -291,7 +305,8 @@ extension _VaultEdits on NoteWorkspace {
       }
     }
     // Keep stable identities: same text first, then same position (an edit),
-    // otherwise a line added in Obsidian becomes a new confirmed to-do.
+    // otherwise a line added in Obsidian is a new action that waits for
+    // confirmation like any uncertain one and schedules nothing until then.
     final used = <String>{};
     final matched = List<WorkspaceAction?>.filled(lines.length, null);
     for (var i = 0; i < lines.length; i++) {
@@ -322,8 +337,8 @@ extension _VaultEdits on NoteWorkspace {
         WorkspaceAction(
           id: old?.id ?? _createId(),
           text: line.text,
-          decision: old?.decision ?? ActionDecision.confirmed,
-          reason: old?.reason ?? 'none',
+          decision: old?.decision ?? ActionDecision.pending,
+          reason: old?.reason ?? 'unclearAction',
           timeExpression: time,
           timeStatus: old != null && old.timeExpression == time
               ? old.timeStatus

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
+import 'audio_queue_test.dart' show wave;
 import 'support/pending_notification_fixture.dart';
 
 /// T26: bulk restore and 永久清除 through the NoteWorkspace seam, against a
@@ -118,6 +119,61 @@ void main() {
     expect(vault('甲.md').existsSync(), isFalse);
   });
 
+  test('purging a recorded note removes its App-private audio original but keeps another recording\'s', () async {
+    final w = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: Directory('${root.path}/vault'),
+      clock: () => now,
+      notifications: port,
+      audioProcessor: _OrganizingProcessor(),
+    );
+    addTearDown(w.close);
+    final recording = File('${root.path}/voice.wav')..writeAsBytesSync(wave());
+    final first = await w.importAudio(original: recording, submissionId: 'r1');
+    final second = await w.importAudio(original: recording, submissionId: 'r2');
+    await w.resumePendingAudioProcessing();
+    expect(
+      w.notes.map((n) => n.id),
+      containsAll([first.outputNoteId, second.outputNoteId]),
+    );
+    expect(File(first.originalPath).existsSync(), isTrue);
+
+    await w.deleteNote(first.outputNoteId);
+    await w.purgeNotes([first.outputNoteId]);
+
+    expect(File(first.originalPath).existsSync(), isFalse);
+    expect(File(second.originalPath).readAsBytesSync(), wave());
+    // Nothing left that could reprocess or show the purged recording.
+    expect(w.audioSources.map((s) => s.id), [second.id]);
+    expect(w.notes.map((n) => n.id), [second.outputNoteId]);
+  });
+
+  test('restoring under a numbered title moves links that pointed at the note, but not links made to the newer same-named note', () async {
+    final w = await open();
+    final n = await todo(w);
+    final report = await w.captureText(title: '周报', text: '本周进展。');
+    await vault('周报.md').writeAsString(
+      '${await vault('周报.md').readAsString()}\n见 [[安排]] 与 [[安排#待办|安排的待办]]\n',
+    );
+    await w.deleteNote(n.id);
+    final newer = await w.captureText(title: '安排', text: '另一份安排');
+    final diary = await w.captureText(title: '日记', text: '今天。');
+    await vault('日记.md')
+        .writeAsString('${await vault('日记.md').readAsString()}\n新的 [[安排]]\n');
+    final diaryText = await vault('日记.md').readAsString();
+
+    final restored = await w.restoreNote(n.id);
+
+    expect(restored.title, '安排 (2)');
+    final reportText = await vault('周报.md').readAsString();
+    expect(reportText, contains('见 [[安排 (2)]] 与 [[安排 (2)#待办|安排的待办]]'));
+    expect(await vault('日记.md').readAsString(), diaryText);
+    expect(w.notes.firstWhere((x) => x.id == newer.id).title, '安排');
+    // The rewrite is the App's own write, not an Obsidian edit.
+    expect(await w.readVaultEdits(), isEmpty);
+    expect(w.notes.map((x) => x.id), containsAll([report.id, diary.id]));
+  });
+
   test('a note outside the 回收站 cannot be purged', () async {
     final w = await open();
     final n = await w.captureText(title: '留着', text: '不要清除');
@@ -176,4 +232,17 @@ void main() {
       expect(w.todoSync.awaitingNote, isEmpty);
     },
   );
+}
+
+class _OrganizingProcessor implements AudioProcessor {
+  @override
+  bool get canReplayInterruptedRequests => true;
+  @override
+  Future<AudioTranscript> transcribe(AudioProcessingRequest request) async =>
+      const AudioTranscript('录音原话');
+  @override
+  Future<AudioOrganizedNote> organize(
+    AudioProcessingRequest request,
+    AudioTranscript transcript,
+  ) async => const AudioOrganizedNote(title: '录音', text: '录音整理');
 }

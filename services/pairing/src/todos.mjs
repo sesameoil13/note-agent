@@ -3,6 +3,11 @@
 // any delivery order converge: a higher lifecycle wins, completion wins within
 // a lifecycle, the later device time wins between snoozes or reopen times, and
 // removal is a tombstone. Note bodies never pass through this endpoint.
+// A deployment serves exactly one owner's devices (devices.one_owner, setup
+// token enrollment, owner-approved pairing), so todo_states is not scoped by
+// owner: every request already comes from a paired device of that one group.
+// Serving several owners from one deployment would need an owner column in a
+// new migration.
 const KINDS = new Set(["complete", "snooze", "reopen", "remove"]);
 // Deletion marks (T26) for a whole note share this endpoint under a reserved
 // action id. A later device time wins between trash and restore; a purge is
