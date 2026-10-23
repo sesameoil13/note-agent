@@ -162,6 +162,8 @@ extension _WorkspaceReminders on NoteWorkspace {
       state['completed'] = true;
       state['completedAt'] = _clock().toIso8601String();
       state.remove('time');
+      state.remove('held');
+      state.remove('silenced');
       _saveActionState(key, state);
     }
     await _mirrorActionCompletion(noteId);
@@ -305,8 +307,13 @@ extension _WorkspaceReminders on NoteWorkspace {
       for (final action in note.actions.where((a) => a.actionConfirmed)) {
         final key = '${note.id}:${action.id}';
         final state = _actionStateRow(key);
-        // Completed items are inactive; their plans are cancelled below.
-        if (state['completed'] == true) continue;
+        // Completed items are inactive; their plans are cancelled below. So
+        // are reminders missed in the 回收站 until the user decides.
+        if (state['completed'] == true ||
+            state['held'] != null ||
+            state['silenced'] == true) {
+          continue;
+        }
         active.add(key);
         final rows = _database.select(
           'SELECT payload,removed FROM reminder_plans WHERE vault=? AND action_id=?',

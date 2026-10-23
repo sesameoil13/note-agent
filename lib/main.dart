@@ -18,6 +18,7 @@ import 'setup_screen.dart';
 import 'budget_panel.dart';
 import 'action_confirmation_screen.dart';
 import 'reminder_screen.dart';
+import 'recycle_bin_screen.dart';
 import 'notification_platform.dart';
 
 void main() => runApp(const NoteAgentApp());
@@ -553,6 +554,22 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             label: '提醒与默认时间',
             icon: const Icon(Icons.notifications_outlined),
           ),
+        if (_workspace != null)
+          AccessibleIconButton(
+            onPressed: _saving || _loading
+                ? null
+                : () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            RecycleBinScreen(workspace: _workspace!),
+                      ),
+                    );
+                    if (mounted) setState(() {});
+                  },
+            label: '归档与回收站',
+            icon: const Icon(Icons.inventory_2_outlined),
+          ),
         if (wide) ...[
           AccessibleIconButton(
             onPressed: _saving || _loading ? null : _showSetup,
@@ -834,7 +851,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   }
 
   Widget _noteList({VoidCallback? refresh}) {
-    final notes = _workspace!.search(_search.text);
+    // 归档 notes leave the daily list but still answer a search.
+    final notes = _search.text.trim().isEmpty
+        ? _workspace!.dailyNotes
+        : _workspace!.search(_search.text);
     return Container(
       decoration: const BoxDecoration(
         color: slate,
@@ -963,9 +983,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                                 ),
                                 const SizedBox(height: 16),
                                 Text(
-                                  note.status == NoteStatus.localSaved
-                                      ? '本机已保存'
-                                      : '原文已保留 · 待写入',
+                                  '${note.status == NoteStatus.localSaved ? '本机已保存' : '原文已保留 · 待写入'}${note.archived ? ' · 已归档' : ''}',
                                   style: const TextStyle(
                                     fontSize: 12,
                                     color: ash,
@@ -1080,6 +1098,29 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     }
   }
 
+  /// 归档 or 删除: the note leaves the daily list, so selection moves on.
+  Future<void> _dispose(
+    Future<void> Function() operation, {
+    required bool leave,
+  }) async {
+    setState(() => _saving = true);
+    try {
+      await operation();
+      if (mounted) {
+        setState(() {
+          _error = null;
+          if (leave) _selectedId = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = e is StateError ? e.message : _errorMessage(e));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   Future<DateTime?> _pickReopenTime() async {
     final now = DateTime.now();
     final day = await showDatePicker(
@@ -1191,12 +1232,12 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   }
 
   Widget _detail() {
-    final notes = _workspace!.notes;
-    if (notes.isEmpty) return _composer();
-    final note = notes.firstWhere(
-      (item) => item.id == _selectedId,
-      orElse: () => notes.first,
-    );
+    final selected = _workspace!.notes
+        .where((item) => item.id == _selectedId)
+        .firstOrNull;
+    final daily = _workspace!.dailyNotes;
+    if (selected == null && daily.isEmpty) return _composer();
+    final note = selected ?? daily.first;
     if (_editingNoteId != note.id) {
       _editingNoteId = note.id;
       _editTitle.text = note.title;
@@ -1294,6 +1335,31 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                         },
                   child: const Text('修正类型与行动'),
                 ),
+              ),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton(
+                    onPressed: _saving
+                        ? null
+                        : () => _dispose(
+                            () => note.archived
+                                ? _workspace!.unarchiveNote(note.id)
+                                : _workspace!.archiveNote(note.id),
+                            leave: !note.archived,
+                          ),
+                    child: Text(note.archived ? '取消归档' : '归档'),
+                  ),
+                  TextButton(
+                    onPressed: _saving
+                        ? null
+                        : () => _dispose(
+                            () => _workspace!.deleteNote(note.id),
+                            leave: true,
+                          ),
+                    child: const Text('移入回收站'),
+                  ),
+                ],
               ),
               if (note.status != NoteStatus.localSaved) ...[
                 const SizedBox(height: 16),

@@ -3,9 +3,11 @@ part of 'note_workspace.dart';
 extension _WorkspaceTextProcessing on NoteWorkspace {
   List<WorkspaceTextJob> _textJobs() => List.unmodifiable(
     _database
-        .select('SELECT * FROM text_jobs WHERE vault=?', [
-          vaultStorage.identity,
-        ])
+        .select(
+          // Jobs of notes in the 回收站 return with the note on restore.
+          "SELECT * FROM text_jobs WHERE vault=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state='deleted')",
+          [vaultStorage.identity, vaultStorage.identity],
+        )
         .map((r) {
           final p = (jsonDecode(r['payload'] as String) as Map)
               .cast<String, dynamic>();
