@@ -213,20 +213,10 @@ extension _WorkspaceActions on NoteWorkspace {
         'INSERT INTO note_action_changes(note_id,vault,payload) VALUES (?,?,?)',
         [noteId, vaultStorage.identity, jsonEncode(plan)],
       );
-      // A removed action becomes a tombstone on every paired device, so a
-      // delayed completion, snooze or reopen elsewhere cannot revive it.
-      for (final removed in note.actions.where((a) => !ids.contains(a.id))) {
-        final key = '$noteId:${removed.id}';
-        final state = _actionStateRow(key)..['removed'] = true;
-        final op = _todoOperation();
-        _saveActionState(key, state);
-        _enqueueTodo(noteId, removed.id, {
-          'opId': op.opId,
-          'kind': 'remove',
-          'lifecycle': state['lifecycle'],
-          'at': op.at,
-        });
-      }
+      _tombstoneActions(
+        noteId,
+        note.actions.map((a) => a.id).where((id) => !ids.contains(id)),
+      );
       _database.execute('COMMIT');
     } catch (_) {
       _database.execute('ROLLBACK');
@@ -352,4 +342,24 @@ NotePresentation _resultPresentation(
         ),
     ]),
   );
+}
+
+extension _WorkspaceActionTombstones on NoteWorkspace {
+  /// A removed action becomes a tombstone on every paired device, so a
+  /// delayed completion, snooze or reopen elsewhere cannot revive it. Called
+  /// inside the transaction that drops the actions from the note.
+  void _tombstoneActions(String noteId, Iterable<String> actionIds) {
+    for (final actionId in actionIds) {
+      final key = '$noteId:$actionId';
+      final state = _actionStateRow(key)..['removed'] = true;
+      final op = _todoOperation();
+      _saveActionState(key, state);
+      _enqueueTodo(noteId, actionId, {
+        'opId': op.opId,
+        'kind': 'remove',
+        'lifecycle': state['lifecycle'],
+        'at': op.at,
+      });
+    }
+  }
 }

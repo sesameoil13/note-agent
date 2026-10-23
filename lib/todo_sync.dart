@@ -240,6 +240,7 @@ extension _WorkspaceTodoSync on NoteWorkspace {
 
   List<TodoAwaitingNote> _todosAwaitingNote() {
     final byId = {for (final n in notes) n.id: n};
+    final disposed = _disposedNoteIds();
     final result = <TodoAwaitingNote>[];
     for (final row in _database.select(
       'SELECT action_key,payload FROM action_states WHERE vault=? ORDER BY action_key',
@@ -250,7 +251,7 @@ extension _WorkspaceTodoSync on NoteWorkspace {
       final noteId = key.substring(0, split),
           actionId = key.substring(split + 1);
       final v = jsonDecode(row['payload'] as String) as Map<String, dynamic>;
-      if (v['removed'] == true) continue;
+      if (v['removed'] == true || disposed.contains(noteId)) continue;
       if (byId[noteId]?.actions.any((a) => a.id == actionId) ?? false) continue;
       result.add(
         TodoAwaitingNote(
@@ -293,6 +294,10 @@ extension _WorkspaceTodoSync on NoteWorkspace {
           }
           for (final s in states) {
             final noteId = s['noteId'] as String;
+            if (s['actionId'] == _noteMarkId) {
+              _mergeNoteMark(noteId, s);
+              continue;
+            }
             final key = '$noteId:${s['actionId']}';
             final local = _actionStateRow(key);
             final before = _todoShape(local);
@@ -317,6 +322,7 @@ extension _WorkspaceTodoSync on NoteWorkspace {
         }
         if (queued.length < 20 && result['more'] != true) break;
       }
+      await _applyNoteMarks();
       _saveTodoSyncRow({
         ..._todoSyncRow(),
         'status': 'synced',

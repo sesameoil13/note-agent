@@ -4,6 +4,11 @@
 // a lifecycle, the later device time wins between snoozes or reopen times, and
 // removal is a tombstone. Note bodies never pass through this endpoint.
 const KINDS = new Set(["complete", "snooze", "reopen", "remove"]);
+// Deletion marks (T26) for a whole note share this endpoint under a reserved
+// action id. A later device time wins between trash and restore; a purge is
+// final, so no replay or stale offline copy can bring the note back.
+export const NOTE_MARK = "_note";
+const MARK_KINDS = { trash: "trashed", restore: "restored", purge: "purged" };
 const PAGE = 20;
 const MAX_OPS = 25;
 const ref = (v) => typeof v === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(v);
@@ -12,6 +17,14 @@ const time = (v) => Number.isSafeInteger(v) && v >= 0;
 const stamp = (at, opId) => `${String(at).padStart(16, "0")}:${opId}`;
 const later = (a, b, field) =>
   (b[field + "Stamp"] || "") > (a[field + "Stamp"] || "") ? b : a;
+
+export function joinMark(a, b) {
+  if (!a) return b;
+  const purged = [a, b].filter((x) => x.mark === "purged");
+  if (purged.length)
+    return purged.reduce((x, y) => (y.markStamp > x.markStamp ? y : x));
+  return b.markStamp > a.markStamp ? b : a;
+}
 
 export function joinTodo(a, b) {
   if (!a) return normalize(b);
@@ -53,6 +66,8 @@ function normalize(s) {
 
 function operationState(op) {
   const s = stamp(op.at, op.opId);
+  if (op.actionId === NOTE_MARK)
+    return { lifecycle: 0, mark: MARK_KINDS[op.kind], markStamp: s };
   switch (op.kind) {
     case "complete":
       return { lifecycle: op.lifecycle, completed: true, completedAt: op.at };
@@ -72,7 +87,9 @@ function validOperation(op, fail) {
     !opRef(op.opId) ||
     !ref(op.noteId) ||
     !ref(op.actionId) ||
-    !KINDS.has(op.kind) ||
+    (op.actionId === NOTE_MARK
+      ? !Object.hasOwn(MARK_KINDS, op.kind)
+      : !KINDS.has(op.kind)) ||
     !time(op.at) ||
     !Number.isSafeInteger(op.lifecycle) ||
     op.lifecycle < 1 ||
@@ -97,7 +114,10 @@ async function apply(env, own, op, now, fail) {
       .first();
     const current = row ? JSON.parse(row.payload) : null;
     const version = row ? row.version : 0;
-    const next = joinTodo(current, operationState(op));
+    const next = (op.actionId === NOTE_MARK ? joinMark : joinTodo)(
+      current,
+      operationState(op),
+    );
     const record = db
       .prepare(
         "INSERT OR IGNORE INTO todo_ops(id,action_key,device_id,received_at) SELECT ?,?,?,? WHERE COALESCE((SELECT version FROM todo_states WHERE action_key=?),0)=?",

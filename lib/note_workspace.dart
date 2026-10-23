@@ -928,6 +928,9 @@ class NoteWorkspace {
     database.execute(
       'CREATE TABLE IF NOT EXISTS note_disposals(vault TEXT NOT NULL,note_id TEXT NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',
     );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS note_marks(vault TEXT NOT NULL,note_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',
+    );
     workspace._notifications =
         notifications ?? const UnavailableNotifications();
     workspace._setup = WorkspaceSetup(
@@ -988,6 +991,7 @@ class NoteWorkspace {
     }
     await workspace._attachments.recover();
     await workspace._recoverDisposals();
+    await workspace._applyNoteMarks();
     await workspace._recoverActionChanges();
     await workspace._recoverActionCompletion();
     await workspace._recoverAssociationChanges();
@@ -1028,6 +1032,17 @@ class NoteWorkspace {
   /// restored note takes a numbered title instead. Future reminders return;
   /// past ones wait in [reminderDecisions].
   Future<WorkspaceNote> restoreNote(String id) => _mutate(() => _restore(id));
+
+  /// Restores several (or all) 回收站 items with the same single-item rules.
+  /// Every item is attempted; failures are reported together afterwards.
+  Future<List<WorkspaceNote>> restoreNotes(List<String> ids) =>
+      _mutate(() => _restoreMany(ids));
+
+  /// 永久清除 after the user confirmed it. Removes the retained copy and the
+  /// note's own source files that no other note references, and tells paired
+  /// devices through a deletion mark so no copy comes back. Obsidian Sync's
+  /// own version history is outside the App and is not touched.
+  Future<void> purgeNotes(List<String> ids) => _mutate(() => _purgeMany(ids));
   List<ReminderDecision> get reminderDecisions => _reminderDecisions();
 
   /// Reschedules a restored past reminder at [time], or silences it (null).

@@ -177,3 +177,52 @@ test("pull is incremental by cursor and pages large backlogs", async () => {
   assert.equal(seen.size, 25);
   assert.equal((await sync([], cursor)).data.states.length, 0);
 });
+
+// Deletion marks (T26) travel through the same endpoint under the reserved
+// action id "_note": trash, restore and purge of one note.
+async function pullMark(noteId, token = ownerToken) {
+  let cursor = 0,
+    found;
+  for (;;) {
+    const page = (await sync([], cursor, token)).data;
+    for (const s of page.states)
+      if (s.noteId === noteId && s.actionId === "_note") found = s;
+    cursor = page.cursor;
+    if (!page.more) return found;
+  }
+}
+const mark = (kind, noteId, at, fields = {}) =>
+  op(kind, { noteId, actionId: "_note", at, ...fields });
+
+test("note marks are only accepted under the reserved action id, and to-do kinds are refused there", async () => {
+  assert.equal((await sync([op("purge")])).status, 400);
+  assert.equal((await sync([op("trash")])).status, 400);
+  assert.equal(
+    (await sync([op("complete", { actionId: "_note" })])).status,
+    400,
+  );
+  assert.equal((await sync([mark("trash", "mark-bounds", 5)])).status, 200);
+});
+
+test("a stale or replayed restore cannot undo a later deletion; a later restore can", async () => {
+  const id = "mark-note-1";
+  const restoreOld = mark("restore", id, 100);
+  await sync([mark("trash", id, 200)]);
+  await sync([restoreOld], 0, memberToken);
+  await sync([restoreOld]);
+  let s = await pullMark(id, memberToken);
+  assert.equal(s.mark, "trashed");
+  await sync([mark("restore", id, 300)], 0, memberToken);
+  s = await pullMark(id);
+  assert.equal(s.mark, "restored");
+});
+
+test("a purge is final: no later restore, deletion or duplicate brings it back", async () => {
+  const id = "mark-note-2";
+  const purge = mark("purge", id, 50);
+  await sync([mark("trash", id, 10), purge]);
+  await sync([mark("restore", id, 900), purge], 0, memberToken);
+  await sync([mark("trash", id, 1000)]);
+  const s = await pullMark(id, memberToken);
+  assert.equal(s.mark, "purged");
+});

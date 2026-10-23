@@ -14,7 +14,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     _database
         .select(
           // Jobs of notes in the 回收站 return with the note on restore.
-          "SELECT * FROM text_jobs WHERE vault=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state='deleted')",
+          "SELECT * FROM text_jobs WHERE vault=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state IN ('deleted','purged'))",
           [vaultStorage.identity, vaultStorage.identity],
         )
         .map((r) {
@@ -727,6 +727,17 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           ],
         );
         _attachments.noteContentsChanged(noteId, plan['after'] as String);
+        // Re-organizing gives actions new identities; paired devices must
+        // drop the old ones rather than keep reminding about them.
+        if (plan['presentation'] case final Map presentation) {
+          final kept = {
+            for (final a in presentation['actions'] as List) (a as Map)['id'],
+          };
+          _tombstoneActions(
+            noteId,
+            note.actions.map((a) => a.id).where((id) => !kept.contains(id)),
+          );
+        }
         payload.remove('writePlan');
         payload['applyPhase'] = 'bodyApplied';
         payload['bodyAppliedAt'] = plan['modifiedAt'];
