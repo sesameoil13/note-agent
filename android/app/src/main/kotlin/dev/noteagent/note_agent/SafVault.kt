@@ -84,6 +84,13 @@ internal class SafVault(private val resolver: ContentResolver, private val tree:
     fun exists(path: String): Boolean = find(path) != null
     private fun read(uri: Uri): String = resolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
         ?: throw IOException("无法读取原文。")
+    /** Provider-reported last modification (epoch millis), or null if unknown. */
+    fun modifiedTime(path: String): Long? {
+        val uri = find(path)?.uri ?: return null
+        return resolver.query(uri, arrayOf(Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+        }
+    }
     fun readText(path: String): String = read(find(path)?.uri ?: throw IOException("笔记文件不存在。"))
 
     private fun staging(path: String, text: String, operation: String): Pair<Uri, Uri> {

@@ -52,8 +52,14 @@ class NotePresentation {
     this.actions = const [],
     this.original,
     this.userDecided = false,
+    this.timeInNote = true,
   });
   final NoteKind kind;
+
+  /// Whether each to-do line carries its time text, so a time edited in
+  /// Obsidian can be read back. Notes written before T24 keep their format
+  /// until the App next rewrites their to-do section.
+  final bool timeInNote;
   final List<WorkspaceAction> actions;
   final String? original;
   final bool userDecided;
@@ -63,6 +69,7 @@ class NotePresentation {
     'actions': actions.map((a) => a.toJson()).toList(),
     'original': original,
     'userDecided': userDecided,
+    'timeInNote': timeInNote,
   };
 }
 
@@ -73,6 +80,7 @@ NotePresentation _presentation(String? raw) {
     kind: NoteKind.values.byName(v['kind'] as String),
     original: v['original'] as String?,
     userDecided: v['userDecided'] == true,
+    timeInNote: v['timeInNote'] == true,
     actions: List.unmodifiable(
       (v['actions'] as List).map(
         (a) => WorkspaceAction.fromJson((a as Map).cast<String, dynamic>()),

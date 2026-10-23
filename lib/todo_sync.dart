@@ -121,6 +121,15 @@ extension _WorkspaceTodoSync on NoteWorkspace {
         'reopenStamp': s['reopenStamp'],
       },
     };
+    if (s['lifecycle'] == local['lifecycle'] && local['startedAt'] != null) {
+      next['startedAt'] = local['startedAt'];
+    } else if (s['reopenStamp'] case final String stamp) {
+      // A tick read from a copy older than the reopen elsewhere must not
+      // close the new lifecycle.
+      next['startedAt'] = DateTime.fromMillisecondsSinceEpoch(
+        int.parse(stamp.substring(0, stamp.indexOf(':'))),
+      ).toIso8601String();
+    }
     if (completed) {
       final at = s['completedAt'] as int?;
       final same =

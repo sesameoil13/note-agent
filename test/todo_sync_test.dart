@@ -199,4 +199,26 @@ void main() {
     expect(b.reminderDecisions.map((d) => d.actionId), isNot(contains('buy')));
     expect(f.alert(1, 'buy'), isNull);
   });
+
+  test('a tick or a deleted line read from Obsidian syncs to the paired device like an App action', () async {
+    final a = f.workspaces[0], b = f.workspaces[1];
+    final n = await f.todo(0);
+    await f.todo(1);
+    final file = File(a.notes.single.notePath);
+    await file.writeAsString(
+      (await file.readAsString())
+          .replaceFirst('- [ ] 买电池', '- [x] 买电池')
+          .replaceFirst('- [ ] 联系物业\n', ''),
+    );
+    await file.setLastModified(DateTime(2026, 10, 21, 9));
+    expect(await a.readVaultEdits(), [n.id]);
+    expect(a.todoSync.pendingOperations, 2);
+    expect(await a.syncTodos(), TaskStatusSync.synced);
+
+    expect(await b.syncTodos(), TaskStatusSync.synced);
+    expect(b.actionState(n.id, 'buy').completed, isTrue);
+    expect(b.actionState(n.id, 'call').removed, isTrue);
+    expect(f.alert(1, 'buy'), isNull);
+    expect(f.alert(1, 'call'), isNull);
+  });
 }

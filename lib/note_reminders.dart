@@ -207,6 +207,9 @@ extension _WorkspaceReminders on NoteWorkspace {
         'time': time.toIso8601String(),
         'reopenTime': reopenTime,
         'reopenStamp': op.stamp,
+        // A tick read later from an older copy must not close this lifecycle.
+        'startedAt': DateTime.fromMillisecondsSinceEpoch(op.at)
+            .toIso8601String(),
       },
       {
         'opId': op.opId,

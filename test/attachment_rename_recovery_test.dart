@@ -52,7 +52,13 @@ void main() {
     final saved = await File(renamed.notePath).readAsString();
     expect('[资料.pdf]'.allMatches(saved), hasLength(1));
     expect(saved, contains('外部新正文必须保留。'));
-    expect(saved, contains('修改：2026-10-16 10:01:00'));
+    // T24: the later external body is adopted on open, and the note's own
+    // modification line follows that adopted version.
+    expect(workspace.notes.single.text, '外部新正文必须保留。');
+    expect(
+      saved,
+      contains('修改：${formatNoteTime(workspace.notes.single.modifiedAt)}'),
+    );
     expect(workspace.notes.single.id, note.id);
     expect(workspace.attachments.single.originalPath, failed.originalPath);
     expect(await File(failed.originalPath).readAsBytes(), [3, 6, 9]);

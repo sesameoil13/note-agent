@@ -229,18 +229,22 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     if (state == AppLifecycleState.resumed) {
       _resumeAudioQueue();
       unawaited(_takeNotificationNavigation());
-      unawaited(_syncTodos());
       final workspace = _workspace;
-      if (workspace != null) {
+      if (workspace == null) {
+        unawaited(_syncTodos());
+      } else {
+        // Returning from Obsidian: read its edits, then reconcile reminders.
+        // To-do sync follows, so ticks read here are sent in the same pass.
         unawaited(
           workspace
-              .reconcileReminders()
+              .readVaultEdits()
               .then((_) {
                 if (mounted) setState(() {});
               })
               .catchError((Object e) {
                 if (mounted) setState(() => _error = _errorMessage(e));
-              }),
+              })
+              .whenComplete(_syncTodos),
         );
       }
     }
@@ -297,12 +301,11 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   Future<void> _showSetup() async {
     final action = await Navigator.of(context).push<SetupAction>(
       MaterialPageRoute(
-        builder: (_) =>
-            SetupScreen(
-              workspace: _workspace,
-              connection: _connection,
-              vaultAuthorizationError: _vaultAuthorizationError,
-            ),
+        builder: (_) => SetupScreen(
+          workspace: _workspace,
+          connection: _connection,
+          vaultAuthorizationError: _vaultAuthorizationError,
+        ),
       ),
     );
     if (!mounted) return;
