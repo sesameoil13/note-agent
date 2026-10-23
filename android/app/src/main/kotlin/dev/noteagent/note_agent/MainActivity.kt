@@ -22,6 +22,7 @@ class MainActivity : FlutterActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private var secureCredentials: SecureCredentials? = null
     private var nativeAudio: NativeAudio? = null
+    private var notifications: NativeNotifications? = null
     private var pendingPicker: MethodChannel.Result? = null
     private val readWrite = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
 
@@ -29,6 +30,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         secureCredentials = SecureCredentials(this, flutterEngine.dartExecutor.binaryMessenger)
         nativeAudio = NativeAudio(this, flutterEngine.dartExecutor.binaryMessenger)
+        notifications = NativeNotifications(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.noteagent/workspace")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -81,7 +83,20 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Recorded before Dart's first drain, so a cold start from an alert opens the note.
+        notifications?.onIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        notifications?.onIntent(intent)
+    }
+
     override fun onDestroy() {
+        notifications?.close()
         nativeAudio?.close()
         io.shutdown()
         super.onDestroy()
@@ -90,6 +105,7 @@ class MainActivity : FlutterActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         nativeAudio?.onPermissionResult(requestCode)
+        notifications?.onPermissionResult(requestCode)
     }
 
     private fun path(call: MethodCall) = requireNotNull(call.argument<String>("relativePath"))

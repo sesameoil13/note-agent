@@ -222,6 +222,7 @@ extension _WorkspaceReminders on NoteWorkspace {
     String actionId, {
     int? minutes,
     String? notificationId,
+    DateTime? armedUntil,
   }) async {
     final fromNotification = notificationId != null;
     _confirmedAction(noteId, actionId);
@@ -244,6 +245,16 @@ extension _WorkspaceReminders on NoteWorkspace {
     // Only the current notification may snooze; a duplicate or superseded
     // delivery must not replace a newer time chosen elsewhere.
     if (fromNotification && notificationId != v['id']) return;
+    if (armedUntil != null) {
+      // Android already re-armed this same alert natively while the App was
+      // closed; adopting it avoids a second, later alarm.
+      v['time'] = armedUntil.toIso8601String();
+      v['status'] = ReminderStatus.pending.name;
+      v['immediate'] = false;
+      v['snoozed'] = true;
+      _saveReminder(v);
+      return;
+    }
     final length = minutes ?? reminderDefaults.snoozeMinutes;
     if (length < 1 || length > 1440) throw ArgumentError('稍后提醒需在 1–1440 分钟之间。');
     final oldId = v['id'] as String;
@@ -332,7 +343,15 @@ extension _WorkspaceReminders on NoteWorkspace {
           case 'snooze':
             if (_actionStateRow('$noteId:$actionId')['lifecycle'] ==
                 lifecycle) {
-              await _snoozeReminder(noteId, actionId, notificationId: r.id);
+              final armed = int.tryParse(r.payload['snoozedUntilMs'] ?? '');
+              await _snoozeReminder(
+                noteId,
+                actionId,
+                notificationId: r.id,
+                armedUntil: armed == null
+                    ? null
+                    : DateTime.fromMillisecondsSinceEpoch(armed),
+              );
             }
         }
       } on StateError {
@@ -439,12 +458,14 @@ extension _WorkspaceReminders on NoteWorkspace {
       if (inspected == null) return;
       snapshot = inspected;
       _notificationPermission = snapshot.permission;
+      _notificationTimingExact = snapshot.exactTiming;
       _notificationError = null;
     } catch (error) {
       _notificationPermission = NotificationPermission.unknown;
       _notificationError = '无法核对系统通知：$error';
       return;
     }
+    final snoozeMinutes = '${reminderDefaults.snoozeMinutes}';
     for (final row in _database.select(
       'SELECT payload,removed FROM reminder_plans WHERE vault=?',
       [vaultStorage.identity],
@@ -486,6 +507,8 @@ extension _WorkspaceReminders on NoteWorkspace {
                 'noteId': v['noteId'],
                 'actionId': v['actionId'],
                 'lifecycle': '${v['lifecycle'] ?? 1}',
+                // Lets Android postpone natively before the App applies it.
+                'snoozeMinutes': snoozeMinutes,
               },
             ),
           );
