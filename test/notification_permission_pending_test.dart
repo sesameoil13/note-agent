@@ -19,8 +19,9 @@ void main() {
           notifications: port,
         );
         addTearDown(() async {
-          if (!port.answer.isCompleted)
+          if (!port.answer.isCompleted) {
             port.answer.complete(NotificationPermission.denied);
+          }
           await w.close();
           await root.delete(recursive: true);
         });
@@ -66,8 +67,9 @@ void main() {
       notifications: port,
     );
     addTearDown(() async {
-      if (!port.answer.isCompleted)
+      if (!port.answer.isCompleted) {
         port.answer.complete(NotificationPermission.denied);
+      }
       await w.close();
       await root.delete(recursive: true);
     });
@@ -128,8 +130,9 @@ void main() {
         notifications: port,
       );
       addTearDown(() async {
-        if (!port.answer.isCompleted)
+        if (!port.answer.isCompleted) {
           port.answer.complete(NotificationPermission.denied);
+        }
         await w.close();
         await root.delete(recursive: true);
       });
@@ -160,8 +163,9 @@ class _DeferredPermission implements NotificationPort {
   @override
   Future<NotificationSnapshot> inspect() async {
     inspections++;
-    if (inspectAlsoWaits && requests > 0 && !answer.isCompleted)
+    if (inspectAlsoWaits && requests > 0 && !answer.isCompleted) {
       await answer.future;
+    }
     return NotificationSnapshot(
       permission: permission,
       pendingIds: scheduled.keys.toSet(),
