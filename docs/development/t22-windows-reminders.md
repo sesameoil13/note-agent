@@ -15,7 +15,7 @@ Issue [#23](https://github.com/sesameoil13/note-agent/issues/23) stays open unti
 
 - `test/notification_platform_test.dart`: `systemResumed` reaches the re-check stream (red seen first); existing kind/vault draining and network tests still pass.
 - `flutter analyze` clean; full `flutter test` result recorded in the branch report.
-- Windows CI: not yet run (workflow not registered on `main`); see t03-validation.md. CI can at most prove compilation/linking; it cannot show a toast.
+- Windows CI (hosted `windows-2025` x64): the C++/WinRT toast adapter and COM activator compile and links in the release build since run [40017022299](https://github.com/sesameoil13/note-agent/actions/runs/40017022299); see t03-validation.md for the full run history. A hosted runner has no microphone, speaker or interactive desktop, so nothing above is exercised at runtime there; CI cannot show a toast.
 
 ## Requires real Windows 11 desktop acceptance
 

@@ -24,7 +24,7 @@ The Windows AAC encoder accepts only 44.1/48 kHz input and 12,000–24,000 bytes
 
 - `test/method_channel_audio_test.dart`: an adapter with native recovery asks for that exact original and maps the native stopped snapshot; without it, no completion is claimed and the OS is not asked. Red seen before the change.
 - `flutter analyze` clean; full `flutter test` result recorded in the branch report.
-- Windows CI: not yet run (workflow not registered on `main`); see t03-validation.md.
+- Windows CI (hosted `windows-2025` x64): the Media Foundation adapter compiles and links in the release build since run [40017022299](https://github.com/sesameoil13/note-agent/actions/runs/40017022299); see t03-validation.md for the full run history. A hosted runner has no microphone, speaker or interactive desktop, so nothing above is exercised at runtime there.
 
 ## Requires real Windows 11 desktop acceptance
 

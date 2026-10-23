@@ -21,16 +21,26 @@ The native clipboard integration test uses Ctrl+V on Windows and Cmd+V on macOS.
 
 ## Hosted Windows CI (2026-10-24)
 
-Branch `claude/windows-t03-t10-t22` prepares the runner for the hosted `windows-build.yml` workflow (manual `workflow_dispatch` on `main`, input `ref`). At the time of writing that workflow was **not yet registered on `main`** (`GET .../contents/.github/workflows/windows-build.yml?ref=main` → 404; the repository lists no workflows), so **no Windows compile or test result exists yet**. This section is updated with the run URL and outcome once a run completes.
+Workflow `windows-build.yml` (manual `workflow_dispatch` on `main`, input `ref`, `windows-2025` x64, Flutter 3.47.7) was run against branch `claude/windows-t03-t10-t22`. RESULT_PLACEHOLDER
 
-Source changes made for the CI build, without a Windows compiler to check them:
+Runs and what each revealed:
 
-- Shared helpers (`windows/runner/native_paths.*`): UTF-8/UTF-16 conversion, handle-resolved paths, `%LOCALAPPDATA%\dev.noteagent\<child>`, durable small-file replace/read. `workspace_platform.cpp` uses them instead of private copies.
-- `SHOpenFolderAndSelectItems` now receives a typed `PCUITEMID_CHILD` (the previous `const ITEMIDLIST**` relied on an `__unaligned` qualification conversion).
-- The runner target uses the standard Flutter settings (`/W4 /WX /wd4100`, C++17) **with C++ exceptions enabled** instead of `_HAS_EXCEPTIONS=0`: the existing DPAPI store already throws/catches, and C++/WinRT (T22 toasts) reports failures by throwing. SDK/Flutter headers included with angle brackets are compiled with `/external:W0`.
-- Links Media Foundation (`mf`, `mfplat`, `mfreadwrite`, `mfuuid`) for T10 and `windowsapp` for T22.
+1. [40015588926](https://github.com/sesameoil13/note-agent/actions/runs/40015588926): first real Windows result. `flutter test`: 284 passed, 19 failed. Build: C++/WinRT needs C++20 (the C++17 `/await` coroutine headers were removed), and `small` is an `rpcndr.h` macro.
+2. [40017022299](https://github.com/sesameoil13/note-agent/actions/runs/40017022299): the release build **compiles and links** (runner, Media Foundation, C++/WinRT). Tests unchanged, plus one more timing-sensitive UI failure.
+3. [40019298687](https://github.com/sesameoil13/note-agent/actions/runs/40019298687): with the fixes below.
 
-What a hosted runner can and cannot prove: `flutter test`, `flutter analyze` and `flutter build windows` on an x64 Windows Server image prove compilation, linking and host tests. They do not prove the folder picker, Obsidian handoff, physical keyboard/IME, Windows 11 desktop behaviour or ARM64 execution; the gate below is unchanged.
+Windows defects the hosted run found in shared Dart code (none visible on macOS):
+
+- **Every vault write failed for paths containing `/`.** The publisher prefixes `\\?\`, which turns off Win32 normalization, so a mixed `C:\...\x/vault\note.md` path was rejected. Paths are now normalized before the prefix is added.
+- **Vault-relative paths used `\` on Windows.** Link rewriting on rename, inbound links and attachment links assume `/` (as Obsidian does). `DirectoryVaultStorage` now always returns `/`-separated relative paths and accepts either separator.
+- **PDF open errors were lost.** PDFium stores its error code in the thread's Win32 last error, and the Dart runtime can overwrite that between the two FFI calls. Locked and damaged PDFs then showed the generic "cannot open" message. When the code is lost, the file is now classified from its bytes (`/Encrypt` means a password is required; otherwise it is treated as damaged).
+- **No Windows folder pick for the read-only backup comparison** (`chooseFolder`). It is now implemented with `IFileOpenDialog`; the choice is never persisted.
+
+Test-only portability changes: separator-neutral path expectations. UI tests that waited a fixed 50 to 100 ms for real file, SQLite or loopback work now poll (`test/support/async_settle.dart`), because the hosted runner's disk is slower. The two recycle-bin cases that make the vault unwritable with POSIX `chmod` are skipped on Windows; their Dart logic is platform-independent and still runs on macOS.
+
+Runner build settings: C++20; `/W4 /WX`; C++ exceptions enabled, because the DPAPI store and C++/WinRT throw; SDK headers compiled with `/external:W0`. Links Media Foundation and `windowsapp`.
+
+What a hosted runner proves: `flutter test`, `flutter analyze` and `flutter build windows --release` on x64 Windows Server. It does not prove the folder picker, Obsidian handoff, physical keyboard/IME, microphone, toasts, Windows 11 desktop behaviour or ARM64 execution. The gate below is unchanged.
 
 ## Remaining native gate
 

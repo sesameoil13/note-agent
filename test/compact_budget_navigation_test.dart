@@ -73,6 +73,11 @@ void main() {
                 f.workspaces.first.audioJobs.single.status ==
                     AudioJobStatus.prepared,
           );
+          // The panel's busy indicator ends only after its refresh.
+          await pumpUntil(
+            tester,
+            () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
+          );
           await tester.pumpAndSettle();
           expect(
             f.workspaces.first.audioJobs.single.status,
@@ -107,6 +112,11 @@ void main() {
           await pumpUntil(
             tester,
             () => f.workspaces.first.budget.reservedCnyMicros == 0,
+          );
+          // The panel's busy indicator ends only after its refresh.
+          await pumpUntil(
+            tester,
+            () => find.byType(LinearProgressIndicator).evaluate().isEmpty,
           );
           await tester.pumpAndSettle();
           expect(f.audioRequests, 0);
