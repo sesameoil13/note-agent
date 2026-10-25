@@ -1,5 +1,6 @@
 import Cocoa
 import FlutterMacOS
+import Network
 import UserNotifications
 
 /// Local-only, one-shot system boundary. Successful add is acceptance, not proof
@@ -10,6 +11,10 @@ final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
   private let interactionKey = "noteAgent.notificationInteractions.v1"
   private let acceptedKey = "noteAgent.notificationAcceptedIDs.v1"
   private let reminderCategory = "noteAgent.actionReminder"
+  // Same `networkAvailable` signal as the Android and Windows adapters: the
+  // App re-checks reminders and sends to-do operations queued while offline.
+  private let pathMonitor = NWPathMonitor()
+  private var networkWasUnavailable = false
 
   init(messenger: FlutterBinaryMessenger) {
     super.init()
@@ -31,6 +36,22 @@ final class NativeNotifications: NSObject, UNUserNotificationCenterDelegate {
       self?.handle(call, result: result)
     }
     self.channel = channel
+    pathMonitor.pathUpdateHandler = { [weak self] path in
+      DispatchQueue.main.async { self?.networkPathChanged(path.status == .satisfied) }
+    }
+    pathMonitor.start(queue: DispatchQueue(label: "dev.noteagent.network"))
+  }
+
+  /// Reports only a return after an outage; the initial satisfied path is
+  /// already covered by the App's startup checks.
+  private func networkPathChanged(_ available: Bool) {
+    if !available {
+      networkWasUnavailable = true
+      return
+    }
+    guard networkWasUnavailable else { return }
+    networkWasUnavailable = false
+    channel?.invokeMethod("networkAvailable", arguments: nil)
   }
 
   private func permission(_ settings: UNNotificationSettings) -> String {

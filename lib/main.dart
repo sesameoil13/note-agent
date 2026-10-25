@@ -127,11 +127,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   StreamSubscription<void>? _notificationInteractions;
   StreamSubscription<void>? _networkReturn;
 
-  /// Android and Windows re-check local reminders when the network comes back
-  /// (Windows also after waking from sleep), as on resume, and send the to-do
-  /// operations queued while offline; the OS reports it through the same
-  /// notification adapter. macOS has no such signal here: queued operations go
-  /// out on the next resume or local change.
+  /// macOS, Android and Windows re-check local reminders when the network
+  /// comes back (Windows also after waking from sleep), as on resume, and send
+  /// the to-do operations queued while offline; the OS reports it through the
+  /// same notification adapter.
   MethodChannelNotifications _systemNotifications() {
     final port = MethodChannelNotifications();
     unawaited(_networkReturn?.cancel());

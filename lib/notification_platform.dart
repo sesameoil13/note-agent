@@ -20,7 +20,7 @@ class MethodChannelNotifications
   final _signals = StreamController<void>.broadcast();
   final _network = StreamController<void>.broadcast();
 
-  /// Android and Windows report a regained network, and Windows a wake from
+  /// macOS, Android and Windows report a regained network, and Windows a wake from
   /// sleep, so the App can re-check reminders.
   Stream<void> get connectivitySignals => _network.stream;
   @override
