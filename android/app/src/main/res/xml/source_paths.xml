@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="original_sources" path="workspace/originals/" />
+    <files-path name="recording_sources" path="workspace/recordings/" />
+    <files-path name="audio_sources" path="workspace/audio-sources/" />
+</paths>

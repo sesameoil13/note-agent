@@ -1,0 +1,30 @@
+name: note_agent
+description: A local-first personal note workspace for Obsidian.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  sqlite3: ^3.7.1
+  path: ^1.9.1
+  ffi: ^2.2.0
+  cryptography: ^2.9.0
+  pdfium_flutter: 0.3.1
+  archive: 4.5.2
+  xml: ^7.1.0
+
+dev_dependencies:
+  integration_test:
+    sdk: flutter
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  licenses:
+    - third_party/NOTICES
