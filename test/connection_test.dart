@@ -26,6 +26,15 @@ class MemorySecureStore implements SecureCredentialStore {
 }
 
 void main() {
+  test('the platform connection ships with the preset pairing service', () {
+    final connection = WorkspaceConnection.platform();
+    expect(connection.pairingServiceConfigured, isTrue);
+    expect(
+      connection.pairingEndpoint,
+      Uri.parse('https://note-agent-pairing.sesameoil13.workers.dev'),
+    );
+  });
+
   test('a failed pairing creation can be cancelled without removing the checked Key', () async {
     final folder = await Directory.systemTemp.createTemp('pairing-cancel-');
     final vault = await Directory('${folder.path}/vault').create();
