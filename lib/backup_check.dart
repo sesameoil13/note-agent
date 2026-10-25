@@ -32,52 +32,108 @@ class BackupComparison {
   bool get complete => missing.isEmpty && sizeMismatched.isEmpty;
 }
 
-bool _within(String child, String parent) =>
-    p.equals(child, parent) || p.isWithin(parent, child);
+/// Where a folder sits, so overlap can be refused before anything is listed.
+/// Locations in different namespaces (filesystem vs. a SAF volume) never
+/// overlap.
+class FolderLocation {
+  const FolderLocation(this.namespace, this.segments);
+  final String namespace;
+  final List<String> segments;
+  bool within(FolderLocation parent) =>
+      namespace == parent.namespace &&
+      segments.length >= parent.segments.length &&
+      Iterable<int>.generate(parent.segments.length)
+          .every((i) => segments[i] == parent.segments[i]);
+  bool overlaps(FolderLocation other) => within(other) || other.within(this);
 
-Future<Map<String, int>> _inventory(Directory dir) async {
-  final files = <String, int>{};
-  await for (final entity in dir.list(recursive: true, followLinks: false)) {
-    if (entity is File) {
-      files[p.posix.joinAll(p.split(p.relative(entity.path, from: dir.path)))] =
-          await entity.length();
+  /// A SAF tree such as `content://com.android.externalstorage.documents/tree/primary%3ADocs%2FVault`.
+  /// External-storage document ids are `volume:relative/path`; other providers'
+  /// ids are opaque, so only the identical tree is detected as overlapping.
+  static FolderLocation? ofTree(String treeUri) {
+    final uri = Uri.tryParse(treeUri);
+    if (uri == null || uri.scheme != 'content') return null;
+    final parts = uri.pathSegments;
+    final index = parts.indexOf('tree');
+    if (index < 0 || index + 1 >= parts.length) return null;
+    final id = parts[index + 1];
+    if (uri.authority == 'com.android.externalstorage.documents' &&
+        id.contains(':')) {
+      final colon = id.indexOf(':');
+      return FolderLocation(
+        'saf:${uri.authority}:${id.substring(0, colon)}',
+        id.substring(colon + 1).split('/').where((s) => s.isNotEmpty).toList(),
+      );
     }
+    return FolderLocation('saf:${uri.authority}', [id]);
   }
-  return files;
 }
 
-/// [syncVault] is the folder this App writes to; neither side may overlap it.
-Future<BackupComparison> compareVaultBackup({
-  required Directory oldVault,
-  required Directory backup,
-  Directory? syncVault,
-}) async {
-  if (!await oldVault.exists() || !await backup.exists()) {
-    throw const BackupCheckRefused('无法读取所选文件夹，请重新选择。');
+/// A folder picked for one read-only comparison. Implementations only read.
+abstract interface class ReadOnlyFolder {
+  /// Throws [BackupCheckRefused] when the folder cannot be read.
+  Future<FolderLocation> locate();
+
+  /// Relative POSIX path (dot-folders included) to size in bytes.
+  Future<Map<String, int>> inventory();
+}
+
+/// A filesystem folder (macOS, Windows, tests).
+class DirectoryFolder implements ReadOnlyFolder {
+  DirectoryFolder(this.directory);
+  final Directory directory;
+  @override
+  Future<FolderLocation> locate() async {
+    if (!await directory.exists()) {
+      throw const BackupCheckRefused('无法读取所选文件夹，请重新选择。');
+    }
+    return FolderLocation(
+      'file',
+      p.split(p.canonicalize(await directory.resolveSymbolicLinks())),
+    );
   }
-  Future<String> real(Directory dir) async =>
-      p.canonicalize(await dir.resolveSymbolicLinks());
-  final oldPath = await real(oldVault);
-  final backupPath = await real(backup);
-  if (_within(backupPath, oldPath) || _within(oldPath, backupPath)) {
+
+  @override
+  Future<Map<String, int>> inventory() async {
+    final files = <String, int>{};
+    await for (final entity in directory.list(
+      recursive: true,
+      followLinks: false,
+    )) {
+      if (entity is File) {
+        files[p.posix.joinAll(
+          p.split(p.relative(entity.path, from: directory.path)),
+        )] = await entity
+            .length();
+      }
+    }
+    return files;
+  }
+}
+
+/// [syncVault] is where this App writes; neither side may overlap it.
+Future<BackupComparison> compareVaultBackup({
+  required ReadOnlyFolder oldVault,
+  required ReadOnlyFolder backup,
+  FolderLocation? syncVault,
+}) async {
+  final oldPath = await oldVault.locate();
+  final backupPath = await backup.locate();
+  if (backupPath.overlaps(oldPath)) {
     throw const BackupCheckRefused('备份必须位于旧库之外的独立位置。');
   }
   if (syncVault != null) {
-    final sync = await syncVault.exists()
-        ? await real(syncVault)
-        : p.canonicalize(syncVault.path);
-    if (_within(oldPath, sync) || _within(sync, oldPath)) {
+    if (oldPath.overlaps(syncVault)) {
       throw const BackupCheckRefused('所选旧库与当前同步库重叠，请选择旧库本身。');
     }
-    if (_within(backupPath, sync) || _within(sync, backupPath)) {
+    if (backupPath.overlaps(syncVault)) {
       throw const BackupCheckRefused('备份不能放在当前同步库里，否则会被同步或改写。');
     }
   }
-  final old = await _inventory(oldVault);
+  final old = await oldVault.inventory();
   if (old.isEmpty) {
     throw const BackupCheckRefused('所选旧库中没有文件，无法核对备份。');
   }
-  final copy = await _inventory(backup);
+  final copy = await backup.inventory();
   final missing = [
     for (final path in old.keys)
       if (!copy.containsKey(path)) path,

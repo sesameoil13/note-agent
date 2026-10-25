@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'backup_check.dart';
 import 'vault_storage.dart';
 
 class WorkspaceLocation {
@@ -63,15 +64,20 @@ class WorkspacePlatform {
   Future<void> revealLocalSource(String path) =>
       _channel.invokeMethod<void>('revealLocalSource', {'path': path});
 
-  /// Desktop only. A one-off, read-only pick for the backup comparison; it is
-  /// never persisted and never becomes the App's vault.
-  bool get supportsFolderComparison => Platform.isMacOS || Platform.isWindows;
+  /// A one-off, read-only pick for the backup comparison; it is never
+  /// persisted and never becomes the App's vault. Android returns a SAF tree
+  /// granted for reading only, without a persisted grant.
+  bool get supportsFolderComparison =>
+      Platform.isMacOS || Platform.isWindows || Platform.isAndroid;
 
-  Future<Directory?> chooseFolderForReading(String title) async {
-    final path = await _channel.invokeMethod<String>('chooseFolder', {
+  Future<ReadOnlyFolder?> chooseFolderForReading(String title) async {
+    final picked = await _channel.invokeMethod<String>('chooseFolder', {
       'title': title,
     });
-    return path == null ? null : Directory(path);
+    if (picked == null) return null;
+    return picked.startsWith('content://')
+        ? SafTreeFolder(picked)
+        : DirectoryFolder(Directory(picked));
   }
 
   Future<void> openSyncPlans() => _channel.invokeMethod<void>('openSyncPlans');
@@ -220,5 +226,36 @@ class AndroidVaultStorage implements VaultStorage, BinaryVaultStorage {
     return millis == null || millis <= 0
         ? null
         : DateTime.fromMillisecondsSinceEpoch(millis);
+  }
+}
+
+/// An Android SAF tree picked for one read-only comparison. The native side
+/// only queries the provider; nothing in the tree is created or changed.
+class SafTreeFolder implements ReadOnlyFolder {
+  SafTreeFolder(this.treeUri);
+  static const _channel = MethodChannel('dev.noteagent/workspace');
+  final String treeUri;
+  @override
+  Future<FolderLocation> locate() async =>
+      FolderLocation.ofTree(treeUri) ??
+      (throw const BackupCheckRefused('无法读取所选文件夹，请重新选择。'));
+  @override
+  Future<Map<String, int>> inventory() async {
+    final Map<Object?, Object?>? files;
+    try {
+      files = await _channel.invokeMapMethod<Object?, Object?>(
+        'readFolderInventory',
+        {'treeUri': treeUri},
+      );
+    } on PlatformException {
+      throw const BackupCheckRefused('无法读取所选文件夹，请重新选择。');
+    }
+    if (files == null) {
+      throw const BackupCheckRefused('无法读取所选文件夹，请重新选择。');
+    }
+    return {
+      for (final entry in files.entries)
+        entry.key! as String: (entry.value! as num).toInt(),
+    };
   }
 }

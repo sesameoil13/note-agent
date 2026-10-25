@@ -97,7 +97,7 @@ class _SetupScreenState extends State<SetupScreen> {
       if (old == null || backup == null) {
         _backupResult = '未选择文件夹，未进行核对。';
       } else {
-        final r = await workspace.checkOldVaultBackup(
+        final r = await workspace.checkOldVaultBackupFolders(
           oldVault: old,
           backup: backup,
         );
@@ -313,7 +313,9 @@ class _SetupScreenState extends State<SetupScreen> {
                     '依次选择旧库与备份文件夹。App 只读取文件清单与大小，不复制、移动或删除任何文件，也不会自己寻找旧库。',
                   ),
                 ] else
-                  const Text('本设备不提供文件夹比对；可在 Mac 上让 App 只读核对，或自行核对后勾选。'),
+                  const Text(
+                    '本设备不提供文件夹比对；可在 Mac、Windows 或 Android 上让 App 只读核对，或自行核对后勾选。',
+                  ),
                 if (_backupResult != null) Text(_backupResult!),
                 _check(SetupCheck.backupComplete, '我已制作并检查独立的完整旧库备份'),
                 _check(

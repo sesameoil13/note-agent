@@ -36,6 +36,7 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "chooseLocation" -> chooseLocation(result)
                     "chooseSourceFile" -> chooseSourceFile(call, result)
+                    "chooseFolder" -> chooseFolderForReading(result)
                     "revealLocalSource" -> revealLocalSource(call, result)
                     "openInObsidian" -> openInObsidian(call, result)
                     "openSyncPlans" -> {
@@ -66,6 +67,11 @@ class MainActivity : FlutterActivity() {
                                     source.delete(); source.parentFile?.delete(); null
                                 }
                                 "vaultListNotePaths" -> vault(call).listNotePaths()
+                                "readFolderInventory" -> {
+                                    val tree = Uri.parse(requireNotNull(call.argument<String>("treeUri")))
+                                    require(tree.scheme == "content") { "无法读取所选文件夹，请重新选择。" }
+                                    ReadOnlyTree(contentResolver, tree).inventory()
+                                }
                                 "vaultReplaceText" -> {
                                     vault(call).replaceText(path(call), expected(call), text(call), operation(call)); null
                                 }
@@ -174,11 +180,17 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Activity result API retained for FlutterActivity's system picker bridge")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 2002 && requestCode != 2003) return
+        if (requestCode != 2002 && requestCode != 2003 && requestCode != 2004) return
         val result = pendingPicker ?: return
         pendingPicker = null
         val uri = data?.data
         if (resultCode != Activity.RESULT_OK || uri == null) { result.success(null); return }
+        if (requestCode == 2004) {
+            // Read-only, session-scoped grant: never persisted, never the vault.
+            if (uri.scheme == "content") result.success(uri.toString())
+            else result.error("directory_access", "请选择系统文档提供方中的文件夹。", null)
+            return
+        }
         if (requestCode == 2003) {
             io.execute {
                 var destination: File? = null
@@ -223,6 +235,22 @@ class MainActivity : FlutterActivity() {
             } catch (error: Exception) {
                 runOnUiThread { result.error("directory_access", error.message ?: "无法获得目录授权，输入已保留。", null) }
             }
+        }
+    }
+
+    /** Old vault or its backup for the read-only comparison; no write or persisted grant is requested. */
+    @Suppress("DEPRECATION")
+    private fun chooseFolderForReading(result: MethodChannel.Result) {
+        if (pendingPicker != null) { result.error("picker_busy", "系统目录选择器已打开。", null); return }
+        pendingPicker = result
+        try {
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+            }, 2004)
+        } catch (_: Exception) {
+            pendingPicker = null
+            result.error("picker_unavailable", "无法打开系统目录选择器。", null)
         }
     }
 

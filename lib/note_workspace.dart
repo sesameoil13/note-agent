@@ -607,13 +607,24 @@ class NoteWorkspace {
   Future<BackupComparison> checkOldVaultBackup({
     required Directory oldVault,
     required Directory backup,
+  }) => checkOldVaultBackupFolders(
+    oldVault: DirectoryFolder(oldVault),
+    backup: DirectoryFolder(backup),
+  );
+
+  /// Same comparison for any read-only pick, e.g. an Android SAF tree.
+  Future<BackupComparison> checkOldVaultBackupFolders({
+    required ReadOnlyFolder oldVault,
+    required ReadOnlyFolder backup,
   }) => _mutate(() async {
     final storage = vaultStorage;
     try {
       final result = await compareVaultBackup(
         oldVault: oldVault,
         backup: backup,
-        syncVault: storage is DirectoryVaultStorage ? storage.directory : null,
+        syncVault: storage is DirectoryVaultStorage
+            ? await _syncLocation(storage.directory)
+            : FolderLocation.ofTree(storage.identity),
       );
       _setup.recordBackupCheck(result.complete);
       return result;
@@ -622,6 +633,11 @@ class NoteWorkspace {
       rethrow;
     }
   });
+
+  Future<FolderLocation> _syncLocation(Directory directory) async =>
+      await directory.exists()
+      ? DirectoryFolder(directory).locate()
+      : FolderLocation('file', p.split(p.canonicalize(directory.path)));
   late final WorkspaceAudioQueue _audioQueue;
 
   final Map<String, Future<WorkspaceAudioJob>> _audioOperations = {};
