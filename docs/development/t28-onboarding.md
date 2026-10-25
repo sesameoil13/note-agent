@@ -39,6 +39,12 @@ Stories 4–9, 38, 39, 83–85, 109. Builds on the existing guide (`lib/setup_sc
 - Prepaid balance (unknown, held in the OpenRouter account) is shown apart from the shared
   monthly CNY limit and spend. Auto top-up stays off and the App never tops up.
 
+- **Build label**: the guide's header shows `版本 <pubspec version> · 构建 <revision>`
+  (`lib/build_info.dart`, to be quoted in a bug report). Release
+  builds pass `--dart-define=BUILD_REVISION=$(git rev-parse --short HEAD)`; without it the
+  label says `dev`. `appVersion` mirrors pubspec's `version:` and
+  `test/setup_guide_ui_test.dart` fails if they drift.
+
 ## Safety
 
 The App never discovers, switches or modifies an old vault. All tests use

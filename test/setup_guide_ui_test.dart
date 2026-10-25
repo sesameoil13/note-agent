@@ -74,6 +74,18 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('the guide names the exact build for bug reports', (
+    tester,
+  ) async {
+    await pumpSetup(tester);
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final version = RegExp(
+      r'^version: (\S+)$',
+      multiLine: true,
+    ).firstMatch(pubspec)![1];
+    expect(find.text('版本 $version · 构建 dev'), findsOneWidget);
+  });
+
   testWidgets(
     'the guide summary separates App-verified steps from user reports',
     (tester) async {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'build_info.dart';
 import 'connection.dart';
 import 'connection_screen.dart';
 import 'budget_panel.dart';
@@ -195,6 +196,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 '从收集到自己的笔记库',
                 style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
               ),
+              const Text(buildLabel),
               const SizedBox(height: 16),
               const Text(
                 '随时回来恢复设置。以下是用户核对记录，不是系统权限或 Obsidian 云端同步成功的证明。未完成设置也可在已授权的本地库保存。',
