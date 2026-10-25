@@ -134,11 +134,21 @@ class WorkspaceConnection {
       );
     }
   }
+
+  /// The pairing service the App ships with (T12 预置服务入口). A
+  /// `PAIRING_ENDPOINT` dart-define overrides it, e.g. for a staging Worker.
+  static const presetPairingEndpoint =
+      'https://note-agent-pairing.sesameoil13.workers.dev';
   factory WorkspaceConnection.platform() {
-    const endpoint = String.fromEnvironment('PAIRING_ENDPOINT');
+    const endpoint = String.fromEnvironment(
+      'PAIRING_ENDPOINT',
+      defaultValue: presetPairingEndpoint,
+    );
     return WorkspaceConnection(
       secureStore: PlatformSecureCredentialStore(),
-      pairingEndpoint: endpoint.isEmpty ? null : Uri.tryParse(endpoint),
+      pairingEndpoint: Uri.tryParse(
+        endpoint.isEmpty ? presetPairingEndpoint : endpoint,
+      ),
       allowLocalPairingForTests:
           kDebugMode && const bool.fromEnvironment('PAIRING_ALLOW_LOOPBACK'),
     );
@@ -150,6 +160,7 @@ class WorkspaceConnection {
   WorkspacePairingState _pairing = const WorkspacePairingState();
   WorkspacePairingState get pairing => _pairing;
   bool get pairingServiceConfigured => _configuredEndpoint != null;
+  Uri? get pairingEndpoint => _configuredEndpoint;
   final SecureCredentialStore _store;
   final OpenRouterKeyCheck _openRouter;
   Map<String, dynamic> _credentials = {};

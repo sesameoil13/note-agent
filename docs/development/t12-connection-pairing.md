@@ -81,7 +81,7 @@ flutter test integration_test/connection_secure_store_test.dart -d macos --dart-
 1. 在 Cloudflare 官方流程完成一次账户登录，核实选定账户是 Workers Free。仅创建一个 Worker 和一个 D1；不启用 Paid、R2、DO、队列或计费升级。登录令牌留在操作员环境，保持日志净化，使用工作区缓存日志路径。
 2. 在 `services/pairing` 运行 `node tools/prepare-activation.mjs`，把随机首次启用码保存在忽略且权限 0600 的 `.local/activation-code.txt`，不打印到日志或提交。仅把 `.local/activation-hash.txt` 的值写到 Worker 的 `ENROLLMENT_HASH` secret。
 3. `wrangler d1 create note-agent-pairing` 取得实际 UUID，更新 `wrangler.toml` 的占位值。审阅迁移后 `wrangler d1 migrations apply note-agent-pairing --remote`，再部署 Worker。以上会使用远程免费额度，必须等账户授权与 Free 核实后执行。
-4. 构建 App 时用 `--dart-define=PAIRING_ENDPOINT=https://实际端点`。此参数只有公共端点，没有账户 token。首次启用码通过安全的制作交付进入第一台 App 的遮蔽输入框；日常其余设备只用 App 内配对。OpenRouter Key 由用户只在 App 内输入。
+4. App 预置服务入口 `https://note-agent-pairing.sesameoil13.workers.dev`（`WorkspaceConnection.presetPairingEndpoint`），普通构建无需额外参数；只有指向其他端点（如测试 Worker）时才用 `--dart-define=PAIRING_ENDPOINT=https://实际端点` 覆盖。本机回环端点仍只在 debug 构建且带 `PAIRING_ALLOW_LOOPBACK` 时可用。此参数只有公共端点，没有账户 token。首次启用码通过安全的制作交付进入第一台 App 的遮蔽输入框；日常其余设备只用 App 内配对。OpenRouter Key 由用户只在 App 内输入。
 5. 验收两个独立实际 App 实例：第一台检测 Key／首次启用／生成码，第二台请求加入，两端核对验证码，第一台批准、第二台刷新检测连接；正常退出重开后再次检测。分别核对本机库和系统授权没有变化，不能显示笔记已同步。补测取消、失效码、服务离线后恢复。
 6. 在真实 Free Worker 上核对 CPU 与 D1 用量、区域网络、超限响应和服务器状态；本机测试不能证明远程 CPU 低于 10ms。通过后删除临时首次启用明文，保留已用 enrollment hash（不会再创建第二 owner）。记录真实 URL、构建和验收证据，才可关闭 #13。
 
