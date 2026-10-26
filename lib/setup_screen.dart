@@ -85,45 +85,11 @@ class _SetupScreenState extends State<SetupScreen> {
   }
 
   Future<void> _compareBackup() async {
-    final workspace = widget.workspace!;
     setState(() {
       _busy = true;
       _error = null;
     });
-    try {
-      final old = await _platform.chooseFolderForReading('选择旧库文件夹（只读）');
-      final backup = old == null
-          ? null
-          : await _platform.chooseFolderForReading('选择旧库的完整备份文件夹（只读）');
-      if (old == null || backup == null) {
-        _backupResult = '未选择文件夹，未进行核对。';
-      } else {
-        final r = await workspace.checkOldVaultBackupFolders(
-          oldVault: old,
-          backup: backup,
-        );
-        String mb(int bytes) => (bytes / 1048576).toStringAsFixed(1);
-        final head =
-            'App 已核对：旧库 ${r.oldFileCount} 个文件 / ${mb(r.oldBytes)} MB；'
-            '备份 ${r.backupFileCount} 个文件 / ${mb(r.backupBytes)} MB；'
-            '${r.includesObsidianConfig ? '包含 .obsidian 设置' : '未包含 .obsidian 设置'}。';
-        String list(List<String> items) =>
-            items.take(5).join('、') +
-            (items.length > 5 ? ' 等 ${items.length} 个' : '');
-        _backupResult = r.complete
-            ? head
-            : [
-                '$head\n备份不完整，已撤回之前的备份核对与名额确认。',
-                if (r.missing.isNotEmpty) '缺少：${list(r.missing)}',
-                if (r.sizeMismatched.isNotEmpty)
-                  '大小不一致：${list(r.sizeMismatched)}',
-              ].join('\n');
-      }
-    } on BackupCheckRefused catch (refused) {
-      _backupResult = '未完成核对：${refused.message}';
-    } catch (_) {
-      _backupResult = '无法读取所选文件夹，请重新选择。旧库与备份未被改动。';
-    }
+    _backupResult = await compareOldVaultBackup(widget.workspace!, _platform);
     if (mounted) setState(() => _busy = false);
   }
 
@@ -157,26 +123,9 @@ class _SetupScreenState extends State<SetupScreen> {
   }
 
   Future<void> _confirmSlot() async {
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('单独确认远程名额切换'),
-        content: Text(
-          '目标本地库：${widget.workspace!.vaultStorage.displayName}\n\nStandard 只有一个远程库。请确认完整备份与可用于以后导入的旧库本地副本已独立保留。切换会影响其他设备继续同步旧库。\n\n此处只记录你的决定。随后由你在 Obsidian 内查看实际操作、再次确认并执行；App 不删除、改写旧库或操作远程名额。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('暂不切换'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('我确认，继续到 Obsidian 核对'),
-          ),
-        ],
-      ),
-    );
-    if (yes == true) await _run(widget.workspace!.confirmRemoteSlotSwitch);
+    if (await confirmRemoteSlotSwitch(context, widget.workspace!)) {
+      await _run(widget.workspace!.confirmRemoteSlotSwitch);
+    }
   }
 
   @override
@@ -386,3 +335,67 @@ class _SetupScreenState extends State<SetupScreen> {
     );
   }
 }
+
+/// Picks the old vault and its backup read-only and describes the result.
+/// Shared by the Settings page and the first-run backup step.
+Future<String> compareOldVaultBackup(
+  NoteWorkspace workspace,
+  WorkspacePlatform platform,
+) async {
+  try {
+    final old = await platform.chooseFolderForReading('选择旧库文件夹（只读）');
+    final backup = old == null
+        ? null
+        : await platform.chooseFolderForReading('选择旧库的完整备份文件夹（只读）');
+    if (old == null || backup == null) return '未选择文件夹，未进行核对。';
+    final r = await workspace.checkOldVaultBackupFolders(
+      oldVault: old,
+      backup: backup,
+    );
+    String mb(int bytes) => (bytes / 1048576).toStringAsFixed(1);
+    final head =
+        'App 已核对：旧库 ${r.oldFileCount} 个文件 / ${mb(r.oldBytes)} MB；'
+        '备份 ${r.backupFileCount} 个文件 / ${mb(r.backupBytes)} MB；'
+        '${r.includesObsidianConfig ? '包含 .obsidian 设置' : '未包含 .obsidian 设置'}。';
+    String list(List<String> items) =>
+        items.take(5).join('、') +
+        (items.length > 5 ? ' 等 ${items.length} 个' : '');
+    return r.complete
+        ? head
+        : [
+            '$head\n备份不完整，已撤回之前的备份核对与名额确认。',
+            if (r.missing.isNotEmpty) '缺少：${list(r.missing)}',
+            if (r.sizeMismatched.isNotEmpty) '大小不一致：${list(r.sizeMismatched)}',
+          ].join('\n');
+  } on BackupCheckRefused catch (refused) {
+    return '未完成核对：${refused.message}';
+  } catch (_) {
+    return '无法读取所选文件夹，请重新选择。旧库与备份未被改动。';
+  }
+}
+
+/// The separate remote-slot decision; true only when the user confirms.
+Future<bool> confirmRemoteSlotSwitch(
+  BuildContext context,
+  NoteWorkspace workspace,
+) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('单独确认远程名额切换'),
+        content: Text(
+          '目标本地库：${workspace.vaultStorage.displayName}\n\nStandard 只有一个远程库。请确认完整备份与可用于以后导入的旧库本地副本已独立保留。切换会影响其他设备继续同步旧库。\n\n此处只记录你的决定。随后由你在 Obsidian 内查看实际操作、再次确认并执行；App 不删除、改写旧库或操作远程名额。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('暂不切换'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('我确认，继续到 Obsidian 核对'),
+          ),
+        ],
+      ),
+    ) ==
+    true;
