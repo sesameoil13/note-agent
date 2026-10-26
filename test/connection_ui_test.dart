@@ -155,8 +155,12 @@ void main() {
         }
         throw PlatformException(code: 'unexpected', message: call.method);
       });
+      // Past the first-run sequence (put off with 稍后), so no modal covers
+      // the header entry.
       messenger.setMockMethodCallHandler(credentialsChannel, (call) async {
-        if (call.method == 'read') return null;
+        if (call.method == 'read') {
+          return '{"firstRun":{"started":true,"firstDevice":true,"finished":true}}';
+        }
         throw PlatformException(code: 'unexpected', message: call.method);
       });
       addTearDown(() {
