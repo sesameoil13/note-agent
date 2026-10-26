@@ -153,6 +153,13 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
   /// decision can be made there once the backup is ready.
   bool _holdBackup = false;
 
+  /// A step reached with 上一步; shown until the user moves forward from it.
+  FirstRunStep? _revisit;
+  FirstRunStep _shown = FirstRunStep.welcome;
+
+  /// The service already has an original device, so this one should join.
+  bool _alreadyEnrolled = false;
+
   @override
   void dispose() {
     _key.dispose();
@@ -168,16 +175,21 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
   Future<void> _answer(FirstRunAnswers next) => _run(() async {
     await widget.saveAnswers(next);
     _answers = next;
-  });
+  }, advance: true);
 
-  /// Runs one step's action; a failure stays on the same modal with its message.
-  Future<void> _run(Future<void> Function() action) async {
+  /// Runs one step's action; a failure stays on the same modal with its
+  /// message. With [advance], success also leaves a step reached by 上一步.
+  Future<void> _run(
+    Future<void> Function() action, {
+    bool advance = false,
+  }) async {
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       await action();
+      if (advance) _forward();
     } on ConnectionFailure catch (failure) {
       _error = failure.message;
     } catch (_) {
@@ -185,6 +197,45 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
     }
     if (mounted) setState(() => _busy = false);
   }
+
+  void _continue() => setState(() {
+    _error = null;
+    _forward();
+  });
+
+  /// Leaves a step reached by 上一步 for the next modal in order, until that
+  /// catches up with the first unfinished step.
+  void _forward() {
+    final from = _revisit;
+    if (from == null) return;
+    final frontier = nextFirstRunStep(
+      _answers,
+      firstRunFacts(widget.connection, _workspace),
+    );
+    final next = followingFirstRunStep(from, _answers);
+    _revisit =
+        next != null &&
+            frontier != null &&
+            firstRunStepBefore(next, frontier, _answers)
+        ? next
+        : null;
+  }
+
+  void _back(FirstRunStep target) => setState(() {
+    _error = null;
+    // A revisited backup keeps its place so 继续 steps on one modal at a time.
+    _holdBackup = false;
+    _revisit = target;
+    if (target == FirstRunStep.obsidian) {
+      final setup = _workspace?.setup;
+      _obsidian
+        ..clear()
+        ..addAll([
+          for (final (check, _) in obsidianChecks)
+            if (setup?.isReported(check) ?? false) check,
+        ]);
+    }
+  });
 
   Future<void> _skip(FirstRunStep step) {
     if (step == FirstRunStep.backup) _holdBackup = false;
@@ -198,8 +249,9 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
       firstRunFacts(widget.connection, _workspace),
     );
     if (step == null) return const SizedBox.shrink();
-    if (step == FirstRunStep.backup) _holdBackup = true;
-    final shown = _holdBackup ? FirstRunStep.backup : step;
+    if (step == FirstRunStep.backup && _revisit == null) _holdBackup = true;
+    final shown = _shown =
+        _revisit ?? (_holdBackup ? FirstRunStep.backup : step);
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
       child: AnimatedSwitcher(
@@ -226,19 +278,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
     ),
     FirstRunStep.connectAi => _connectAi(),
     FirstRunStep.joinDevice => _joinDevice(),
-    FirstRunStep.vault => _page(
-      title: '选择笔记库',
-      body: '请选择新的 Obsidian 笔记库文件夹，不要选旧库。笔记和来源文件都保存在这里。',
-      primary: (
-        '选择文件夹',
-        () => _run(() async {
-          await widget.chooseVault();
-          if (_workspace == null) {
-            throw const ConnectionFailure('未选择笔记库。请选择新的 Obsidian 笔记库文件夹后继续。');
-          }
-        }),
-      ),
-    ),
+    FirstRunStep.vault => _vaultStep(),
     FirstRunStep.oldVault => _page(
       title: '你有旧的 Obsidian 笔记库吗？',
       body: '有旧库时，切换前先核对完整备份。App 不会自动寻找、修改或删除旧库。',
@@ -263,13 +303,47 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
     FirstRunStep.done => _done(),
   };
 
+  Widget _vaultStep() {
+    Future<void> choose() => _run(() async {
+      await widget.chooseVault();
+      if (_workspace == null) {
+        throw const ConnectionFailure('未选择笔记库。请选择新的 Obsidian 笔记库文件夹后继续。');
+      }
+    }, advance: true);
+    final current = _workspace;
+    if (current != null) {
+      return _page(
+        title: '选择笔记库',
+        body:
+            '当前笔记库：${current.vaultStorage.displayName}\n可以继续，或换一个新的 Obsidian 笔记库文件夹（不要选旧库）。',
+        primary: ('继续', _continue),
+        secondary: ('换一个文件夹', choose),
+      );
+    }
+    return _page(
+      title: '选择笔记库',
+      body: '请选择新的 Obsidian 笔记库文件夹，不要选旧库。笔记和来源文件都保存在这里。',
+      primary: ('选择文件夹', choose),
+    );
+  }
+
   Widget _connectAi() {
     final hasKey = widget.connection.state.hasKey;
+    final facts = firstRunFacts(widget.connection, _workspace);
+    // A received key that failed its check is not a finished connection.
+    if (facts.hasKey && facts.registered && !_answers.keyCheckFailed) {
+      return _page(
+        title: '连接 AI',
+        body: 'AI 已连接，本机已登记为原设备。',
+        primary: ('继续', _continue),
+      );
+    }
     return _page(
       title: '连接 AI',
-      body: hasKey
-          ? 'Key 已保存。再输入首次启用码，登记这台设备为原设备。'
-          : '粘贴 OpenRouter API Key，并输入首次启用码。检测不调用收费模型。',
+      body:
+          '${hasKey ? 'Key 已保存。再输入首次启用码，登记这台设备为原设备。' : '粘贴 OpenRouter API Key，并输入首次启用码。检测不调用收费模型。'}'
+          '\n首次启用码是部署配对服务时生成的一次性码，只用于登记第一台设备；其余设备通过配对加入，不需要它。'
+          '${_alreadyEnrolled ? '\n这个配对服务已经有第一台设备。若这台不是第一台，请改为配对加入。' : ''}',
       fields: [
         if (!hasKey)
           SecureConnectionField(
@@ -296,13 +370,21 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
             await widget.connection.connectOpenRouter(_key.text);
             _key.clear();
           }
-          await widget.connection.activatePairing(
-            setupToken: _activation.text,
-            deviceName: _name.text,
-          );
+          try {
+            await widget.connection.activatePairing(
+              setupToken: _activation.text,
+              deviceName: _name.text,
+            );
+          } on ConnectionFailure catch (failure) {
+            _alreadyEnrolled = failure.code == 'already_enrolled';
+            rethrow;
+          }
           _activation.clear();
-        }),
+        }, advance: true),
       ),
+      secondary: _alreadyEnrolled
+          ? ('改为配对加入', () => _answer(_answers.copyWith(firstDevice: false)))
+          : null,
       skip: FirstRunStep.connectAi,
     );
   }
@@ -328,11 +410,18 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
 
   Widget _joinDevice() {
     final pairing = widget.connection.pairing;
+    if (pairing.role != null && !_answers.keyCheckFailed) {
+      return _page(
+        title: '加入已有设备',
+        body: '本机已配对，AI 设置已通过连接检测。',
+        primary: ('继续', _continue),
+      );
+    }
     if (_answers.keyCheckFailed && pairing.role != null) {
       return _page(
         title: '加入已有设备',
         body: '配对已完成，但收到的 AI 设置未通过连接检测。请在第一台设备确认 Key 仍然有效，然后重新检测。',
-        primary: ('重新检测连接', () => _run(_checkReceivedKey)),
+        primary: ('重新检测连接', () => _run(_checkReceivedKey, advance: true)),
         skip: FirstRunStep.joinDevice,
       );
     }
@@ -348,6 +437,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
             // Pairing hands over the key unchecked; check it before moving on.
             if (widget.connection.pairing.role != null) {
               await _checkReceivedKey();
+              _forward();
             }
           }),
         ),
@@ -418,7 +508,12 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
       ],
       primary: (
         '继续',
-        setup.backupReady ? () => setState(() => _holdBackup = false) : null,
+        setup.backupReady
+            ? () => setState(() {
+                _holdBackup = false;
+                _forward();
+              })
+            : null,
       ),
       secondary: setup.backupReady
           ? (
@@ -459,7 +554,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
               for (final (check, _) in obsidianChecks) {
                 await _workspace!.reportSetupCheck(check, true);
               }
-            }),
+            }, advance: true),
     ),
     skip: FirstRunStep.obsidian,
   );
@@ -523,6 +618,12 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
         TextButton(
           onPressed: _busy ? null : () => _skip(skip),
           child: const Text('稍后'),
+        ),
+      if (previousFirstRunStep(_shown, _answers) case final previous?)
+        TextButton.icon(
+          onPressed: _busy ? null : () => _back(previous),
+          icon: const Icon(Icons.arrow_back, size: 16),
+          label: const Text('上一步'),
         ),
     ],
   );

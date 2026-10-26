@@ -251,4 +251,68 @@ void main() {
       );
     },
   );
+
+  test(
+    'Back goes to the previous modal in the sequence, following the answers',
+    () {
+      const first = FirstRunAnswers(
+        started: true,
+        firstDevice: true,
+        hasOldVault: false,
+      );
+      expect(previousFirstRunStep(FirstRunStep.welcome, first), isNull);
+      expect(
+        previousFirstRunStep(FirstRunStep.deviceKind, first),
+        FirstRunStep.welcome,
+      );
+      expect(
+        previousFirstRunStep(FirstRunStep.connectAi, first),
+        FirstRunStep.deviceKind,
+      );
+      expect(
+        previousFirstRunStep(FirstRunStep.vault, first),
+        FirstRunStep.connectAi,
+      );
+      expect(
+        previousFirstRunStep(FirstRunStep.oldVault, first),
+        FirstRunStep.vault,
+      );
+      // No old vault: the backup modal was never shown, so Back skips it.
+      expect(
+        previousFirstRunStep(FirstRunStep.obsidian, first),
+        FirstRunStep.oldVault,
+      );
+      expect(
+        previousFirstRunStep(FirstRunStep.done, first),
+        FirstRunStep.notifications,
+      );
+
+      const other = FirstRunAnswers(
+        started: true,
+        firstDevice: false,
+        hasOldVault: true,
+      );
+      expect(
+        previousFirstRunStep(FirstRunStep.vault, other),
+        FirstRunStep.joinDevice,
+      );
+      expect(
+        previousFirstRunStep(FirstRunStep.obsidian, other),
+        FirstRunStep.backup,
+      );
+    },
+  );
+
+  test('after 上一步, moving forward goes one modal at a time', () {
+    const other = FirstRunAnswers(started: true, firstDevice: false);
+    expect(
+      followingFirstRunStep(FirstRunStep.welcome, other),
+      FirstRunStep.deviceKind,
+    );
+    expect(
+      followingFirstRunStep(FirstRunStep.deviceKind, other),
+      FirstRunStep.joinDevice,
+    );
+    expect(followingFirstRunStep(FirstRunStep.done, other), isNull);
+  });
 }

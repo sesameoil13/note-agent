@@ -60,6 +60,12 @@ class FakeConnection implements FirstRunServices {
     if (setupToken == 'wrong') {
       throw const ConnectionFailure('首次启用码无效，请核对后重试。');
     }
+    if (setupToken == 'enrolled') {
+      throw const ConnectionFailure(
+        '首次启用已完成，请通过原设备配对。',
+        code: 'already_enrolled',
+      );
+    }
     role = 'owner';
     phase = 'ready';
   }
@@ -115,6 +121,7 @@ void main() {
     FirstRunAnswers answers = const FirstRunAnswers(),
     bool connected = false,
     bool vaultChosen = false,
+    List<SetupCheck> reports = const [],
   }) async {
     await tester.runAsync(() async {
       root = await Directory.systemTemp.createTemp('first-run-');
@@ -136,6 +143,9 @@ void main() {
         connection: WorkspaceConnection(secureStore: BudgetMemoryStore()),
         notifications: port,
       );
+      for (final check in reports) {
+        await workspace.reportSetupCheck(check, true);
+      }
     });
     if (vaultChosen) current = workspace;
     final messenger = tester.binding.defaultBinaryMessenger;
@@ -448,5 +458,124 @@ void main() {
     connection.keyRevoked = false;
     await tapAndSettle(tester, find.text('重新检测连接'));
     expect(saved.last.keyCheckFailed, isFalse);
+  });
+
+  testWidgets(
+    'the activation code is explained, and a refused one offers pairing instead',
+    (tester) async {
+      await pumpFlow(
+        tester,
+        answers: const FirstRunAnswers(started: true, firstDevice: true),
+      );
+      expect(find.textContaining('首次启用码是部署配对服务时生成的一次性码'), findsOneWidget);
+      await tester.enterText(
+        find.widgetWithText(TextField, 'OpenRouter API Key'),
+        'sk-or-v1-test-key-0000',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextField, '首次启用码'),
+        'enrolled',
+      );
+      await tester.enterText(find.widgetWithText(TextField, '设备名称'), 'MacBook');
+      await tapAndSettle(tester, find.text('检测并启用'));
+      expect(find.textContaining('已经有第一台设备'), findsOneWidget);
+      await tapAndSettle(tester, find.text('改为配对加入'));
+      expect(find.text('加入已有设备'), findsOneWidget);
+      expect(saved.last.firstDevice, isFalse);
+    },
+  );
+
+  testWidgets('上一步 returns to the previous modal and lets an answer change', (
+    tester,
+  ) async {
+    await pumpFlow(tester);
+    expect(find.text('上一步'), findsNothing);
+    await tapAndSettle(tester, find.text('开始'));
+    await tapAndSettle(tester, find.text('是，第一台'));
+    expect(find.text('连接 AI'), findsOneWidget);
+
+    await tapAndSettle(tester, find.text('上一步'));
+    expect(find.text('这是你的第一台设备吗？'), findsOneWidget);
+    await tapAndSettle(tester, find.text('不是，已在别的设备用过'));
+    expect(find.text('加入已有设备'), findsOneWidget);
+    expect(saved.last.firstDevice, isFalse);
+
+    await tapAndSettle(tester, find.text('上一步'));
+    await tapAndSettle(tester, find.text('上一步'));
+    expect(find.text('给想法一个落点。'), findsOneWidget);
+    await tapAndSettle(tester, find.text('开始'));
+    expect(find.text('这是你的第一台设备吗？'), findsOneWidget);
+  });
+
+  testWidgets('上一步 to a finished step shows it again with 继续', (tester) async {
+    await pumpFlow(
+      tester,
+      answers: const FirstRunAnswers(started: true, firstDevice: true),
+      connected: true,
+      vaultChosen: true,
+    );
+    expect(find.text('你有旧的 Obsidian 笔记库吗？'), findsOneWidget);
+    await tapAndSettle(tester, find.text('上一步'));
+    expect(find.text('选择笔记库'), findsOneWidget);
+    expect(find.textContaining('当前笔记库：vault'), findsOneWidget);
+    await tapAndSettle(tester, find.text('继续'));
+    expect(find.text('你有旧的 Obsidian 笔记库吗？'), findsOneWidget);
+
+    await tapAndSettle(tester, find.text('上一步'));
+    await tapAndSettle(tester, find.text('上一步'));
+    expect(find.text('连接 AI'), findsOneWidget);
+    expect(find.textContaining('本机已登记为原设备'), findsOneWidget);
+    // Forward again goes one modal at a time back to where the user was.
+    await tapAndSettle(tester, find.text('继续'));
+    expect(find.textContaining('当前笔记库：vault'), findsOneWidget);
+    await tapAndSettle(tester, find.text('继续'));
+    expect(find.text('你有旧的 Obsidian 笔记库吗？'), findsOneWidget);
+  });
+
+  testWidgets('a failed key check is not shown as a finished connection', (
+    tester,
+  ) async {
+    await pumpFlow(
+      tester,
+      answers: const FirstRunAnswers(
+        started: true,
+        firstDevice: true,
+        keyCheckFailed: true,
+      ),
+      connected: true,
+      vaultChosen: true,
+    );
+    expect(find.text('连接 AI'), findsOneWidget);
+    expect(find.textContaining('本机已登记为原设备'), findsNothing);
+    expect(find.text('稍后'), findsOneWidget);
+  });
+
+  testWidgets('上一步 through a finished backup keeps going one modal at a time', (
+    tester,
+  ) async {
+    await pumpFlow(
+      tester,
+      answers: const FirstRunAnswers(
+        started: true,
+        firstDevice: true,
+        hasOldVault: true,
+      ),
+      connected: true,
+      vaultChosen: true,
+      reports: const [
+        SetupCheck.backupComplete,
+        SetupCheck.localImportCopyRetained,
+        SetupCheck.correctVaultOpened,
+        SetupCheck.standardPlan,
+        SetupCheck.otherFileTypes,
+        SetupCheck.hiddenProperties,
+      ],
+    );
+    expect(find.text('允许提醒通知'), findsOneWidget);
+    await tapAndSettle(tester, find.text('上一步'));
+    await tapAndSettle(tester, find.text('上一步'));
+    expect(find.text('先备份旧库'), findsOneWidget);
+    await tapAndSettle(tester, find.text('继续'));
+    expect(find.text('在 Obsidian 打开同一个文件夹'), findsOneWidget);
   });
 }

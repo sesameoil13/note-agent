@@ -38,6 +38,13 @@ Replaces the setup list on first open with one modal per step. The list stays as
 - The backup modal moves on only when the backup is ready (compared or reported, plus the
   local import copy kept) and the user taps 继续; the remote-slot switch stays separate.
 
+- **上一步** on every modal but the welcome goes to the previous modal in the order the
+  answers lead through (`previousFirstRunStep`). A finished step shows again with 继续;
+  moving forward after 上一步 goes one modal at a time (`followingFirstRunStep`) until it
+  reaches the first unfinished step. An answer step (device kind, old vault) can be changed.
+- The connect modal explains the 首次启用码. When the service answers `already_enrolled`
+  (a first device exists), it offers 改为配对加入.
+
 ## Tests
 
 - `test/first_run_test.dart`: branches, 稍后, banner, reopen, upgrade rule, JSON.

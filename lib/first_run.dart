@@ -159,3 +159,49 @@ List<FirstRunStep> outstandingFirstRunSteps(
   FirstRunAnswers answers,
   FirstRunFacts facts,
 ) => answers.firstDevice == null ? const [] : _unfinished(answers, facts);
+
+/// The modals the answers lead through, in order.
+List<FirstRunStep> _order(FirstRunAnswers answers) => [
+  FirstRunStep.welcome,
+  FirstRunStep.deviceKind,
+  answers.firstDevice == false
+      ? FirstRunStep.joinDevice
+      : FirstRunStep.connectAi,
+  FirstRunStep.vault,
+  FirstRunStep.oldVault,
+  if (answers.hasOldVault == true) FirstRunStep.backup,
+  FirstRunStep.obsidian,
+  FirstRunStep.notifications,
+  FirstRunStep.done,
+];
+
+/// The modal Back returns to: the one before [current] in the sequence the
+/// answers lead through. Null on the welcome modal.
+FirstRunStep? previousFirstRunStep(
+  FirstRunStep current,
+  FirstRunAnswers answers,
+) {
+  final order = _order(answers);
+  final index = order.indexOf(current);
+  return index > 0 ? order[index - 1] : null;
+}
+
+/// The modal after [current]; moving forward after 上一步 goes one at a time.
+FirstRunStep? followingFirstRunStep(
+  FirstRunStep current,
+  FirstRunAnswers answers,
+) {
+  final order = _order(answers);
+  final index = order.indexOf(current);
+  return index >= 0 && index < order.length - 1 ? order[index + 1] : null;
+}
+
+/// Whether [a] comes before [b] in the sequence.
+bool firstRunStepBefore(
+  FirstRunStep a,
+  FirstRunStep b,
+  FirstRunAnswers answers,
+) {
+  final order = _order(answers);
+  return order.indexOf(a) < order.indexOf(b);
+}
