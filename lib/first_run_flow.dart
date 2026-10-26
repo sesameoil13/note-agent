@@ -20,6 +20,7 @@ abstract interface class FirstRunServices {
   });
   Future<void> joinPairing(String code, {required String deviceName});
   Future<void> refreshPairing();
+  Future<void> cancelPairing();
 }
 
 class ConnectionFirstRunServices implements FirstRunServices {
@@ -49,6 +50,8 @@ class ConnectionFirstRunServices implements FirstRunServices {
       connection.joinPairing(code, deviceName: deviceName);
   @override
   Future<void> refreshPairing() => connection.refreshPairing();
+  @override
+  Future<void> cancelPairing() => connection.cancelPairing();
 }
 
 /// What the App observes now, read fresh for every modal.
@@ -150,10 +153,6 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
   /// decision can be made there once the backup is ready.
   bool _holdBackup = false;
 
-  /// Pairing finished but the received key failed its check: stay on the
-  /// join modal to retry, though the key and device identity are present.
-  bool _keyCheckFailed = false;
-
   @override
   void dispose() {
     _key.dispose();
@@ -189,7 +188,6 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
 
   Future<void> _skip(FirstRunStep step) {
     if (step == FirstRunStep.backup) _holdBackup = false;
-    if (step == FirstRunStep.joinDevice) _keyCheckFailed = false;
     return _answer(_answers.skip(step));
   }
 
@@ -201,11 +199,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
     );
     if (step == null) return const SizedBox.shrink();
     if (step == FirstRunStep.backup) _holdBackup = true;
-    final shown = _keyCheckFailed
-        ? FirstRunStep.joinDevice
-        : _holdBackup
-        ? FirstRunStep.backup
-        : step;
+    final shown = _holdBackup ? FirstRunStep.backup : step;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
       child: AnimatedSwitcher(
@@ -315,19 +309,26 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
 
   /// 稍后 here leaves a pending request in place; it never cancels it, and
   /// this device never becomes a second original device.
+  /// The outcome is saved, so a restart after a failed check comes back here.
   Future<void> _checkReceivedKey() async {
     try {
       await widget.connection.checkOpenRouter();
-      _keyCheckFailed = false;
     } catch (_) {
-      _keyCheckFailed = true;
+      await widget.saveAnswers(
+        _answers = _answers.copyWith(keyCheckFailed: true),
+      );
       rethrow;
+    }
+    if (_answers.keyCheckFailed) {
+      await widget.saveAnswers(
+        _answers = _answers.copyWith(keyCheckFailed: false),
+      );
     }
   }
 
   Widget _joinDevice() {
     final pairing = widget.connection.pairing;
-    if (_keyCheckFailed) {
+    if (_answers.keyCheckFailed && pairing.role != null) {
       return _page(
         title: '加入已有设备',
         body: '配对已完成，但收到的 AI 设置未通过连接检测。请在第一台设备确认 Key 仍然有效，然后重新检测。',
@@ -350,6 +351,8 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
             }
           }),
         ),
+        // An expired or rejected request can't be refreshed: start over.
+        secondary: ('取消，重新输入配对码', () => _run(widget.connection.cancelPairing)),
         skip: FirstRunStep.joinDevice,
       );
     }

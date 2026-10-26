@@ -16,7 +16,7 @@ import 'support/pending_notification_fixture.dart';
 class FakeConnection implements FirstRunServices {
   @override
   bool get pairingServiceConfigured => true;
-  bool hasKey = false, approved = false, keyRevoked = false;
+  bool hasKey = false, approved = false, keyRevoked = false, expired = false;
   String? role, verification;
   String phase = 'setup';
   final calls = <String>[];
@@ -65,6 +65,14 @@ class FakeConnection implements FirstRunServices {
   }
 
   @override
+  Future<void> cancelPairing() async {
+    calls.add('cancel');
+    phase = 'setup';
+    verification = null;
+    expired = false;
+  }
+
+  @override
   Future<void> joinPairing(String code, {required String deviceName}) async {
     calls.add('join:$deviceName');
     phase = 'waiting';
@@ -74,6 +82,7 @@ class FakeConnection implements FirstRunServices {
   @override
   Future<void> refreshPairing() async {
     calls.add('refresh');
+    if (expired) throw const ConnectionFailure('配对码已过期，请在原设备重新生成。');
     if (approved) {
       role = 'member';
       phase = 'ready';
@@ -395,4 +404,49 @@ void main() {
       expect(find.textContaining('未选择笔记库'), findsOneWidget);
     },
   );
+
+  testWidgets(
+    'an expired pairing request can be cancelled and a new code entered',
+    (tester) async {
+      await pumpFlow(
+        tester,
+        answers: const FirstRunAnswers(started: true, firstDevice: false),
+      );
+      await tester.enterText(
+        find.widgetWithText(TextField, '配对码'),
+        'noteagent-pair://join',
+      );
+      await tester.enterText(find.widgetWithText(TextField, '设备名称'), 'Xiaomi');
+      await tapAndSettle(tester, find.text('请求加入'));
+      connection.expired = true;
+      await tapAndSettle(tester, find.text('已批准，刷新'));
+      expect(find.text('配对码已过期，请在原设备重新生成。'), findsOneWidget);
+      await tapAndSettle(tester, find.text('取消，重新输入配对码'));
+      expect(connection.calls.last, 'cancel');
+      expect(find.widgetWithText(TextField, '配对码'), findsOneWidget);
+    },
+  );
+
+  testWidgets('a failed key check is saved so a restart comes back to it', (
+    tester,
+  ) async {
+    await pumpFlow(
+      tester,
+      answers: const FirstRunAnswers(started: true, firstDevice: false),
+    );
+    await tester.enterText(
+      find.widgetWithText(TextField, '配对码'),
+      'noteagent-pair://join',
+    );
+    await tester.enterText(find.widgetWithText(TextField, '设备名称'), 'Xiaomi');
+    await tapAndSettle(tester, find.text('请求加入'));
+    connection
+      ..approved = true
+      ..keyRevoked = true;
+    await tapAndSettle(tester, find.text('已批准，刷新'));
+    expect(saved.last.keyCheckFailed, isTrue);
+    connection.keyRevoked = false;
+    await tapAndSettle(tester, find.text('重新检测连接'));
+    expect(saved.last.keyCheckFailed, isFalse);
+  });
 }

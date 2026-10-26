@@ -45,6 +45,7 @@ class FirstRunAnswers {
     this.notificationsAsked = false,
     this.finished = false,
     this.skipped = const {},
+    this.keyCheckFailed = false,
   });
   final bool started;
   final bool? firstDevice;
@@ -57,6 +58,10 @@ class FirstRunAnswers {
   /// Steps the user put off with 稍后 in this pass through the sequence.
   final Set<FirstRunStep> skipped;
 
+  /// Pairing finished but the received key failed its check. The key and
+  /// device identity are stored anyway, so this keeps the join step open.
+  final bool keyCheckFailed;
+
   FirstRunAnswers copyWith({
     bool? started,
     bool? firstDevice,
@@ -64,6 +69,7 @@ class FirstRunAnswers {
     bool? notificationsAsked,
     bool? finished,
     Set<FirstRunStep>? skipped,
+    bool? keyCheckFailed,
   }) => FirstRunAnswers(
     started: started ?? this.started,
     firstDevice: firstDevice ?? this.firstDevice,
@@ -71,6 +77,7 @@ class FirstRunAnswers {
     notificationsAsked: notificationsAsked ?? this.notificationsAsked,
     finished: finished ?? this.finished,
     skipped: skipped ?? this.skipped,
+    keyCheckFailed: keyCheckFailed ?? this.keyCheckFailed,
   );
 
   /// 稍后. The vault step cannot be put off.
@@ -89,6 +96,7 @@ class FirstRunAnswers {
     'notificationsAsked': notificationsAsked,
     'finished': finished,
     'skipped': [for (final step in skipped) step.name],
+    'keyCheckFailed': keyCheckFailed,
   };
 
   factory FirstRunAnswers.fromJson(Map<String, dynamic> json) =>
@@ -102,6 +110,7 @@ class FirstRunAnswers {
           for (final name in (json['skipped'] as List?) ?? const [])
             ...FirstRunStep.values.where((step) => step.name == name),
         },
+        keyCheckFailed: json['keyCheckFailed'] == true,
       );
 }
 
@@ -120,7 +129,7 @@ FirstRunAnswers firstRunAtLaunch(
 List<FirstRunStep> _unfinished(FirstRunAnswers answers, FirstRunFacts facts) {
   final hasOldVault = answers.hasOldVault;
   return [
-    if (!facts.hasKey || !facts.registered)
+    if (!facts.hasKey || !facts.registered || answers.keyCheckFailed)
       answers.firstDevice == false
           ? FirstRunStep.joinDevice
           : FirstRunStep.connectAi,

@@ -229,4 +229,26 @@ void main() {
     expect(restored.skipped, {FirstRunStep.joinDevice});
     expect(restored.finished, isFalse);
   });
+
+  test(
+    'a failed check of the paired key resumes at the join step after restart',
+    () {
+      const paired = FirstRunFacts(hasKey: true, registered: true);
+      final failed = FirstRunAnswers.fromJson(
+        const FirstRunAnswers(
+          started: true,
+          firstDevice: false,
+        ).copyWith(keyCheckFailed: true).toJson(),
+      );
+      expect(nextFirstRunStep(failed, paired), FirstRunStep.joinDevice);
+      expect(
+        outstandingFirstRunSteps(failed, paired),
+        contains(FirstRunStep.joinDevice),
+      );
+      expect(
+        nextFirstRunStep(failed.skip(FirstRunStep.joinDevice), paired),
+        FirstRunStep.vault,
+      );
+    },
+  );
 }
