@@ -41,7 +41,7 @@ void main() {
           await tester.tap(find.byTooltip('更多操作'));
           await tester.pumpAndSettle();
           expect(find.text('AI 与共享预算'), findsOneWidget);
-          expect(find.text('设置与首次引导'), findsOneWidget);
+          expect(find.text('设置'), findsOneWidget);
           expect(find.text('连接与设备'), findsOneWidget);
           await tester.runAsync(() async {
             await tester.tap(find.text('AI 与共享预算'));

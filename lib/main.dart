@@ -15,6 +15,8 @@ import 'recording_panel.dart';
 import 'workspace_platform.dart';
 import 'document_panel.dart';
 import 'setup_screen.dart';
+import 'first_run.dart';
+import 'first_run_flow.dart';
 import 'budget_panel.dart';
 import 'processing_recovery_screen.dart';
 import 'action_confirmation_screen.dart';
@@ -214,7 +216,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     WidgetsBinding.instance.addObserver(this);
     _workspace = widget.initialWorkspace;
     _connection = _workspace?.connection ?? WorkspaceConnection.platform();
-    if (_workspace == null) _restore();
+    if (_workspace == null) {
+      _restore();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_startFirstRun(existingInstall: true));
+      });
+    }
     _watchNotificationInteractions();
   }
 
@@ -269,16 +277,22 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   }
 
   Future<void> _restore() async {
+    bool? existingInstall;
     setState(() => _loading = true);
     try {
       final location = await _platform.restoreLocation();
       _deviceInfo = location.deviceInfo;
       _error = _vaultAuthorizationError = location.authorizationError;
       if (location.hasVault) await _open(location);
+      existingInstall =
+          location.hasVault || location.authorizationError != null;
     } catch (error) {
       _error = _errorMessage(error);
     }
     if (mounted) setState(() => _loading = false);
+    if (mounted && existingInstall != null) {
+      await _startFirstRun(existingInstall: existingInstall);
+    }
   }
 
   Future<void> _chooseVault() async {
@@ -305,6 +319,89 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
 
   /// Kept apart from transient errors so the guide can mark the step.
   String? _vaultAuthorizationError;
+
+  /// Null until the device's answers are read (or when they can't be).
+  FirstRunAnswers? _firstRun;
+
+  FirstRunServices get _firstRunServices =>
+      ConnectionFirstRunServices(_connection);
+
+  /// Shows the sequence on a new install or one left mid-way. An install
+  /// that already had a vault or device identity is marked finished.
+  Future<void> _startFirstRun({required bool existingInstall}) async {
+    try {
+      final stored = await _connection.loadFirstRun();
+      final answers = firstRunAtLaunch(
+        stored,
+        existingInstall: existingInstall || _connection.pairing.role != null,
+      );
+      if (stored == null && answers.finished) {
+        await _connection.saveFirstRun(answers);
+      }
+      if (!mounted) return;
+      setState(() => _firstRun = answers);
+      if (nextFirstRunStep(
+            answers,
+            firstRunFacts(_firstRunServices, _workspace),
+          ) !=
+          null) {
+        await _openFirstRun();
+      }
+    } catch (_) {
+      /* Keychain locked or unavailable: the sequence waits for next launch; Settings still works. */
+    }
+  }
+
+  Future<void> _openFirstRun() async {
+    await showFirstRun(
+      context,
+      connection: _firstRunServices,
+      answers: _firstRun!,
+      saveAnswers: (next) async {
+        await _connection.saveFirstRun(next);
+        _firstRun = next;
+      },
+      workspace: () => _workspace,
+      chooseVault: _chooseVault,
+    );
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _continueFirstRun() async {
+    final reopened = _firstRun!.reopen();
+    try {
+      await _connection.saveFirstRun(reopened);
+    } catch (_) {
+      /* The reopened pass is still shown; answers are saved as they are given. */
+    }
+    _firstRun = reopened;
+    await _openFirstRun();
+  }
+
+  Widget? _firstRunBanner() {
+    final answers = _firstRun;
+    if (answers == null || !answers.finished) return null;
+    final outstanding = outstandingFirstRunSteps(
+      answers,
+      firstRunFacts(_firstRunServices, _workspace),
+    );
+    if (outstanding.isEmpty) return null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+      color: slate,
+      child: Row(
+        children: [
+          Text('还有 ${outstanding.length} 步未完成'),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: _saving || _loading ? null : _continueFirstRun,
+            child: const Text('继续'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _showSetup() async {
     final action = await Navigator.of(context).push<SetupAction>(
@@ -465,6 +562,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           return Column(
             children: [
               _header(wide),
+              ?_firstRunBanner(),
               if (_workspace != null)
                 Align(
                   alignment: Alignment.centerLeft,
@@ -632,7 +730,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         if (wide) ...[
           AccessibleIconButton(
             onPressed: _saving || _loading ? null : _showSetup,
-            label: '设置与首次引导',
+            label: '设置',
             icon: const Icon(Icons.tune),
           ),
           AccessibleIconButton(
@@ -657,7 +755,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             itemBuilder: (_) => [
               if (_workspace != null)
                 const PopupMenuItem(value: 'budget', child: Text('AI 与共享预算')),
-              const PopupMenuItem(value: 'setup', child: Text('设置与首次引导')),
+              const PopupMenuItem(value: 'setup', child: Text('设置')),
               const PopupMenuItem(value: 'connection', child: Text('连接与设备')),
             ],
           ),
@@ -1660,7 +1758,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             ),
             const SizedBox(height: 24),
             const Text(
-              '选择自己的本地笔记库，开始收集。\n在设置与首次引导中连接服务、配对并核对 Obsidian。',
+              '选择自己的本地笔记库，开始收集。\n在设置中连接服务、配对并核对 Obsidian。',
               style: TextStyle(fontSize: 16, height: 1.7, color: ash),
             ),
             const SizedBox(height: 32),

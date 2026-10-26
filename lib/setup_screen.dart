@@ -134,7 +134,7 @@ class _SetupScreenState extends State<SetupScreen> {
     final state = workspace?.setup;
     final budget = workspace?.budget;
     return Scaffold(
-      appBar: AppBar(title: const Text('设置与首次引导')),
+      appBar: AppBar(title: const Text('设置')),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),

@@ -92,12 +92,16 @@ Future<void> showFirstRun(
     context: context,
     barrierDismissible: false,
     builder: (_) {
-      final flow = FirstRunFlow(
-        connection: connection,
-        answers: answers,
-        saveAnswers: saveAnswers,
-        workspace: workspace,
-        chooseVault: chooseVault,
+      // Leaving is only through the done step; Back must not skip the vault.
+      final flow = PopScope(
+        canPop: false,
+        child: FirstRunFlow(
+          connection: connection,
+          answers: answers,
+          saveAnswers: saveAnswers,
+          workspace: workspace,
+          chooseVault: chooseVault,
+        ),
       );
       return compact
           ? Dialog.fullscreen(child: flow)
@@ -146,6 +150,10 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
   /// decision can be made there once the backup is ready.
   bool _holdBackup = false;
 
+  /// Pairing finished but the received key failed its check: stay on the
+  /// join modal to retry, though the key and device identity are present.
+  bool _keyCheckFailed = false;
+
   @override
   void dispose() {
     _key.dispose();
@@ -157,10 +165,11 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
 
   NoteWorkspace? get _workspace => widget.workspace();
 
-  Future<void> _answer(FirstRunAnswers next) async {
-    setState(() => _answers = next);
+  /// Saved first: an answer that can't be kept doesn't move the flow on.
+  Future<void> _answer(FirstRunAnswers next) => _run(() async {
     await widget.saveAnswers(next);
-  }
+    _answers = next;
+  });
 
   /// Runs one step's action; a failure stays on the same modal with its message.
   Future<void> _run(Future<void> Function() action) async {
@@ -180,6 +189,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
 
   Future<void> _skip(FirstRunStep step) {
     if (step == FirstRunStep.backup) _holdBackup = false;
+    if (step == FirstRunStep.joinDevice) _keyCheckFailed = false;
     return _answer(_answers.skip(step));
   }
 
@@ -191,7 +201,11 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
     );
     if (step == null) return const SizedBox.shrink();
     if (step == FirstRunStep.backup) _holdBackup = true;
-    final shown = _holdBackup ? FirstRunStep.backup : step;
+    final shown = _keyCheckFailed
+        ? FirstRunStep.joinDevice
+        : _holdBackup
+        ? FirstRunStep.backup
+        : step;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
       child: AnimatedSwitcher(
@@ -221,7 +235,15 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
     FirstRunStep.vault => _page(
       title: '选择笔记库',
       body: '请选择新的 Obsidian 笔记库文件夹，不要选旧库。笔记和来源文件都保存在这里。',
-      primary: ('选择文件夹', () => _run(widget.chooseVault)),
+      primary: (
+        '选择文件夹',
+        () => _run(() async {
+          await widget.chooseVault();
+          if (_workspace == null) {
+            throw const ConnectionFailure('未选择笔记库。请选择新的 Obsidian 笔记库文件夹后继续。');
+          }
+        }),
+      ),
     ),
     FirstRunStep.oldVault => _page(
       title: '你有旧的 Obsidian 笔记库吗？',
@@ -245,7 +267,6 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
       skip: step,
     ),
     FirstRunStep.done => _done(),
-    _ => const SizedBox.shrink(),
   };
 
   Widget _connectAi() {
@@ -294,8 +315,26 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
 
   /// 稍后 here leaves a pending request in place; it never cancels it, and
   /// this device never becomes a second original device.
+  Future<void> _checkReceivedKey() async {
+    try {
+      await widget.connection.checkOpenRouter();
+      _keyCheckFailed = false;
+    } catch (_) {
+      _keyCheckFailed = true;
+      rethrow;
+    }
+  }
+
   Widget _joinDevice() {
     final pairing = widget.connection.pairing;
+    if (_keyCheckFailed) {
+      return _page(
+        title: '加入已有设备',
+        body: '配对已完成，但收到的 AI 设置未通过连接检测。请在第一台设备确认 Key 仍然有效，然后重新检测。',
+        primary: ('重新检测连接', () => _run(_checkReceivedKey)),
+        skip: FirstRunStep.joinDevice,
+      );
+    }
     if (pairing.phase == 'waiting') {
       return _page(
         title: '加入已有设备',
@@ -307,7 +346,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
             await widget.connection.refreshPairing();
             // Pairing hands over the key unchecked; check it before moving on.
             if (widget.connection.pairing.role != null) {
-              await widget.connection.checkOpenRouter();
+              await _checkReceivedKey();
             }
           }),
         ),
@@ -436,7 +475,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
         '开始收集',
         () async {
           await _answer(_answers.finish());
-          if (mounted) Navigator.of(context).pop();
+          if (mounted && _answers.finished) Navigator.of(context).pop();
         },
       ),
     );

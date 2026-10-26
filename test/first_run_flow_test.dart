@@ -16,7 +16,7 @@ import 'support/pending_notification_fixture.dart';
 class FakeConnection implements FirstRunServices {
   @override
   bool get pairingServiceConfigured => true;
-  bool hasKey = false, approved = false;
+  bool hasKey = false, approved = false, keyRevoked = false;
   String? role, verification;
   String phase = 'setup';
   final calls = <String>[];
@@ -46,7 +46,10 @@ class FakeConnection implements FirstRunServices {
   }
 
   @override
-  Future<void> checkOpenRouter() async => calls.add('check');
+  Future<void> checkOpenRouter() async {
+    calls.add('check');
+    if (keyRevoked) throw const ConnectionFailure('OpenRouter Key 无效或已撤销。');
+  }
 
   @override
   Future<void> activatePairing({
@@ -86,12 +89,16 @@ void main() {
   late PendingNotifications port;
   NoteWorkspace? current;
   late List<FirstRunAnswers> saved;
+  var failSaves = 0;
+  var pickerCancels = false;
   final picks = <String?>[];
   const channel = MethodChannel('dev.noteagent/workspace');
 
   setUp(() {
     current = null;
     saved = [];
+    failSaves = 0;
+    pickerCancels = false;
   });
 
   Future<void> pumpFlow(
@@ -144,9 +151,17 @@ void main() {
                   context,
                   connection: connection,
                   answers: answers,
-                  saveAnswers: (next) async => saved.add(next),
+                  saveAnswers: (next) async {
+                    if (failSaves > 0) {
+                      failSaves--;
+                      throw const ConnectionFailure('系统安全存储暂时不可用，请解锁设备后重试。');
+                    }
+                    saved.add(next);
+                  },
                   workspace: () => current,
-                  chooseVault: () async => current = workspace,
+                  chooseVault: () async {
+                    if (!pickerCancels) current = workspace;
+                  },
                 ),
                 child: const Text('open'),
               ),
@@ -322,6 +337,62 @@ void main() {
       await tapAndSettle(tester, find.text('开始收集'));
       expect(saved.last.finished, isTrue);
       expect(saved.last.skipped, hasLength(4));
+    },
+  );
+
+  testWidgets('an answer that cannot be saved does not move the flow on', (
+    tester,
+  ) async {
+    await pumpFlow(tester);
+    failSaves = 1;
+    await tapAndSettle(tester, find.text('开始'));
+    expect(find.text('系统安全存储暂时不可用，请解锁设备后重试。'), findsOneWidget);
+    expect(find.text('给想法一个落点。'), findsOneWidget);
+    await tapAndSettle(tester, find.text('开始'));
+    expect(find.text('这是你的第一台设备吗？'), findsOneWidget);
+  });
+
+  testWidgets(
+    'a paired device whose received key fails its check stays to retry',
+    (tester) async {
+      await pumpFlow(
+        tester,
+        answers: const FirstRunAnswers(started: true, firstDevice: false),
+      );
+      await tester.enterText(
+        find.widgetWithText(TextField, '配对码'),
+        'noteagent-pair://join',
+      );
+      await tester.enterText(find.widgetWithText(TextField, '设备名称'), 'Xiaomi');
+      await tapAndSettle(tester, find.text('请求加入'));
+      connection
+        ..approved = true
+        ..keyRevoked = true;
+      await tapAndSettle(tester, find.text('已批准，刷新'));
+      expect(find.text('OpenRouter Key 无效或已撤销。'), findsOneWidget);
+      expect(find.text('选择笔记库'), findsNothing);
+      connection.keyRevoked = false;
+      await tapAndSettle(tester, find.text('重新检测连接'));
+      expect(find.text('选择笔记库'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'system Back and a cancelled picker leave the vault step in place',
+    (tester) async {
+      await pumpFlow(
+        tester,
+        answers: const FirstRunAnswers(started: true, firstDevice: true),
+        connected: true,
+      );
+      expect(find.text('选择笔记库'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('选择笔记库'), findsOneWidget);
+      pickerCancels = true;
+      await tapAndSettle(tester, find.text('选择文件夹'));
+      expect(find.text('选择笔记库'), findsOneWidget);
+      expect(find.textContaining('未选择笔记库'), findsOneWidget);
     },
   );
 }

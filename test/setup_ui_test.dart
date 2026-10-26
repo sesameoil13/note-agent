@@ -126,7 +126,7 @@ void main() {
       await tester.pumpWidget(NoteAgentApp(initialWorkspace: workspace));
       await tester.enterText(find.widgetWithText(TextField, '标题'), '尚未保存的想法');
       await tester.enterText(find.widgetWithText(TextField, '正文'), '设置不能丢掉原文');
-      await tester.tap(find.byTooltip('设置与首次引导'));
+      await tester.tap(find.byTooltip('设置'));
       await tester.pumpAndSettle();
       expect(find.textContaining('用户核对记录'), findsOneWidget);
       final consent = find.text('单独确认远程名额切换');
