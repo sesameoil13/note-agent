@@ -45,7 +45,7 @@ void main() {
         final keyField = find.byWidgetPredicate(
           (widget) =>
               widget is TextField &&
-              widget.decoration?.labelText == 'OpenRouter API Key',
+              widget.decoration?.labelText == '百炼 API Key',
         );
         await tester.enterText(keyField, 'sk-or-v1-native-fixture-key');
         await tester.tap(find.text('检测并安全保存'));
