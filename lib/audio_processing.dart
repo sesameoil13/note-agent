@@ -21,7 +21,7 @@ class WorkspaceAudioJob {
     this.transcript,
     this.canCancel = false,
     this.noteId,
-    this.knownCostUsdNanos,
+    this.knownCostCnyMicros,
     this.generationId,
   });
   final String sourceId, description, message;
@@ -29,8 +29,17 @@ class WorkspaceAudioJob {
   final bool canCancel;
   final int estimatedCnyMicros;
   final String? transcript, noteId, generationId;
-  final int? knownCostUsdNanos;
+
+  /// Settled transcription cost in micro-元, once every part has settled.
+  final int? knownCostCnyMicros;
 }
+
+/// The parts a recording is sent in (ADR 0003), each with its own budget
+/// attempt; a part's transcript and receipt are saved before the next goes.
+List<Map<String, dynamic>> _parts(Map<String, dynamic> p) => [
+  for (final part in (p['parts'] as List?) ?? const [])
+    (part as Map).cast<String, dynamic>(),
+];
 
 extension _WorkspaceAudioProcessing on NoteWorkspace {
   List<WorkspaceAudioJob> _audioJobs() => List.unmodifiable(
@@ -39,8 +48,11 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
           vaultStorage.identity,
         ])
         .map((r) {
-          final p = jsonDecode(r['payload'] as String) as Map;
+          final p = (jsonDecode(r['payload'] as String) as Map)
+              .cast<String, dynamic>();
           final aq = p['audioQuote'] as Map?;
+          final parts = _parts(p);
+          final costs = parts.map((part) => part['cnyMicros']).toList();
           return WorkspaceAudioJob(
             sourceId: r['source_id'] as String,
             status: AudioJobStatus.values.byName(r['status'] as String),
@@ -49,13 +61,20 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
                 ? '本次仅整理已有完整转写，不重新上传音频；需确认新的整理费用。附带最多 12 条本库相关标题及每条最多 400 字片段用于关联；完整请求最多 20000 编码字节、1024 输出 token，不自动重发。\n${_textQuoteDescription(p['textQuote'])}'
                 : aq == null
                 ? '尚未取得转写和整理费率。'
-                : '一次确认包含完整音频转写（$transcriptionModelId）及固定 DeepSeek V4.1 Flash 整理。\n转写按全部已知路由最高秒价预留：\$${(aq['secondNano'] as int) / 1000000000}/秒，最少 ${aq['minimumSeconds']} 秒，时长另含 25% 余量；两阶段均含 25% 费用余量。汇率日期 ${aq['fxDate']}。\n转写不保证远端价格封顶；超出预留将如实记账并暂停后续收费。\n整理会附带最多 12 条本库相关标题及每条最多 400 字片段用于关联；完整请求最多 20000 编码字节、1024 输出 token；超限保留完整转写并暂停，不截断或隐式分段。两阶段均不自动重发。报价到期需重新预估。\n${_textQuoteDescription(p['textQuote'])}',
+                : aq['currency'] == 'CNY'
+                ? '一次确认包含完整音频转写（${aq['model']}${parts.length > 1 ? '，分 ${parts.length} 段，每段不超过 4.5 分钟' : ''}）及固定 qwen-plus 整理。\n转写按 ¥${(aq['secondNanoCny'] as int) / 1000000000}/秒预留，最少 ${aq['minimumSeconds']} 秒，时长另含 25% 余量；两阶段均含 25% 费用余量。价格版本 ${aq['rateVersion']}。\n超出预留将如实记账并暂停后续收费。\n整理会附带最多 12 条本库相关标题及每条最多 400 字片段用于关联；完整请求最多 20000 编码字节、1024 输出 token；超限保留完整转写并暂停，不截断。两阶段均不自动重发。报价到期需重新预估。\n${_textQuoteDescription(p['textQuote'])}'
+                // A quote saved before the switch to Bailian.
+                : '一次确认包含完整音频转写（openai/whisper-large-v3-turbo）及固定 DeepSeek V4.1 Flash 整理。\n转写按全部已知路由最高秒价预留：\$${(aq['secondNano'] as int) / 1000000000}/秒，最少 ${aq['minimumSeconds']} 秒，时长另含 25% 余量；两阶段均含 25% 费用余量。汇率日期 ${aq['fxDate']}。\n转写不保证远端价格封顶；超出预留将如实记账并暂停后续收费。\n整理会附带最多 12 条本库相关标题及每条最多 400 字片段用于关联；完整请求最多 20000 编码字节、1024 输出 token；超限保留完整转写并暂停，不截断或隐式分段。两阶段均不自动重发。报价到期需重新预估。\n${_textQuoteDescription(p['textQuote'])}',
             canCancel: p['consented'] != true || p['organizationOnly'] == true,
             message: r['error'] as String? ?? '',
             transcript: p['transcript'] as String?,
             noteId: p['noteId'] as String?,
-            knownCostUsdNanos: p['usdNanos'] as int?,
-            generationId: p['generationId'] as String?,
+            knownCostCnyMicros: parts.isNotEmpty && costs.every((c) => c is int)
+                ? costs.fold<int>(0, (a, c) => a + (c as int))
+                : null,
+            generationId: parts.isEmpty
+                ? p['generationId'] as String?
+                : (parts.last['receipt'] as Map?)?['responseId'] as String?,
           );
         }),
   );
@@ -176,12 +195,33 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       await _releaseUnsentAudio(previous);
     }
     final source = _audioQueue.source(id);
-    await _verifiedAudio(source);
+    final format = source.metadata!.container.toLowerCase();
+    final split = splitForTranscription(
+      await _verifiedAudio(source),
+      format: format,
+    );
     final operation = _createId();
+    // A retry keeps parts already transcribed (same audio, same split).
+    final done = previous == null
+        ? const <Map<String, dynamic>>[]
+        : _parts(previous);
+    final carried = done.length == split.length;
     final p = <String, dynamic>{
       'previous': ?previous,
       'operation': operation,
-      'audioAttempt': '$operation-audio',
+      'parts': [
+        for (var i = 0; i < split.length; i++)
+          carried && done[i]['state'] == 'done'
+              ? done[i]
+              : {
+                  'index': i,
+                  'attempt': '$operation-audio-$i',
+                  'format': split[i].format,
+                  'durationMs': split[i].duration.inMilliseconds,
+                  'bytes': split[i].bytes.length,
+                  'state': 'reserved',
+                },
+      ],
       'textAttempt': '$operation-text',
       'noteId': source.outputNoteId,
       'source': {
@@ -196,25 +236,40 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     try {
       p['audioQuote'] = (await connection.requestSharedBudget(
         '/v1/budget/quote',
-        body: {'purpose': 'transcription'},
+        body: {'provider': aiProvider, 'purpose': 'transcription'},
       ))['quote'];
       p['textQuote'] = (await connection.requestSharedBudget(
         '/v1/budget/quote',
         body: {'provider': aiProvider},
       ))['quote'];
       await _saveAudioJob(id, AudioJobStatus.preparing, p);
-      final a = await connection.requestSharedBudget(
-        '/v1/budget/reserve',
-        body: {
-          'attemptId': p['audioAttempt'],
-          'operationId': operation,
-          'quoteId': (p['audioQuote'] as Map)['id'],
-          'purpose': 'transcription',
-          'inputBytes': source.byteLength,
-          'source': p['source'],
-        },
-      );
-      _readTextBudget((a['budget'] as Map).cast<String, dynamic>());
+      final parts = _parts(p);
+      var estimate = 0;
+      for (final part in parts) {
+        if (part['state'] == 'done') continue;
+        final a = await connection.requestSharedBudget(
+          '/v1/budget/reserve',
+          body: {
+            'attemptId': part['attempt'],
+            'operationId': operation,
+            'quoteId': (p['audioQuote'] as Map)['id'],
+            'purpose': 'transcription',
+            'inputBytes': part['bytes'],
+            'source': {
+              ...(p['source'] as Map),
+              'format': part['format'],
+              'durationMs': part['durationMs'],
+              if (parts.length > 1)
+                'chunk': {'index': part['index'], 'count': parts.length},
+            },
+          },
+        );
+        _readTextBudget((a['budget'] as Map).cast<String, dynamic>());
+        if ((a['attempt'] as Map)['state'] != 'reserved') {
+          throw const ConnectionFailure('此任务已有发送记录，不能重复发送。');
+        }
+        estimate += (a['attempt'] as Map)['reserve_cny'] as int;
+      }
       final t = await connection.requestSharedBudget(
         '/v1/budget/reserve',
         body: {
@@ -225,13 +280,10 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
         },
       );
       _readTextBudget((t['budget'] as Map).cast<String, dynamic>());
-      if ((a['attempt'] as Map)['state'] != 'reserved' ||
-          (t['attempt'] as Map)['state'] != 'reserved') {
+      if ((t['attempt'] as Map)['state'] != 'reserved') {
         throw const ConnectionFailure('此任务已有发送记录，不能重复发送。');
       }
-      p['estimate'] =
-          ((a['attempt'] as Map)['reserve_cny'] as int) +
-          ((t['attempt'] as Map)['reserve_cny'] as int);
+      p['estimate'] = estimate + ((t['attempt'] as Map)['reserve_cny'] as int);
       await _saveAudioJob(id, AudioJobStatus.prepared, p);
     } catch (e) {
       await _releaseUnsentAudio(p);
@@ -245,11 +297,22 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     return _audioJob(id);
   }
 
+  /// The audio attempts of [p] not yet transcribed: each part's, or the one
+  /// attempt of a job saved before the switch to Bailian.
+  List<String> _openAudioAttempts(Map<String, dynamic> p) => [
+    for (final part in _parts(p))
+      if (part['state'] != 'done') part['attempt'] as String,
+    if (p['audioAttempt'] is String) p['audioAttempt'] as String,
+  ];
+
   Future<void> _releaseUnsentAudio(Map<String, dynamic> p) async {
-    for (final key in ['audioAttempt', 'textAttempt']) {
+    for (final attempt in [
+      ..._openAudioAttempts(p),
+      if (p['textAttempt'] is String) p['textAttempt'] as String,
+    ]) {
       try {
         final r = await connection.requestSharedBudget(
-          '/v1/budget/attempt/${p[key]}/release',
+          '/v1/budget/attempt/$attempt/release',
           body: {},
         );
         _readTextBudget((r['budget'] as Map).cast<String, dynamic>());
@@ -274,13 +337,13 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     }
     await _releaseUnsentAudio(p);
     // A lost send response is never considered unsent based on local state.
-    for (final key
-        in p['organizationOnly'] == true
-            ? ['textAttempt']
-            : ['audioAttempt', 'textAttempt']) {
+    for (final attempt in [
+      if (p['organizationOnly'] != true) ..._openAudioAttempts(p),
+      p['textAttempt'] as String,
+    ]) {
       try {
         final r = await connection.requestSharedBudget(
-          '/v1/budget/attempt/${p[key]}',
+          '/v1/budget/attempt/$attempt',
         );
         if ((r['attempt'] as Map)['state'] != 'released') {
           throw const ConnectionFailure('已有发送记录，预留保留。');
@@ -306,10 +369,26 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     if (job.status != AudioJobStatus.prepared) return job;
     try {
       if (p['organizationOnly'] != true) {
-        final bytes = await _verifiedAudio(
-          _audioQueue.source(id),
-          expected: p['source'] as Map,
+        // Estimated before the switch to Bailian: re-estimate, never send.
+        if (p['parts'] is! List) {
+          throw const ConnectionFailure('AI 服务已改为阿里云百炼，切换前的预估已释放；原音保留，请重新预估。');
+        }
+        final split = splitForTranscription(
+          await _verifiedAudio(
+            _audioQueue.source(id),
+            expected: p['source'] as Map,
+          ),
+          format: (p['source'] as Map)['format'] as String,
         );
+        final parts = _parts(p);
+        if (split.length != parts.length ||
+            [
+              for (var i = 0; i < split.length; i++)
+                split[i].bytes.length == parts[i]['bytes'] ||
+                    parts[i]['state'] == 'done',
+            ].contains(false)) {
+          throw const ConnectionFailure('音频内容与已检查原件不符，未上传。');
+        }
         for (final q in [p['audioQuote'], p['textQuote']]) {
           if ((q as Map)['expiresAt'] as int <=
               _clock().millisecondsSinceEpoch) {
@@ -318,18 +397,30 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
         }
         p['consented'] = true;
         await _saveAudioJob(id, AudioJobStatus.sending, p);
-        final reply = await connection.sendReservedAudio(
-          p['audioAttempt'] as String,
-          bytes: bytes,
-          format: (p['source'] as Map)['format'] as String,
-        );
-        p['transcript'] = reply.text;
-        p['generationId'] = reply.generationId;
-        p['usdNanos'] = reply.usdNanos;
+        for (var i = 0; i < parts.length; i++) {
+          final part = parts[i];
+          if (part['state'] == 'done') continue;
+          part['state'] = 'sending';
+          p['parts'] = parts;
+          await _saveAudioJob(id, AudioJobStatus.sending, p);
+          final reply = await connection.sendReservedAudio(
+            part['attempt'] as String,
+            bytes: split[i].bytes,
+            mime: split[i].mime,
+          );
+          part
+            ..['transcript'] = reply.text
+            ..['receipt'] = reply.settleBody
+            ..['state'] = 'done';
+          await _saveAudioJob(id, AudioJobStatus.sending, p);
+          await _settlePart(part);
+          await _saveAudioJob(id, AudioJobStatus.sending, p);
+        }
+        p['transcript'] = parts.map((part) => part['transcript']).join();
+        p['audioSettled'] = parts.every((part) => part['settled'] == true);
         await _saveAudioJob(id, AudioJobStatus.transcribed, p);
         // Save a locally readable complete transcript even when settlement fails.
         await _materializeTranscript(id, p);
-        await _settleAudio(p);
         if (p['audioSettled'] != true || budget.paused) {
           throw const ConnectionFailure('转写费用尚未核清或超出预留；完整转写保留，未发送整理。');
         }
@@ -467,6 +558,13 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
         final textId = p['textJob'] as String;
         final t = _textPayload(textId);
         if (t['result'] != null) throw StateError('已有整理结果，请核对已有内容，不重复计费。');
+        // The user consents to organizing the note as it is now, as when the
+        // organizing job is first created, so later edits stay protected.
+        final note = notes.firstWhere((n) => n.id == p['noteId']);
+        t['modifiedAt'] = note.modifiedAt.toIso8601String();
+        t['noteSnapshot'] = await vaultStorage.readText(
+          vaultStorage.relativePath(note.notePath),
+        );
         await _reserveNextText(textId, p['noteId'] as String, t);
         p['textQuote'] = t['quote'];
         p['textAttempt'] = (t['attempts'] as List).last;
@@ -524,7 +622,23 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     }
   }
 
-  Future<void> _settleAudio(Map<String, dynamic> p) async {
+  /// Settles a part from its saved receipt; without one the hold stays
+  /// (Bailian has no cost lookup by id, issue #34 Q9).
+  Future<void> _settlePart(Map<String, dynamic> part) async {
+    final receipt = part['receipt'];
+    if (receipt is! Map || part['settled'] == true) return;
+    final r = await connection.requestSharedBudget(
+      '/v1/budget/attempt/${part['attempt']}/settle',
+      body: receipt.cast<String, dynamic>(),
+    );
+    _readTextBudget((r['budget'] as Map).cast<String, dynamic>());
+    part
+      ..['settled'] = true
+      ..['cnyMicros'] = (r['attempt'] as Map)['actual_cny'];
+  }
+
+  /// A job saved before the switch: settles only with its saved USD receipt.
+  Future<void> _settleLegacyAudio(Map<String, dynamic> p) async {
     if (p['generationId'] == null || p['usdNanos'] == null) return;
     final r = await connection.requestSharedBudget(
       '/v1/budget/attempt/${p['audioAttempt']}/settle',
@@ -578,14 +692,23 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       Map<String, dynamic>? receipt = p;
       var unknown = false;
       while (receipt != null) {
-        if (receipt['generationId'] is String) {
-          receipt['usdNanos'] = await connection.lookupOpenRouterCost(
-            receipt['generationId'] as String,
+        if (receipt['parts'] is List) {
+          final parts = _parts(receipt);
+          for (final part in parts) {
+            await _settlePart(part);
+            if (part['state'] != 'reserved' && part['settled'] != true) {
+              unknown = true;
+            }
+          }
+          receipt['parts'] = parts;
+          receipt['audioSettled'] = parts.every(
+            (part) => part['settled'] == true,
           );
-          await _settleAudio(receipt);
-        } else if (receipt['consented'] == true &&
-            receipt['audioSettled'] != true) {
-          unknown = true;
+        } else {
+          await _settleLegacyAudio(receipt);
+          if (receipt['consented'] == true && receipt['audioSettled'] != true) {
+            unknown = true;
+          }
         }
         receipt = (receipt['previous'] as Map?)?.cast<String, dynamic>();
       }

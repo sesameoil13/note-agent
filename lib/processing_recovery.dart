@@ -96,10 +96,14 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
       final job = jobs[source.id];
       if (job != null) {
         final p = _audioPayload(source.id);
+        // Organized already: only a fee is left to check, never a re-run.
+        final organized =
+            p['textJob'] is String &&
+            _textPayload(p['textJob'] as String)['result'] != null;
         final recovery = switch (job.status) {
           AudioJobStatus.paused when job.transcript == null =>
             ProcessingRecovery.retry,
-          AudioJobStatus.paused when p['audioSettled'] != true =>
+          AudioJobStatus.paused when p['audioSettled'] != true || organized =>
             ProcessingRecovery.reconcileCost,
           AudioJobStatus.paused => ProcessingRecovery.reorganizeOnly,
           AudioJobStatus.prepared

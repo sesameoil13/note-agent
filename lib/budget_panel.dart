@@ -196,7 +196,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
                 if (job.generationId != null)
                   SelectableText('转写费用编号：${job.generationId}'),
                 Text(
-                  '转写费用：${job.knownCostUsdNanos == null ? '未知' : '\$${(job.knownCostUsdNanos! / 1000000000).toStringAsFixed(9)}'}',
+                  '转写费用：${job.knownCostCnyMicros == null ? '未知' : '¥${(job.knownCostCnyMicros! / 1000000).toStringAsFixed(6)}'}',
                 ),
                 Wrap(
                   spacing: 12,

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:note_agent/connection.dart';
 import 'package:note_agent/note_workspace.dart';
@@ -30,6 +31,15 @@ class BudgetFixture {
   String transcript = '明天下午两点整理会议记录。';
   bool omitAudioCost = false, omitAudioId = false;
   int audioStatus = 200;
+
+  /// Per-request statuses for transcription, used before [audioStatus].
+  final audioStatuses = <int>[];
+
+  /// Transcripts for successive parts; [transcript] when empty.
+  List<String> partTranscripts = [];
+
+  /// Seconds billed per transcription request, read from each WAV part.
+  final audioSeconds = <int>[];
   Map<String, dynamic>? lastAudioRequest;
   final modelStatuses = <int>[];
   bool malformedContent = false;
@@ -59,28 +69,14 @@ class BudgetFixture {
     );
     router = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     router.listen((r) async {
-      if (r.uri.path == '/audio/transcriptions') {
-        audioRequests++;
-        lastAudioRequest = jsonDecode(
-          await utf8.decoder.bind(r).join(),
-        ) as Map<String, dynamic>;
-        r.response.statusCode = audioStatus;
-        if (!omitAudioId) {
-          r.response.headers.set(
-            'X-Generation-Id',
-            'gen-audio-fixture-$audioRequests',
-          );
-        }
-        r.response.write(
-          jsonEncode({
-            'text': transcript,
-            if (!omitAudioCost) 'usage': {'cost': 0.00001},
-          }),
-        );
-      } else if (r.uri.path == '/chat/completions') {
+      if (r.uri.path == '/chat/completions') {
         final request = jsonDecode(
           await utf8.decoder.bind(r).join(),
         ) as Map<String, dynamic>;
+        if (request['model'] == 'qwen3-asr-flash') {
+          await _transcribe(r, request);
+          return;
+        }
         modelRequests.add(request);
         final status = modelStatuses.isEmpty ? 200 : modelStatuses.removeAt(0);
         if (status != 200) {
@@ -194,6 +190,50 @@ class BudgetFixture {
     final response = await request.close();
     await response.drain<void>();
     client.close();
+  }
+
+  /// Bailian's qwen3-asr-flash reply through chat/completions: the text as
+  /// the message, an id, and the billed seconds (here from the WAV header).
+  Future<void> _transcribe(HttpRequest r, Map<String, dynamic> request) async {
+    audioRequests++;
+    lastAudioRequest = request;
+    final status = audioStatuses.isEmpty
+        ? audioStatus
+        : audioStatuses.removeAt(0);
+    r.response.statusCode = status;
+    if (status != 200) {
+      r.response.write('{}');
+      await r.response.close();
+      return;
+    }
+    final content = ((request['messages'] as List).single as Map)['content'];
+    final data =
+        (((content as List).single as Map)['input_audio'] as Map)['data']
+            as String;
+    final audio = base64Decode(data.split(',').last);
+    final header = ByteData.sublistView(Uint8List.fromList(audio));
+    final seconds =
+        (header.getUint32(40, Endian.little) /
+                header.getUint32(28, Endian.little))
+            .ceil();
+    audioSeconds.add(seconds);
+    final text = partTranscripts.isEmpty
+        ? transcript
+        : partTranscripts.removeAt(0);
+    r.response.write(
+      jsonEncode({
+        if (!omitAudioId) 'id': 'chatcmpl-asr-fixture-$audioRequests',
+        'model': 'qwen3-asr-flash',
+        'choices': [
+          {
+            'finish_reason': 'stop',
+            'message': {'role': 'assistant', 'content': text},
+          },
+        ],
+        if (!omitAudioCost) 'usage': {'seconds': seconds},
+      }),
+    );
+    await r.response.close();
   }
 
   /// [whileClosed] runs between closing and reopening, e.g. to stand in for

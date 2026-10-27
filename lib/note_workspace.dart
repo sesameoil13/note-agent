@@ -26,6 +26,7 @@ import 'vault_storage.dart';
 import 'sync_policy.dart';
 import 'recordings.dart';
 import 'audio_queue.dart';
+import 'audio_split.dart';
 export 'audio_queue.dart'
     hide WorkspaceAudioQueue, AudioQueueCommit, AudioNoteMaterializer;
 import 'document_extraction.dart';

@@ -15,7 +15,9 @@ void main() {
         final f = BudgetFixture();
         await f.start();
         addTearDown(f.close);
-        f.omitAudioCost = true;
+        // The transcript is paid for, but organizing fails once (a 503), so
+        // organizing is deferred to an explicit organize-only retry.
+        f.modelStatuses.add(503);
         final w = f.workspaces.first;
         final source = await w.importAudio(
           original: await File('${f.root.path}/synthetic.wav')
@@ -25,15 +27,12 @@ void main() {
         await w.prepareAudioProcessing(source.id);
         await w.confirmAudioProcessing(source.id);
         expect(w.audioJobs.single.status, AudioJobStatus.paused);
-        expect(f.modelRequests, isEmpty);
+        expect(f.modelRequests, hasLength(1));
         final note = w.notes.single;
         final retained = (await File(note.notePath).readAsString())
             .replaceFirst('暂无关联', '- [[手工关联]]')
             .replaceFirst('\n记录：', '\n[手工来源](manual.txt)\n\n记录：');
         await File(note.notePath).writeAsString(retained);
-        f.generationAvailable = true;
-        f.generationCost = 0.00001;
-        await w.reconcileAudioProcessing(source.id);
         await w.prepareAudioOrganization(source.id);
         expect(w.audioJobs.single.status, AudioJobStatus.prepared);
         final external = '$retained\n准备后在外部补充。\n';
@@ -44,12 +43,14 @@ void main() {
         }
         await w.confirmAudioProcessing(source.id);
         expect(f.audioRequests, 1);
-        expect(f.modelRequests, hasLength(1));
+        expect(f.modelRequests, hasLength(2));
+        // The result is applied, but the failed first attempt may have been
+        // billed and has no receipt, so the job stays cost pending.
         expect(
           w.textJobs.single.status,
           changedAfterPreparation
               ? TextProcessingStatus.review
-              : TextProcessingStatus.completed,
+              : TextProcessingStatus.costPending,
         );
         final saved = w.notes.single;
         final md = await File(saved.notePath).readAsString();
@@ -71,7 +72,7 @@ void main() {
           md,
         );
         expect(f.audioRequests, 1);
-        expect(f.modelRequests, hasLength(1));
+        expect(f.modelRequests, hasLength(2));
       },
     );
   }
@@ -91,7 +92,7 @@ void main() {
     expect(f.modelRequests, isEmpty);
     final prepared = await w.prepareAudioProcessing(source.id);
     expect(prepared.estimatedCnyMicros, greaterThan(0));
-    expect(prepared.description, contains('不保证远端价格封顶'));
+    expect(prepared.description, contains('超出预留将如实记账'));
     expect(f.audioRequests, 0);
     f.modelResult = {
       'kind': 'todo',
@@ -109,8 +110,11 @@ void main() {
     await w.confirmAudioProcessing(source.id);
     expect(f.audioRequests, 1);
     expect(f.modelRequests, hasLength(1));
-    expect(f.lastAudioRequest!['model'], 'openai/whisper-large-v3-turbo');
-    expect(f.lastAudioRequest!['input_audio']['format'], 'wav');
+    expect(f.lastAudioRequest!['model'], 'qwen3-asr-flash');
+    expect(
+      jsonEncode(f.lastAudioRequest!['messages']),
+      contains('data:audio/wav;base64,'),
+    );
     expect(f.lastAudioRequest!.containsKey('provider'), false);
     final note = w.notes.single;
     expect(note.kind, NoteKind.todo);
@@ -305,7 +309,8 @@ void main() {
         await f.start();
         addTearDown(f.close);
         final w = f.workspaces.first;
-        f.omitAudioCost = deferred;
+        // Deferred: organizing fails once (503) and is retried on its own.
+        if (deferred) f.modelStatuses.add(503);
         final research = await w.captureText(
           title: '用户访谈',
           text: '访谈反映新手理解产品的障碍。',
@@ -337,13 +342,10 @@ void main() {
         await w.prepareAudioProcessing(source.id);
         await w.confirmAudioProcessing(source.id);
         if (deferred) {
-          expect(f.modelRequests, isEmpty);
-          f.generationAvailable = true;
-          f.generationCost = 0.00001;
-          await w.reconcileAudioProcessing(source.id);
+          expect(f.modelRequests, hasLength(1));
           await w.prepareAudioOrganization(source.id);
           expect(f.audioRequests, 1);
-          expect(f.modelRequests, isEmpty);
+          expect(f.modelRequests, hasLength(1));
           await w.confirmAudioProcessing(source.id);
         }
         final note = w.notes.firstWhere((n) => n.id == source.outputNoteId);
@@ -354,7 +356,8 @@ void main() {
         expect(note.originalText, f.transcript);
         expect(w.pendingTopicSuggestions.single.title, '引导流程');
         expect(w.notes, hasLength(3));
-        final request = f.modelRequests.single;
+        expect(f.modelRequests, hasLength(deferred ? 2 : 1));
+        final request = f.modelRequests.last;
         final input = jsonDecode(
           (request['messages'] as List).last['content'] as String,
         ) as Map;
@@ -382,16 +385,17 @@ void main() {
           note.id,
         );
         expect(f.audioRequests, 1);
-        expect(f.modelRequests, hasLength(1));
+        expect(f.modelRequests, hasLength(deferred ? 2 : 1));
       },
     );
   }
-  for (final mode in ['initial', 'deferred', 'retry']) {
+  // A "deferred" mode settled a missing receipt through OpenRouter's cost
+  // lookup; Bailian has none (issue #34, Q9), so "retry" is the deferred path.
+  for (final mode in ['initial', 'retry']) {
     test(
       'optional association context yields space to the complete Mandarin transcript within the consent bound ($mode)',
       () async {
         final f = BudgetFixture();
-        f.omitAudioCost = mode == 'deferred';
         if (mode == 'retry') f.modelStatuses.add(503);
         await f.start();
         addTearDown(f.close);
@@ -433,12 +437,6 @@ void main() {
         };
         await w.prepareAudioProcessing(source.id);
         await w.confirmAudioProcessing(source.id);
-        if (mode == 'deferred') {
-          expect(f.modelRequests, isEmpty);
-          f.generationAvailable = true;
-          f.generationCost = 0.00001;
-          await w.reconcileAudioProcessing(source.id);
-        }
         if (mode != 'initial') {
           await w.prepareAudioOrganization(source.id);
           expect(w.audioJobs.single.status, AudioJobStatus.prepared);

@@ -1,20 +1,5 @@
 part of 'connection.dart';
 
-// Parse the JSON number's decimal rendering into integer nano-USD. Binary
-// floating point multiplication must not turn an exact receipt into +1 nano.
-int _usdNanos(num value) {
-  if (value == 0) return 0;
-  final parts = value.toString().toLowerCase().split('e');
-  final mantissa = parts.first.split('.');
-  final fraction = mantissa.length == 2 ? mantissa[1] : '';
-  final digits = BigInt.parse(mantissa.first + fraction);
-  final shift =
-      9 + (parts.length == 2 ? int.parse(parts[1]) : 0) - fraction.length;
-  if (shift >= 0) return (digits * BigInt.from(10).pow(shift)).toInt();
-  final denominator = BigInt.from(10).pow(-shift);
-  return ((digits + denominator - BigInt.one) ~/ denominator).toInt();
-}
-
 /// Fixed text model on Bailian (ADR 0003); thinking is off.
 const textModelId = 'qwen-plus';
 Map<String, dynamic> textModelPayload(
@@ -381,60 +366,6 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
       throw const TextNetworkFailure('网络中断，可能已计费，预留未释放。', recoverable: true);
     } catch (_) {
       throw const TextNetworkFailure('模型响应未能确认，费用预留保留。');
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  /// OpenRouter's cost lookup, still used by the transcription stage until it
-  /// moves to Bailian's usage receipts; text no longer uses it (ADR 0003).
-  Future<int> lookupOpenRouterCost(String generationId) async {
-    if (!RegExp(r'^[a-zA-Z0-9_-]{8,80}$').hasMatch(generationId)) {
-      throw const ConnectionFailure('缺少有效费用记录编号，预留保留。');
-    }
-    await _ensureLoaded();
-    final key = _aiKey;
-    if (key == null) throw const ConnectionFailure('请先在 App 连接原账户，费用预留保留。');
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 15);
-    try {
-      final uri = _textApiBase
-          .resolve('generation')
-          .replace(queryParameters: {'id': generationId});
-      final request = await client
-          .getUrl(uri)
-          .timeout(const Duration(seconds: 15));
-      request.followRedirects = false;
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $key');
-      final response = await request.close().timeout(
-        const Duration(seconds: 20),
-      );
-      if (response.statusCode != 200) {
-        throw const ConnectionFailure('费用记录尚不可用或账户无法核对，预留保留；请稍后手动核对。');
-      }
-      final bytes = <int>[];
-      await for (final chunk in response.timeout(const Duration(seconds: 20))) {
-        bytes.addAll(chunk);
-        if (bytes.length > 65536) {
-          throw const ConnectionFailure('费用记录响应异常，预留保留。');
-        }
-      }
-      final decoded = jsonDecode(utf8.decode(bytes));
-      final data = decoded is Map ? decoded['data'] : null;
-      final cost = data is Map ? data['total_cost'] : null;
-      if (data is! Map ||
-          data['id'] != generationId ||
-          cost is! num ||
-          !cost.isFinite ||
-          cost < 0 ||
-          cost > 1000) {
-        throw const ConnectionFailure('费用记录无法核对，预留保留。');
-      }
-      return _usdNanos(cost);
-    } on ConnectionFailure {
-      rethrow;
-    } catch (_) {
-      throw const ConnectionFailure('费用核对暂时不可用，预留保留；请手动重试。');
     } finally {
       client.close(force: true);
     }

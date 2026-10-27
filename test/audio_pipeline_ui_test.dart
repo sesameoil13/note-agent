@@ -51,7 +51,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(f.audioRequests, 0);
         expect(f.modelRequests, isEmpty);
-        expect(find.textContaining('不保证远端价格封顶'), findsOneWidget);
+        expect(find.textContaining('超出预留将如实记账'), findsOneWidget);
         expect(find.textContaining('20000'), findsOneWidget);
         await tester.scrollUntilVisible(
           find.text('确认上传并转写整理（两阶段可能计费）'),
