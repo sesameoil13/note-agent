@@ -49,7 +49,8 @@ async function limited(url, max) {
 }
 async function quote(env, now) {
   const cached = await env.DB.prepare(
-    "SELECT payload FROM budget_quotes WHERE expires_at>? AND json_extract(payload,'$.purpose') IS NULL ORDER BY expires_at DESC LIMIT 1",
+    // Only OpenRouter text quotes are cached; Bailian quotes carry a currency.
+    "SELECT payload FROM budget_quotes WHERE expires_at>? AND json_extract(payload,'$.purpose') IS NULL AND json_extract(payload,'$.currency') IS NULL ORDER BY expires_at DESC LIMIT 1",
   )
     .bind(now)
     .first();

@@ -23,9 +23,10 @@ const PRICES = {
   },
 };
 
-function options(prices, persist) {
+function options(prices, persist, openRouter = false) {
   const mock = createFetchMock();
   mock.disableNetConnect();
+  if (openRouter) mockOpenRouter(mock);
   return {
     modules: true,
     scriptPath: "src/worker.mjs",
@@ -40,9 +41,46 @@ function options(prices, persist) {
   };
 }
 
-async function worker(prices = PRICES, persist) {
+// The old OpenRouter text price route and exchange rate, as older apps use.
+function mockOpenRouter(mock) {
+  mock
+    .get("https://openrouter.ai")
+    .intercept({
+      path: "/api/v1/models/deepseek/deepseek-v4.1-flash/endpoints",
+    })
+    .reply(200, {
+      data: {
+        id: "deepseek/deepseek-v4.1-flash",
+        endpoints: [
+          {
+            model_id: "deepseek/deepseek-v4.1-flash",
+            tag: "fixture/provider",
+            status: 0,
+            pricing: { prompt: "0.0000006", completion: "0.0000024" },
+            supported_parameters: [
+              "max_tokens",
+              "response_format",
+              "structured_outputs",
+              "reasoning",
+            ],
+          },
+        ],
+      },
+    })
+    .persist();
+  mock
+    .get("https://www.ecb.europa.eu")
+    .intercept({ path: "/stats/eurofxref/eurofxref-daily.xml" })
+    .reply(
+      200,
+      `<Cube time='${new Date().toISOString().slice(0, 10)}'><Cube currency='USD' rate='1'/><Cube currency='CNY' rate='7'/></Cube>`,
+    )
+    .persist();
+}
+
+async function worker(prices = PRICES, persist, openRouter = false) {
   const token = "bailian-test-owner-token-0000000032";
-  const mf = new Miniflare(options(prices, persist));
+  const mf = new Miniflare(options(prices, persist, openRouter));
   try {
     await migrate(mf);
   } catch (error) {
@@ -80,8 +118,8 @@ function requester(mf, token) {
   };
 }
 
-async function enrolled(prices, persist) {
-  const { mf, req } = await worker(prices, persist);
+async function enrolled(prices, persist, openRouter = false) {
+  const { mf, req } = await worker(prices, persist, openRouter);
   await req("/v1/enroll", {
     setupToken: "test-setup",
     deviceId: "bailian-owner",
@@ -296,5 +334,26 @@ test("a price change never re-prices an attempt that is already open", async () 
   } finally {
     await mf.dispose();
     await rm(persist, { recursive: true, force: true });
+  }
+});
+
+test("an older app still gets an OpenRouter quote after Bailian quotes exist", async () => {
+  const { mf, req } = await enrolled(PRICES, undefined, true);
+  try {
+    assert.equal(
+      (await req("/v1/budget/quote", { provider: "bailian-cn" })).status,
+      200,
+    );
+    const legacy = await req("/v1/budget/quote", {});
+    assert.equal(legacy.status, 200);
+    assert.equal(legacy.data.quote.provider, "fixture/provider");
+    assert.equal(legacy.data.quote.promptNano, 600);
+    assert.ok(legacy.data.quote.fxMicros > 0);
+    assert.equal(legacy.data.quote.currency, undefined);
+    // A cached OpenRouter quote is not handed to a Bailian request either.
+    const bailian = await req("/v1/budget/quote", { provider: "bailian-cn" });
+    assert.equal(bailian.data.quote.provider, "bailian-cn");
+  } finally {
+    await mf.dispose();
   }
 });
