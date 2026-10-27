@@ -28,17 +28,21 @@ List<(List<int>, List<int>)> adtsFrames(List<int> b) {
 }
 
 /// A synthetic MPEG-1 Layer III stream: an ID3v2 tag, then frames with valid
-/// headers (128 kbps, 44.1 kHz, mono) and a silent payload. No encoder is
-/// available here, so this checks frame handling, not decoding.
-List<int> syntheticMp3(int frames) {
-  const frameLength = 144 * 128000 ~/ 44100; // 417 bytes, no padding.
+/// headers (128 kbps, 44.1 kHz, mono), a side-info block whose first 9 bits
+/// are main_data_begin (bytes borrowed from earlier frames' bit reservoir,
+/// from [borrow]), and a filler payload. No encoder is available here, so this
+/// checks frame and reservoir handling, not decoding.
+const mp3FrameLength = 144 * 128000 ~/ 44100; // 417 bytes, no padding.
+List<int> syntheticMp3(int frames, {int Function(int frame)? borrow}) {
   final out = BytesBuilder()
     ..add([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, 10])
     ..add(List.filled(10, 0x20));
   for (var i = 0; i < frames; i++) {
+    final begin = borrow?.call(i) ?? 0;
     out
       ..add([0xFF, 0xFB, 0x90, 0xC4])
-      ..add(List.filled(frameLength - 4, i % 256));
+      ..add([begin >> 1, (begin & 1) << 7])
+      ..add(List.filled(mp3FrameLength - 6, i % 256));
   }
   return out.takeBytes();
 }
@@ -129,7 +133,7 @@ void main() {
       maxDuration: const Duration(seconds: 1),
     );
     expect(parts, hasLength(3));
-    final frames = [for (final p in parts) p.bytes.length ~/ 417];
+    final frames = [for (final p in parts) p.bytes.length ~/ mp3FrameLength];
     expect(frames.reduce((a, b) => a + b), 100);
     expect([for (final p in parts) ...p.bytes], mp3.sublist(20));
     expect(parts.first.mime, 'audio/mpeg');
@@ -162,4 +166,40 @@ void main() {
       throwsA(isA<FormatException>()),
     );
   });
+
+  test(
+    'an .mp3 part starts with the earlier frames its first frame borrows from',
+    () {
+      // Every frame borrows 500 bytes: more than one earlier frame's 396 bytes
+      // of main data (417 − 4 header − 17 side info), so two frames are needed.
+      final mp3 = syntheticMp3(100, borrow: (_) => 500);
+      final parts = splitForTranscription(
+        mp3,
+        format: 'mp3',
+        maxDuration: const Duration(seconds: 1),
+      );
+      expect(parts, hasLength(3));
+      final frames = mp3.sublist(20);
+      List<int> frame(int i) =>
+          frames.sublist(i * mp3FrameLength, (i + 1) * mp3FrameLength);
+      // Parts own frames 0–33, 34–67 and 68–99.
+      expect(parts[0].bytes, [for (var i = 0; i < 34; i++) ...frame(i)]);
+      expect(parts[1].bytes, [for (var i = 32; i < 68; i++) ...frame(i)]);
+      expect(parts[2].bytes, [for (var i = 66; i < 100; i++) ...frame(i)]);
+      // The duration counts only each part's own frames.
+      expect(parts[1].duration.inMilliseconds, closeTo(888, 1));
+
+      // A frame that borrows nothing needs nothing in front of it.
+      final independent = syntheticMp3(
+        100,
+        borrow: (i) => i % 34 == 0 ? 0 : 500,
+      );
+      final clean = splitForTranscription(
+        independent,
+        format: 'mp3',
+        maxDuration: const Duration(seconds: 1),
+      );
+      expect(clean[1].bytes.length, 34 * mp3FrameLength);
+    },
+  );
 }

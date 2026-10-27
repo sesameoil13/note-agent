@@ -292,9 +292,22 @@ Uint8List _adtsFrame((int, int, int) config, Uint8List payload) {
 
 // ----------------------------------------------------------------------- MP3
 
+/// MP3 frames may borrow up to 511 bytes of main data from earlier frames
+/// (the bit reservoir, `main_data_begin`). A part therefore starts with the
+/// earlier frames its first frame borrows from: a few tens of milliseconds of
+/// overlap, which its duration does not count.
 class _Mp3Frames extends _Frames {
-  _Mp3Frames(this.frames, this.samples, this.rate);
+  _Mp3Frames(
+    this.frames,
+    this.borrowed,
+    this.mainData,
+    this.samples,
+    this.rate,
+  );
   final List<Uint8List> frames;
+
+  /// Per frame: main_data_begin, and its own bytes of main data.
+  final List<int> borrowed, mainData;
   final int samples, rate;
   @override
   int get count => frames.length;
@@ -305,8 +318,13 @@ class _Mp3Frames extends _Frames {
       Duration(microseconds: (end - start) * samples * 1000000 ~/ rate);
   @override
   TranscriptionPart part(int start, int end) {
+    var first = start;
+    for (var covered = 0; first > 0 && covered < borrowed[start];) {
+      first--;
+      covered += mainData[first];
+    }
     final out = BytesBuilder(copy: false);
-    for (var i = start; i < end; i++) {
+    for (var i = first; i < end; i++) {
       out.add(frames[i]);
     }
     return TranscriptionPart(out.takeBytes(), 'mp3', duration(start, end));
@@ -328,6 +346,7 @@ _Mp3Frames _mp3(Uint8List b) {
     0: [11025, 12000, 8000],
   };
   final frames = <Uint8List>[];
+  final borrowed = <int>[], mainData = <int>[];
   int? rate, samples;
   while (i + 4 <= b.length) {
     // A trailing ID3v1 tag ends the stream.
@@ -348,12 +367,21 @@ _Mp3Frames _mp3(Uint8List b) {
     final padding = (b[i + 2] >> 1) & 1;
     final length = (version == 3 ? 144 : 72) * kbps * 1000 ~/ hz + padding;
     if (i + length > b.length) throw const FormatException('MP3 音频帧不完整。');
+    // Side information follows the header (and its CRC, if present).
+    final mono = (b[i + 3] >> 6) == 3;
+    final side = i + 4 + ((b[i + 1] & 1) == 0 ? 2 : 0);
+    final sideLength = version == 3 ? (mono ? 17 : 32) : (mono ? 9 : 17);
+    if (side + 2 > i + length || side + sideLength > i + length) {
+      throw const FormatException('MP3 音频帧不完整。');
+    }
+    borrowed.add(version == 3 ? (b[side] << 1) | (b[side + 1] >> 7) : b[side]);
+    mainData.add(i + length - side - sideLength);
     rate ??= hz;
     samples ??= version == 3 ? 1152 : 576;
     frames.add(Uint8List.sublistView(b, i, i + length));
     i += length;
   }
-  return _Mp3Frames(frames, samples ?? 1152, rate ?? 44100);
+  return _Mp3Frames(frames, borrowed, mainData, samples ?? 1152, rate ?? 44100);
 }
 
 // ----------------------------------------------------------------------- WAV
