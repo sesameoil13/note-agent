@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'console_charge_dialog.dart';
+
 import 'note_workspace.dart';
 import 'action_confirmation_screen.dart';
 
@@ -225,6 +227,18 @@ class _BudgetPanelState extends State<BudgetPanel> {
                               }),
                         child: const Text('取消未上传任务'),
                       ),
+                    if (job.status == AudioJobStatus.paused)
+                      OutlinedButton(
+                        onPressed: _busy
+                            ? null
+                            : () => recordConsoleCharges(
+                                context,
+                                w,
+                                'audio:${source.id}',
+                                run: _run,
+                              ),
+                        child: const Text('按控制台账单记录费用'),
+                      ),
                     if (job.status == AudioJobStatus.paused &&
                         job.transcript == null)
                       OutlinedButton(
@@ -322,6 +336,18 @@ class _BudgetPanelState extends State<BudgetPanel> {
                 spacing: 12,
                 runSpacing: 8,
                 children: [
+                  if (job.status == TextProcessingStatus.costPending)
+                    OutlinedButton(
+                      onPressed: _busy
+                          ? null
+                          : () => recordConsoleCharges(
+                              context,
+                              w,
+                              'text:${job.id}',
+                              run: _run,
+                            ),
+                      child: const Text('按控制台账单记录费用'),
+                    ),
                   if (job.status == TextProcessingStatus.prepared &&
                       !job.reorganization)
                     FilledButton(

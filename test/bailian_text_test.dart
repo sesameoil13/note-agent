@@ -164,4 +164,29 @@ void main() {
       expect(f.modelRequests.length, 1);
     },
   );
+
+  test('a lost response is listed, and the charge checked in the console settles it', () async {
+    final f = BudgetFixture()..omitCost = true;
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '想法', text: '明天十点给物业打电话。');
+    final job = await w.processTextNote(note.id);
+    expect(job.status, TextProcessingStatus.costPending);
+    // Organized, so not a processing failure: the job is the key.
+    expect(w.processingFailures, isEmpty);
+    final key = 'text:${job.id}';
+    final charges = await w.unconfirmedCharges(key);
+    expect(charges, hasLength(1));
+    expect(charges.single.heldCnyMicros, greaterThan(0));
+    expect(charges.single.label, contains('整理'));
+
+    await w.recordConfirmedCharge(key, charges.single.attemptId, 650);
+    await w.refreshBudget();
+    expect(w.budget.reservedCnyMicros, 0);
+    expect(w.budget.spentCnyMicros, 650);
+    expect(w.textJobs.single.knownCostCnyMicros, 650);
+    expect(await w.unconfirmedCharges(key), isEmpty);
+    expect(f.modelRequests, hasLength(1));
+  });
 }

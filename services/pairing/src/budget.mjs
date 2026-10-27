@@ -655,14 +655,25 @@ async function settleBailian(env, a, d, fail) {
         .first()
     ).payload,
   );
-  const receipt = bailianUsage(q, d);
-  if (!receipt || !id(d.responseId)) fail(400, "invalid_cost");
+  // A lost response has no receipt: the user may record the charge they
+  // checked in the Bailian console instead (no cost lookup by id exists).
+  const confirmed = "confirmedCnyMicros" in d;
+  if (confirmed && !integer(d.confirmedCnyMicros, 0, 30000000))
+    fail(400, "invalid_cost");
+  const receipt = confirmed
+    ? {
+        usage: JSON.stringify({ confirmedCnyMicros: d.confirmedCnyMicros }),
+        micro: d.confirmedCnyMicros,
+      }
+    : bailianUsage(q, d);
+  const responseId = confirmed ? null : d.responseId;
+  if (!receipt || (!confirmed && !id(responseId))) fail(400, "invalid_cost");
   const dispute = () =>
     env.DB.prepare("UPDATE budget_attempts SET disputed=1 WHERE id=?")
       .bind(a.id)
       .run();
   if (a.state === "settled") {
-    if (a.usage !== receipt.usage || a.generation_id !== d.responseId) {
+    if (a.usage !== receipt.usage || a.generation_id !== responseId) {
       await dispute();
       fail(409, "cost_conflict");
     }
@@ -673,13 +684,13 @@ async function settleBailian(env, a, d, fail) {
     await env.DB.prepare(
       "UPDATE budget_attempts SET state='settled',usage=?,actual_cny=?,generation_id=?,disputed=CASE WHEN ?>reserve_cny THEN 1 ELSE disputed END WHERE id=? AND state IN ('sent','uncertain')",
     )
-      .bind(receipt.usage, receipt.micro, d.responseId, receipt.micro, a.id)
+      .bind(receipt.usage, receipt.micro, responseId, receipt.micro, a.id)
       .run();
   } catch {
     const collision = await env.DB.prepare(
       "SELECT id FROM budget_attempts WHERE generation_id=? AND id<>?",
     )
-      .bind(d.responseId, a.id)
+      .bind(responseId, a.id)
       .first();
     if (!collision) fail(503, "budget_unavailable");
     await dispute();
@@ -692,7 +703,7 @@ async function settleBailian(env, a, d, fail) {
     .first();
   if (
     committed.usage !== receipt.usage ||
-    committed.generation_id !== d.responseId
+    committed.generation_id !== responseId
   ) {
     await dispute();
     fail(409, "cost_conflict");

@@ -539,6 +539,19 @@ class NoteWorkspace {
 
   /// Performs the next safe step for [id]. [original] is only used to choose
   /// a document again when its original was never completely retained.
+  /// Requests of a job whose cost is still unknown. [key] is `text:<job id>`
+  /// or `audio:<source id>`, the same form as a processing failure's id.
+  Future<List<UnconfirmedCharge>> unconfirmedCharges(String key) =>
+      _unconfirmedCharges(key);
+
+  /// Records the charge the user checked in the Bailian console for one of
+  /// [unconfirmedCharges], settling its hold; zero when it was not billed.
+  Future<void> recordConfirmedCharge(
+    String key,
+    String attemptId,
+    int cnyMicros,
+  ) => _trackText(_recordConfirmedCharge(key, attemptId, cnyMicros));
+
   Future<void> recoverProcessingFailure(String id, {File? original}) =>
       _recoverFailure(id, original);
 

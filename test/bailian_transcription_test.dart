@@ -184,4 +184,29 @@ void main() {
       expect(w.notes.single.originalText, '第一段内容。第二段内容。');
     },
   );
+
+  test('a part without a receipt is settled from the console, then organizing can go on', () async {
+    final f = BudgetFixture()..omitAudioCost = true;
+    await f.start();
+    addTearDown(f.close);
+    final w = f.workspaces.first;
+    final source = await importWave(f, 4, 'confirm-part');
+    await w.prepareAudioProcessing(source.id);
+    await w.confirmAudioProcessing(source.id);
+    final failure = w.processingFailures.single;
+    expect(failure.recovery, ProcessingRecovery.reconcileCost);
+    final charges = await w.unconfirmedCharges(failure.id);
+    expect(charges.map((c) => c.label), ['转写']);
+
+    await w.recordConfirmedCharge(failure.id, charges.single.attemptId, 1000);
+    await w.refreshBudget();
+    expect(w.budget.spentCnyMicros, 1000);
+    expect(w.budget.reservedCnyMicros, 0);
+    expect(
+      w.processingFailures.single.recovery,
+      ProcessingRecovery.reorganizeOnly,
+    );
+    expect(await w.unconfirmedCharges(failure.id), isEmpty);
+    expect(f.audioRequests, 1);
+  });
 }

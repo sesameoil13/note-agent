@@ -221,4 +221,127 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
         await retryDocumentExtraction(key, original: original);
     }
   }
+
+  /// (attempt, label, text job or null) of requests that may have been billed
+  /// and have no receipt, for the failure [failureId].
+  List<(String, String, String?)> _chargeCandidates(String failureId) {
+    final key = failureId.substring(failureId.indexOf(':') + 1);
+    final out = <(String, String, String?)>[];
+    void text(String jobId, String label) {
+      final p = _textPayload(jobId);
+      // Before the switch: the cost is checked with OpenRouter instead.
+      if ((p['quote'] as Map?)?['currency'] != 'CNY') return;
+      final receipts = (p['receipts'] as Map?) ?? const {};
+      for (final attempt in (p['attempts'] as List).cast<String>()) {
+        final r = receipts[attempt] as Map?;
+        if (r != null &&
+            (r['settled'] == true ||
+                r['released'] == true ||
+                r['settle'] is Map)) {
+          continue;
+        }
+        out.add((attempt, label, jobId));
+      }
+    }
+
+    if (failureId.startsWith('text:')) {
+      text(key, '整理');
+    } else if (failureId.startsWith('audio:') &&
+        audioJobs.any((j) => j.sourceId == key)) {
+      final current = _audioPayload(key);
+      Map<String, dynamic>? p = current;
+      while (p != null) {
+        final parts = _parts(p);
+        for (final part in parts) {
+          if (part['state'] == 'reserved' ||
+              part['settled'] == true ||
+              part['receipt'] != null) {
+            continue;
+          }
+          out.add((
+            part['attempt'] as String,
+            parts.length > 1
+                ? '转写第 ${(part['index'] as int) + 1}/${parts.length} 段'
+                : '转写',
+            null,
+          ));
+        }
+        p = (p['previous'] as Map?)?.cast<String, dynamic>();
+      }
+      if (current['textJob'] is String) {
+        text(current['textJob'] as String, '整理');
+      }
+    }
+    return out;
+  }
+
+  Future<List<UnconfirmedCharge>> _unconfirmedCharges(String failureId) async {
+    final out = <UnconfirmedCharge>[];
+    for (final (attempt, label, _) in _chargeCandidates(failureId)) {
+      try {
+        final r = await connection.requestSharedBudget(
+          '/v1/budget/attempt/$attempt',
+        );
+        final a = r['attempt'] as Map;
+        // Only what the shared ledger still holds as possibly billed.
+        if (['sent', 'uncertain'].contains(a['state'])) {
+          out.add(UnconfirmedCharge(attempt, label, a['reserve_cny'] as int));
+        }
+      } on ConnectionFailure catch (e) {
+        if (e.code != 'attempt_missing') rethrow;
+      }
+    }
+    return out;
+  }
+
+  Future<void> _recordConfirmedCharge(
+    String failureId,
+    String attemptId,
+    int cnyMicros,
+  ) async {
+    final candidate = _chargeCandidates(failureId)
+        .where((c) => c.$1 == attemptId)
+        .firstOrNull;
+    if (candidate == null) throw StateError('此请求无需核对，或已核对。');
+    final r = await connection.requestSharedBudget(
+      '/v1/budget/attempt/$attemptId/settle',
+      body: {'confirmedCnyMicros': cnyMicros},
+    );
+    _readTextBudget((r['budget'] as Map).cast<String, dynamic>());
+    final actual = (r['attempt'] as Map)['actual_cny'];
+    final key = failureId.substring(failureId.indexOf(':') + 1);
+    final textJob = candidate.$3;
+    if (textJob != null) {
+      final p = _textPayload(textJob);
+      p['receipts'] = {
+        ...?p['receipts'] as Map?,
+        attemptId: {'settled': true, 'confirmed': true, 'cnyMicros': actual},
+      };
+      await _saveText(
+        textJob,
+        textJobs.firstWhere((j) => j.id == textJob).status,
+        p,
+      );
+    } else {
+      final p = _audioPayload(key);
+      Map<String, dynamic>? payload = p;
+      while (payload != null) {
+        for (final part in (payload['parts'] as List?) ?? const []) {
+          if ((part as Map)['attempt'] == attemptId) {
+            part
+              ..['settled'] = true
+              ..['confirmed'] = true
+              ..['cnyMicros'] = actual;
+          }
+        }
+        payload = (payload['previous'] as Map?)?.cast<String, dynamic>();
+      }
+      await _saveAudioJob(key, _audioJob(key).status, p);
+    }
+    if (failureId.startsWith('audio:')) {
+      await _reconcileAudio(key);
+    } else {
+      await _reconcileText(key);
+    }
+  }
 }

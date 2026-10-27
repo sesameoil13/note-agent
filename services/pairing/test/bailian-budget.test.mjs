@@ -390,3 +390,77 @@ test("a recording may be split into as many parts as its size needs, up to eight
     await mf.dispose();
   }
 });
+
+test("a charge the user checked in the console settles a request whose response was lost", async () => {
+  const { mf, req } = await enrolled();
+  try {
+    const q = (await req("/v1/budget/quote", { provider: "bailian-cn" })).data
+      .quote;
+    const lost = async (attemptId) => {
+      const r = await req("/v1/budget/reserve", {
+        attemptId,
+        operationId: attemptId + "-op",
+        quoteId: q.id,
+        inputBytes: 1200,
+      });
+      await req(`/v1/budget/attempt/${attemptId}/send`, {});
+      return r.data.attempt.reserve_cny;
+    };
+    const reserved = await lost("bailian-lost-1");
+    const settled = await req("/v1/budget/attempt/bailian-lost-1/settle", {
+      confirmedCnyMicros: 650,
+    });
+    assert.equal(settled.status, 200);
+    assert.equal(settled.data.attempt.state, "settled");
+    assert.equal(settled.data.attempt.actual_cny, 650);
+    assert.equal(settled.data.budget.reservedCnyMicros, 0);
+    assert.equal(settled.data.budget.spentCnyMicros, 650);
+    // Recording the same amount again is harmless.
+    assert.equal(
+      (
+        await req("/v1/budget/attempt/bailian-lost-1/settle", {
+          confirmedCnyMicros: 650,
+        })
+      ).status,
+      200,
+    );
+
+    // Not billed at all is recorded as zero and frees the hold.
+    await lost("bailian-lost-2");
+    const zero = await req("/v1/budget/attempt/bailian-lost-2/settle", {
+      confirmedCnyMicros: 0,
+    });
+    assert.equal(zero.data.attempt.actual_cny, 0);
+
+    // Only whole, bounded amounts.
+    await lost("bailian-lost-4");
+    for (const bad of [-1, 1.5, 30000001, "650"])
+      assert.equal(
+        (
+          await req("/v1/budget/attempt/bailian-lost-4/settle", {
+            confirmedCnyMicros: bad,
+          })
+        ).status,
+        400,
+      );
+    // More than was held is recorded as it is, and pauses paid admission.
+    const held = await lost("bailian-lost-3");
+    const over = await req("/v1/budget/attempt/bailian-lost-3/settle", {
+      confirmedCnyMicros: held + 1,
+    });
+    assert.equal(over.data.attempt.actual_cny, held + 1);
+    assert.equal(over.data.budget.disputed, true);
+    assert.ok(reserved > 0);
+    // A different amount for a settled request is a dispute.
+    assert.equal(
+      (
+        await req("/v1/budget/attempt/bailian-lost-1/settle", {
+          confirmedCnyMicros: 700,
+        })
+      ).status,
+      409,
+    );
+  } finally {
+    await mf.dispose();
+  }
+});

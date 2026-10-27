@@ -40,6 +40,15 @@ enum TextProcessingStatus {
   review,
 }
 
+/// A paid request whose response was lost (ADR 0003). Bailian cannot look its
+/// cost up by id, so the hold stays until the user records the charge shown
+/// in the Bailian console.
+class UnconfirmedCharge {
+  const UnconfirmedCharge(this.attemptId, this.label, this.heldCnyMicros);
+  final String attemptId, label;
+  final int heldCnyMicros;
+}
+
 class WorkspaceTextJob {
   const WorkspaceTextJob({
     required this.id,
