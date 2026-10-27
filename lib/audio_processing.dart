@@ -193,6 +193,9 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       }
       previous = _audioPayload(id);
       await _releaseUnsentAudio(previous);
+    } else if (existing?.status == AudioJobStatus.cancelled) {
+      // A cancelled retry estimate still holds parts already paid for.
+      previous = _audioPayload(id);
     }
     final source = _audioQueue.source(id);
     final format = source.metadata!.container.toLowerCase();
@@ -413,14 +416,16 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
             ..['receipt'] = reply.settleBody
             ..['state'] = 'done';
           await _saveAudioJob(id, AudioJobStatus.sending, p);
-          await _settlePart(part);
+          try {
+            await _settlePart(part);
+          } on ConnectionFailure {
+            /* The receipt is saved; reconciling settles it later. */
+          }
           await _saveAudioJob(id, AudioJobStatus.sending, p);
         }
-        p['transcript'] = parts.map((part) => part['transcript']).join();
+        await _assembleTranscript(id, p);
         p['audioSettled'] = parts.every((part) => part['settled'] == true);
         await _saveAudioJob(id, AudioJobStatus.transcribed, p);
-        // Save a locally readable complete transcript even when settlement fails.
-        await _materializeTranscript(id, p);
         if (p['audioSettled'] != true || budget.paused) {
           throw const ConnectionFailure('转写费用尚未核清或超出预留；完整转写保留，未发送整理。');
         }
@@ -446,6 +451,11 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     } catch (e) {
       if (e is TextNetworkFailure && e.generationId != null) {
         p['generationId'] = e.generationId;
+      }
+      try {
+        await _assembleTranscript(id, p);
+      } catch (_) {
+        /* The parts and their transcripts stay saved in the job. */
       }
       p['failureKind'] = e is TextNetworkFailure
           ? e.code ?? (e.recoverable ? 'recoverable' : 'outcomeUnknown')
@@ -648,6 +658,20 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     p['audioSettled'] = true;
   }
 
+  /// Once every part has arrived, the complete transcript is saved and made
+  /// readable, whatever happens to settling its cost.
+  Future<void> _assembleTranscript(String id, Map<String, dynamic> p) async {
+    final parts = _parts(p);
+    if (p['transcript'] is String ||
+        parts.isEmpty ||
+        parts.any((part) => part['state'] != 'done')) {
+      return;
+    }
+    p['transcript'] = parts.map((part) => part['transcript']).join();
+    await _saveAudioJob(id, _audioJob(id).status, p);
+    await _materializeTranscript(id, p);
+  }
+
   Future<void> _materializeTranscript(String id, Map<String, dynamic> p) =>
       _mutate(() async {
         final source = _audioQueue.source(id);
@@ -713,6 +737,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
         receipt = (receipt['previous'] as Map?)?.cast<String, dynamic>();
       }
       p['previousUnknown'] = unknown;
+      await _assembleTranscript(id, p);
       final textId = p['textJob'];
       if (textId is String) await _reconcileText(textId);
       await _releaseUnsentAudio(p);

@@ -133,4 +133,55 @@ void main() {
       expect(f.generationReads, 0);
     },
   );
+
+  test(
+    'a transcript that arrives is published even if settling its cost fails',
+    () async {
+      final f = BudgetFixture();
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final source = await importWave(f, 4, 'settle-fails');
+      await w.prepareAudioProcessing(source.id);
+      f.failBudgetRequest = (path) => path.endsWith('/settle');
+      final job = await w.confirmAudioProcessing(source.id);
+      expect(job.status, AudioJobStatus.paused);
+      expect(job.transcript, f.transcript);
+      expect(w.notes.single.originalText, f.transcript);
+      expect(
+        w.processingFailures.single.recovery,
+        ProcessingRecovery.reconcileCost,
+      );
+
+      f.failBudgetRequest = null;
+      await w.reconcileAudioProcessing(source.id);
+      await w.refreshBudget();
+      expect(w.budget.spentCnyMicros, 1000);
+      expect(f.audioRequests, 1);
+    },
+  );
+
+  test(
+    'cancelling a retry estimate and estimating again keeps the paid parts',
+    () async {
+      final f = BudgetFixture()
+        ..partTranscripts = ['第一段内容。', '第二段内容。', '第二段内容。']
+        ..audioStatuses.addAll([200, 503]);
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final source = await importWave(f, 360, 'cancel-retry');
+      await w.prepareAudioProcessing(source.id);
+      await w.confirmAudioProcessing(source.id);
+      expect(f.audioRequests, 2);
+      await w.prepareAudioRetry(source.id);
+      await w.cancelAudioProcessing(source.id);
+      final again = await w.prepareAudioProcessing(source.id);
+      expect(again.status, AudioJobStatus.prepared, reason: again.message);
+      await w.confirmAudioProcessing(source.id);
+      // Only the second part is sent again; the first stays paid once.
+      expect(f.audioRequests, 3);
+      expect(w.notes.single.originalText, '第一段内容。第二段内容。');
+    },
+  );
 }

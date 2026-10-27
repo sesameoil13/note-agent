@@ -40,6 +40,16 @@ class BudgetFixture {
 
   /// Seconds billed per transcription request, read from each WAV part.
   final audioSeconds = <int>[];
+
+  /// Budget-service requests (paths under /v1/) to fail with a 503, as a
+  /// network blip would; others pass through to the local Worker.
+  bool Function(String path)? failBudgetRequest;
+  // Widget tests mock every HttpClient made in their zone; the proxy to the
+  // local Worker needs a real one.
+  final _proxy = HttpOverrides.runWithHttpOverrides(
+    HttpClient.new,
+    _RealHttpOverrides(),
+  );
   Map<String, dynamic>? lastAudioRequest;
   final modelStatuses = <int>[];
   bool malformedContent = false;
@@ -69,6 +79,10 @@ class BudgetFixture {
     );
     router = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     router.listen((r) async {
+      if (r.uri.path.startsWith('/v1/')) {
+        await _forward(r);
+        return;
+      }
       if (r.uri.path == '/chat/completions') {
         final request = jsonDecode(
           await utf8.decoder.bind(r).join(),
@@ -156,7 +170,7 @@ class BudgetFixture {
             keyCheck: AiKeyCheck(
               endpoint: Uri.parse('http://127.0.0.1:${router.port}/key'),
             ),
-            pairingEndpoint: endpoint,
+            pairingEndpoint: Uri.parse('http://127.0.0.1:${router.port}'),
             allowLocalPairingForTests: true,
           ),
         ),
@@ -190,6 +204,30 @@ class BudgetFixture {
     final response = await request.close();
     await response.drain<void>();
     client.close();
+  }
+
+  Future<void> _forward(HttpRequest r) async {
+    if (failBudgetRequest?.call(r.uri.path) ?? false) {
+      r.response.statusCode = 503;
+      r.response.write('{"error":"service_unavailable"}');
+      await r.response.close();
+      return;
+    }
+    final upstream = await _proxy.openUrl(
+      r.method,
+      endpoint.resolve(r.uri.toString().substring(1)),
+    );
+    r.headers.forEach((name, values) {
+      if (name == 'authorization' || name == 'content-type') {
+        upstream.headers.set(name, values);
+      }
+    });
+    await upstream.addStream(r);
+    final result = await upstream.close();
+    r.response.statusCode = result.statusCode;
+    r.response.headers.contentType = result.headers.contentType;
+    await r.response.addStream(result);
+    await r.response.close();
   }
 
   /// Bailian's qwen3-asr-flash reply through chat/completions: the text as
@@ -257,7 +295,7 @@ class BudgetFixture {
         keyCheck: AiKeyCheck(
           endpoint: Uri.parse('http://127.0.0.1:${router.port}/key'),
         ),
-        pairingEndpoint: endpoint,
+        pairingEndpoint: Uri.parse('http://127.0.0.1:${router.port}'),
         allowLocalPairingForTests: true,
       ),
     );
@@ -268,8 +306,11 @@ class BudgetFixture {
       await w.close();
     }
     await router.close(force: true);
+    _proxy.close(force: true);
     worker.kill(ProcessSignal.sigterm);
     await worker.exitCode;
     await root.delete(recursive: true);
   }
 }
+
+class _RealHttpOverrides extends HttpOverrides {}

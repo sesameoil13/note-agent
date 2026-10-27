@@ -315,7 +315,8 @@ function sourceBinding(d) {
     !["wav", "mp3", "m4a", "aac"].includes(s.format) ||
     !integer(s.durationMs, 1, 600000) ||
     (s.chunk !== undefined &&
-      (!integer(s.chunk.count, 1, 3) ||
+      // 25 MB in 7 MB parts needs four; eight leaves room for MP3 overlap.
+      (!integer(s.chunk.count, 1, 8) ||
         !integer(s.chunk.index, 0, s.chunk.count - 1) ||
         Object.keys(s.chunk).length !== 2))
   )

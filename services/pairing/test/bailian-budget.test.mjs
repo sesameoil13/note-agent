@@ -357,3 +357,36 @@ test("an older app still gets an OpenRouter quote after Bailian quotes exist", a
     await mf.dispose();
   }
 });
+
+test("a recording may be split into as many parts as its size needs, up to eight", async () => {
+  const { mf, req } = await enrolled();
+  try {
+    const q = (
+      await req("/v1/budget/quote", {
+        provider: "bailian-cn",
+        purpose: "transcription",
+      })
+    ).data.quote;
+    const reserve = (index, count) =>
+      req("/v1/budget/reserve", {
+        attemptId: `bailian-many-${index}-${count}`,
+        operationId: `bailian-many-op-${index}-${count}`,
+        quoteId: q.id,
+        purpose: "transcription",
+        inputBytes: 6000000,
+        source: {
+          sourceId: "bailian-many-source",
+          digest: "c".repeat(64),
+          format: "wav",
+          durationMs: 30000,
+          chunk: { index, count },
+        },
+      });
+    // A 25 MB WAV needs four 7 MB parts even when it is short.
+    assert.equal((await reserve(3, 4)).status, 201);
+    assert.equal((await reserve(7, 8)).status, 201);
+    assert.equal((await reserve(8, 9)).status, 400);
+  } finally {
+    await mf.dispose();
+  }
+});
