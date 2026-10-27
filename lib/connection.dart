@@ -120,7 +120,10 @@ class WorkspaceConnection {
     Uri? pairingEndpoint,
     Uri? textApiBase,
     bool allowLocalPairingForTests = false,
+    // Lets a test act as an original device still on the old version-1 format.
+    @visibleForTesting int pairingConfigVersionForTests = 2,
   }) : _store = secureStore,
+       _pairingConfigVersion = pairingConfigVersionForTests,
        _keyCheck = keyCheck ?? AiKeyCheck(),
        _textApiBase = textApiBase ?? Uri.parse(bailianApiBase),
        _configuredEndpoint = pairingEndpoint,
@@ -162,6 +165,7 @@ class WorkspaceConnection {
   final Uri _textApiBase;
   Uri get textApiBase => _textApiBase;
   final bool _allowLocalPairing;
+  final int _pairingConfigVersion;
   bool _loaded = false;
   WorkspacePairingState _pairing = const WorkspacePairingState();
   WorkspacePairingState get pairing => _pairing;

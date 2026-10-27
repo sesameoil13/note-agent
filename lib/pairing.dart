@@ -249,7 +249,7 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
     await _ensureLoaded();
     final device = _device;
     if (device?['role'] != 'owner' || _aiKey == null) {
-      throw const ConnectionFailure('请在已连接 OpenRouter 的原设备生成配对码。');
+      throw const ConnectionFailure('请在已连接阿里云百炼的原设备生成配对码。');
     }
     final pair =
         _outgoing ??
@@ -358,16 +358,27 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
             aad: aad,
           );
           final config = jsonDecode(utf8.decode(plain)) as Map;
-          if (config['version'] != 1 ||
-              config['pairId'] != incoming['id'] ||
-              config['deviceId'] != incoming['deviceId'] ||
-              config['openRouterKey'] is! String) {
+          if (config['pairId'] != incoming['id'] ||
+              config['deviceId'] != incoming['deviceId']) {
+            throw const FormatException();
+          }
+          // Version 1 carried an OpenRouter key (before ADR 0003). It is never
+          // saved or sent to Bailian; the original device must update first.
+          if (config['version'] == 1) {
+            throw const ConnectionFailure(
+              '原设备的 App 较旧，发送的是 OpenRouter 设置。请先更新原设备，再取消并重新配对。',
+              code: 'pair_version',
+            );
+          }
+          if (config['version'] != 2 ||
+              config['aiProvider'] != aiProvider ||
+              config['aiKey'] is! String) {
             throw const FormatException();
           }
           // Persist the received secret before acknowledging its one-time removal.
           await _commit({
             ..._credentials,
-            'aiKey': config['openRouterKey'],
+            'aiKey': config['aiKey'],
             'aiProvider': aiProvider,
             'incomingPair': {...incoming, 'received': true},
             'device': {
@@ -481,13 +492,23 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
       throw const ConnectionFailure('请求设备已变化，请取消并重新配对。');
     }
     final key = _aiKey;
-    if (key == null) throw const ConnectionFailure('请先连接 OpenRouter。');
-    final plain = jsonEncode({
-      'version': 1,
-      'pairId': pair['id'],
-      'deviceId': pending['deviceId'],
-      'openRouterKey': key,
-    });
+    if (key == null) throw const ConnectionFailure('请先连接阿里云百炼。');
+    final plain = jsonEncode(
+      _pairingConfigVersion == 1
+          ? {
+              'version': 1,
+              'pairId': pair['id'],
+              'deviceId': pending['deviceId'],
+              'openRouterKey': key,
+            }
+          : {
+              'version': 2,
+              'pairId': pair['id'],
+              'deviceId': pending['deviceId'],
+              'aiProvider': aiProvider,
+              'aiKey': key,
+            },
+    );
     final box = await AesGcm.with256bits().encrypt(
       utf8.encode(plain),
       secretKey: await _pairKey(pair),

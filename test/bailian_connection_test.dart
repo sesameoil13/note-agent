@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/connection.dart';
+import 'package:note_agent/note_workspace.dart';
 
 import 'support/budget_fixture.dart' show BudgetMemoryStore;
 
@@ -137,4 +138,126 @@ void main() {
       );
     },
   );
+
+  group('pairing hands the Bailian key over, and refuses an old format', () {
+    late Process worker;
+    late Uri pairingEndpoint;
+    late HttpServer bailian;
+    late Directory root;
+
+    setUp(() async {
+      root = await Directory.systemTemp.createTemp('bailian-pairing-');
+      worker = await Process.start(
+        Platform.environment['NOTE_AGENT_NODE'] ?? 'node',
+        ['tools/local-harness.mjs'],
+        workingDirectory: 'services/pairing',
+      );
+      worker.stderr.transform(utf8.decoder).listen((_) {});
+      pairingEndpoint = Uri.parse(
+        await worker.stdout
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(seconds: 20)),
+      );
+      bailian = await fakeBailian(
+        acceptedKey: 'sk-bailian-owner-test-key-0000',
+      );
+    });
+    tearDown(() async {
+      await bailian.close(force: true);
+      worker.kill();
+      await worker.exitCode;
+      await root.delete(recursive: true);
+    });
+
+    Future<NoteWorkspace> device(
+      String name,
+      BudgetMemoryStore store, {
+      int configVersion = 2,
+    }) async {
+      final base = Uri.parse(
+        'http://127.0.0.1:${bailian.port}/compatible-mode/v1/',
+      );
+      return NoteWorkspace.open(
+        localDirectory: Directory('${root.path}/$name-state'),
+        vaultDirectory: await Directory('${root.path}/$name-vault').create(),
+        connection: WorkspaceConnection(
+          secureStore: store,
+          keyCheck: AiKeyCheck(endpoint: base.resolve('models')),
+          textApiBase: base,
+          pairingEndpoint: pairingEndpoint,
+          allowLocalPairingForTests: true,
+          pairingConfigVersionForTests: configVersion,
+        ),
+      );
+    }
+
+    Future<void> pairUpToApproval(
+      NoteWorkspace owner,
+      NoteWorkspace phone,
+    ) async {
+      await owner.connection.connectAi('sk-bailian-owner-test-key-0000');
+      await owner.connection.activatePairing(
+        setupToken: 'local-test-setup-only',
+        deviceName: 'Mac',
+      );
+      await owner.connection.createPairing();
+      await phone.connection.joinPairing(
+        owner.connection.pairing.code!,
+        deviceName: '手机',
+      );
+      await owner.connection.refreshPairing();
+      await owner.connection.approvePairing(
+        verificationCode: phone.connection.pairing.verificationCode!,
+      );
+    }
+
+    test(
+      'the paired device receives the Bailian key, tagged with its provider',
+      () async {
+        final phoneStore = BudgetMemoryStore();
+        final owner = await device('mac', BudgetMemoryStore());
+        final phone = await device('phone', phoneStore);
+        addTearDown(() async {
+          await owner.close();
+          await phone.close();
+        });
+        await pairUpToApproval(owner, phone);
+        await phone.connection.refreshPairing();
+        expect(phone.connection.pairing.role, 'member');
+        final saved = jsonDecode(phoneStore.value!) as Map;
+        expect(saved['aiKey'], 'sk-bailian-owner-test-key-0000');
+        expect(saved['aiProvider'], 'bailian-cn');
+        await phone.connection.checkAi();
+        expect(phone.connection.state.connectionVerified, isTrue);
+      },
+    );
+
+    test('an original device on the old version is refused before anything is saved', () async {
+      final phoneStore = BudgetMemoryStore();
+      final owner = await device('mac', BudgetMemoryStore(), configVersion: 1);
+      final phone = await device('phone', phoneStore);
+      addTearDown(() async {
+        await owner.close();
+        await phone.close();
+      });
+      await pairUpToApproval(owner, phone);
+      await expectLater(
+        phone.connection.refreshPairing(),
+        throwsA(
+          isA<ConnectionFailure>().having(
+            (f) => f.message,
+            'message',
+            contains('请先更新原设备'),
+          ),
+        ),
+      );
+      expect(phone.connection.state.hasKey, isFalse);
+      final saved = jsonDecode(phoneStore.value!) as Map;
+      expect(saved.containsKey('aiKey'), isFalse);
+      expect(saved.containsKey('openRouterKey'), isFalse);
+      expect(phone.connection.pairing.role, isNull);
+    });
+  });
 }
