@@ -97,7 +97,7 @@ void main() {
           expect(request!['label'], label);
         }
 
-        await open('OpenRouter API Key');
+        await open('百炼 API Key');
         expect(request!['text'], isEmpty);
         const fixture = 'sk-or-v1-accessibility-only-test-key';
         sheet!.complete(fixture);
@@ -115,15 +115,15 @@ void main() {
               .toStringDeep(),
           isNot(contains(fixture)),
         );
-        await open('OpenRouter API Key');
+        await open('百炼 API Key');
         expect(request!['text'], fixture);
         sheet!.complete(null); // Cancel must keep the previous draft.
         await tester.pumpAndSettle();
-        await open('OpenRouter API Key');
+        await open('百炼 API Key');
         expect(request!['text'], fixture);
         sheet!.complete(''); // An empty native result cannot replace the draft.
         await tester.pumpAndSettle();
-        await open('OpenRouter API Key');
+        await open('百炼 API Key');
         expect(request!['text'], fixture);
         sheet!.complete('short');
         await tester.pumpAndSettle();
@@ -192,10 +192,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(find.text('连接与设备'), findsOneWidget);
-        expect(
-          find.widgetWithText(TextField, 'OpenRouter API Key'),
-          findsOneWidget,
-        );
+        expect(find.widgetWithText(TextField, '百炼 API Key'), findsOneWidget);
         expect(find.text('尚未连接阿里云百炼。'), findsOneWidget);
         await tester.pumpWidget(const SizedBox());
       } finally {

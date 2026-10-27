@@ -73,6 +73,9 @@ void main() {
             )
             .first,
       );
+      // Fully on screen, not just its edge, so the tap lands on it.
+      await tester.ensureVisible(find.text('确认发送并整理（可能产生费用）'));
+      await tester.pumpAndSettle();
       await tester.runAsync(
         () => HttpOverrides.runWithHttpOverrides(() async {
           await tester.tap(find.text('确认发送并整理（可能产生费用）'));

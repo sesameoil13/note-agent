@@ -89,7 +89,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
               (d['limitCnyMicros'] as int),
       message: d['disputed'] == true
           ? '费用存在不一致，暂停新收费任务；本机保存仍可使用。'
-          : '三端共享账本；预付余额需在 OpenRouter 官网查看，本 App 不接收管理 Key。',
+          : '三端共享账本；账户余额需在阿里云控制台查看。',
     );
   }
 
@@ -882,7 +882,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         final generation = receipt['generationId'];
         if (generation is! String) {
           throw const ConnectionFailure(
-            '本次发送没有可核对的费用编号；请在 OpenRouter 核对，预留不会自动释放。',
+            '本次发送没有可核对的费用编号；请在阿里云百炼控制台核对，预留不会自动释放。',
           );
         }
         final cost = await connection.lookupTextCost(generation);

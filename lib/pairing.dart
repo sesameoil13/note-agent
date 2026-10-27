@@ -391,7 +391,7 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
           });
           _state = const WorkspaceConnectionState(
             hasKey: true,
-            message: 'OpenRouter 配置已存入系统安全存储；设备配对确认尚未完成，请刷新重试。',
+            message: '阿里云百炼配置已存入系统安全存储；设备配对确认尚未完成，请刷新重试。',
           );
           await _presentPairing();
         } on ConnectionFailure {
@@ -414,7 +414,7 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
       await _commit({..._credentials}..remove('incomingPair'));
       _state = const WorkspaceConnectionState(
         hasKey: true,
-        message: '已安全接收 OpenRouter 配置，待检测连接。笔记库仍由本机授权。',
+        message: '已安全接收阿里云百炼配置，待检测连接。笔记库仍由本机授权。',
       );
       await _presentPairing();
       return;

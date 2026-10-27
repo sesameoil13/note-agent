@@ -155,7 +155,7 @@ List<SetupStepStatus> describeSetup({
         ? const SetupStepStatus(
             SetupStep.aiConnection,
             SetupEvidence.appVerified,
-            'App 已检测 OpenRouter 连接',
+            'App 已检测阿里云百炼连接',
           )
         : connection.hasKey
         ? SetupStepStatus(
@@ -166,7 +166,7 @@ List<SetupStepStatus> describeSetup({
         : const SetupStepStatus(
             SetupStep.aiConnection,
             SetupEvidence.notDone,
-            '尚未连接 OpenRouter，或从原设备配对获得',
+            '尚未连接阿里云百炼，或从原设备配对获得',
           ),
     pairing.role != null
         ? SetupStepStatus(

@@ -90,7 +90,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               ),
               const SizedBox(height: 16),
               const Text(
-                '先连接 OpenRouter，再让其他设备安全加入。每台设备仍需自行授权笔记库、麦克风和通知。',
+                '先连接阿里云百炼，再让其他设备安全加入。每台设备仍需自行授权笔记库、麦克风和通知。',
                 style: TextStyle(height: 1.6),
               ),
               if (_error != null) ...[
@@ -102,7 +102,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               ],
               const SizedBox(height: 32),
               const Text(
-                'OpenRouter',
+                '阿里云百炼（北京）',
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 12),
@@ -114,12 +114,8 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               SecureConnectionField(
                 controller: _key,
                 enabled: !_busy,
-                label: connection.state.hasKey
-                    ? '替换 OpenRouter API Key'
-                    : 'OpenRouter API Key',
-                actionLabel: connection.state.hasKey
-                    ? '替换 OpenRouter API Key'
-                    : null,
+                label: connection.state.hasKey ? '替换百炼 API Key' : '百炼 API Key',
+                actionLabel: connection.state.hasKey ? '替换百炼 API Key' : null,
                 helperText: '仅存入本机系统安全存储；连接检测不调用收费模型。',
               ),
               const SizedBox(height: 16),

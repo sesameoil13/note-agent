@@ -163,7 +163,7 @@ class _SetupScreenState extends State<SetupScreen> {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
               ),
               const Text(
-                '第一台连接 OpenRouter。已有原设备时，从原设备生成配对码加入；不要再次启用或清除原设备身份。每台设备单独授权自己的本地库。',
+                '第一台连接阿里云百炼。已有原设备时，从原设备生成配对码加入；不要再次启用或清除原设备身份。每台设备单独授权自己的本地库。',
               ),
               OutlinedButton(
                 onPressed: _busy
@@ -293,7 +293,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
                 ),
                 const Text(
-                  '预付余额：未知，请在 OpenRouter 账户查看。普通模型 Key 不能读取账户预付余额，App 不接收管理 Key。充值前核对实际金额、费用，并保持自动充值关闭。App 不自动充值。',
+                  '账户余额：未知，请在阿里云控制台（费用与成本）查看。App 的 Key 不能读取账户余额。充值前核对实际金额、费用，并保持自动充值关闭。App 不自动充值。',
                 ),
                 Text(
                   budget!.connected

@@ -32,7 +32,7 @@ extension WorkspaceBudgetConnection on WorkspaceConnection {
         'invalid_budget' => '月上限须大于 0 且不超过 30 元，文字输入也可能超出单次上限。',
         'attempt_not_sendable' => '此尝试已发送或结束，不会重复发送。',
         'cost_conflict' ||
-        'generation_conflict' => '费用回执不一致，已暂停新收费任务；保留原文与账本，请核对 OpenRouter 记录。',
+        'generation_conflict' => '费用回执不一致，已暂停新收费任务；保留原文与账本，请在阿里云百炼控制台核对账单。',
         _ => e.message,
       };
       throw ConnectionFailure(message, code: e.code);

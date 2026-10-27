@@ -108,7 +108,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
           Text(budget.message),
           const Divider(height: 32),
           const Text(
-            'OpenRouter 预付余额：未知。普通 Key 无权查询账户余额，请在 OpenRouter 官网核对。预付款可跨月使用，与本月消耗分开计算。App 不自动充值、不升级套餐；官网自动充值设置需你自行核对。',
+            '阿里云账户余额：未知，App 无权查询，请在阿里云控制台核对。余额可跨月使用，与本月消耗分开计算。App 不自动充值、不升级套餐；控制台自动充值设置需你自行核对。',
           ),
           const Text(
             '人民币消耗按各次冻结汇率（含 10% 汇率余量）保守折算，预留再含 25% 余量。30 元上限仅用于 AI 消耗，不包含 Obsidian Sync 订阅。保留未知费用可能暂时减少可用额度；跨月不会自动释放。',

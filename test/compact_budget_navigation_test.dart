@@ -106,6 +106,9 @@ void main() {
                 )
                 .first,
           );
+          // Fully on screen, not just its edge, so the tap lands on it.
+          await tester.ensureVisible(cancel);
+          await tester.pumpAndSettle();
           await tester.runAsync(() async {
             await tester.tap(cancel);
             await Future<void>.delayed(const Duration(milliseconds: 100));

@@ -81,7 +81,7 @@ class _ProcessingFailuresScreenState extends State<ProcessingFailuresScreen> {
             if (f.nextAutomaticRetryAt != null)
               Text('下次自动重试：${formatNoteTime(f.nextAutomaticRetryAt!)}'),
             if (f.needsAccountAction)
-              const Text('请先在 App 或 OpenRouter 官网处理 Key、余额或预算，再手动重试。'),
+              const Text('请先在 App 或阿里云控制台处理 Key、余额或预算，再手动重试。'),
             if (f.recovery == ProcessingRecovery.confirmPrepared &&
                 f.estimatedCnyMicros > 0)
               Text('已预留 ${_money(f.estimatedCnyMicros)}；实际按费用回执结算。'),

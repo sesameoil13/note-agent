@@ -25,7 +25,7 @@ class FakeConnection implements FirstRunServices {
   WorkspaceConnectionState get state => WorkspaceConnectionState(
     hasKey: hasKey,
     connectionVerified: hasKey,
-    message: hasKey ? 'OpenRouter 连接成功。' : '尚未连接 OpenRouter。',
+    message: hasKey ? '阿里云百炼连接成功。' : '尚未连接阿里云百炼。',
   );
 
   @override
@@ -218,7 +218,7 @@ void main() {
 
       expect(find.text('连接 AI'), findsOneWidget);
       await tester.enterText(
-        find.widgetWithText(TextField, 'OpenRouter API Key'),
+        find.widgetWithText(TextField, '百炼 API Key'),
         'sk-or-v1-test-key-0000',
       );
       await tester.enterText(find.widgetWithText(TextField, '首次启用码'), 'setup');
@@ -262,7 +262,7 @@ void main() {
         answers: const FirstRunAnswers(started: true, firstDevice: false),
       );
       expect(find.text('加入已有设备'), findsOneWidget);
-      expect(find.text('OpenRouter API Key'), findsNothing);
+      expect(find.text('百炼 API Key'), findsNothing);
       await tester.enterText(
         find.widgetWithText(TextField, '配对码'),
         'noteagent-pair://join',
@@ -291,7 +291,7 @@ void main() {
         answers: const FirstRunAnswers(started: true, firstDevice: true),
       );
       await tester.enterText(
-        find.widgetWithText(TextField, 'OpenRouter API Key'),
+        find.widgetWithText(TextField, '百炼 API Key'),
         'sk-or-v1-test-key-0000',
       );
       await tester.enterText(find.widgetWithText(TextField, '首次启用码'), 'wrong');
@@ -299,10 +299,7 @@ void main() {
       await tapAndSettle(tester, find.text('检测并启用'));
       expect(find.text('首次启用码无效，请核对后重试。'), findsOneWidget);
       expect(find.text('连接 AI'), findsOneWidget);
-      expect(
-        find.widgetWithText(TextField, 'OpenRouter API Key'),
-        findsNothing,
-      );
+      expect(find.widgetWithText(TextField, '百炼 API Key'), findsNothing);
 
       await tester.enterText(find.widgetWithText(TextField, '首次启用码'), 'setup');
       await tapAndSettle(tester, find.text('检测并启用'));
@@ -469,7 +466,7 @@ void main() {
       );
       expect(find.textContaining('首次启用码是部署配对服务时生成的一次性码'), findsOneWidget);
       await tester.enterText(
-        find.widgetWithText(TextField, 'OpenRouter API Key'),
+        find.widgetWithText(TextField, '百炼 API Key'),
         'sk-or-v1-test-key-0000',
       );
       await tester.enterText(

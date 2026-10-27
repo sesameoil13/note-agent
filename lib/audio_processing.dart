@@ -599,7 +599,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
         p,
         error: p['audioSettled'] == true && p['previousUnknown'] != true
             ? '费用已核对；不重新调用模型。'
-            : '缺少可核对的转写费用编号，未知预留保留，请在 OpenRouter 核对。',
+            : '缺少可核对的转写费用编号，未知预留保留，请在阿里云百炼控制台核对。',
       );
     } catch (e) {
       await _saveAudioJob(

@@ -41,7 +41,7 @@ void main() {
       expect(find.textContaining('共享月上限 尚未核对'), findsOneWidget);
       expect(find.textContaining('本月实际消耗 未知'), findsOneWidget);
       expect(find.textContaining('政策最多 30 元'), findsOneWidget);
-      expect(find.textContaining('预付余额：未知'), findsOneWidget);
+      expect(find.textContaining('账户余额：未知'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -69,7 +69,7 @@ void main() {
       expect(find.textContaining('本月预算：¥0.10'), findsOneWidget);
       expect(find.textContaining('保守折算消耗：¥0.00'), findsOneWidget);
       expect(find.textContaining('共享月上限 尚未核对'), findsNothing);
-      expect(find.textContaining('预付余额：未知'), findsOneWidget);
+      expect(find.textContaining('账户余额：未知'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );
