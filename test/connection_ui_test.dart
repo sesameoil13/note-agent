@@ -129,7 +129,7 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('检测并安全保存'));
         await tester.pumpAndSettle();
-        expect(find.text('请输入完整的 OpenRouter API Key。'), findsWidgets);
+        expect(find.text('请输入完整的阿里云百炼 API Key。'), findsWidgets);
         await open('首次启用码');
         expect(request!['text'], isEmpty);
         sheet!.complete(null);
@@ -196,7 +196,7 @@ void main() {
           find.widgetWithText(TextField, 'OpenRouter API Key'),
           findsOneWidget,
         );
-        expect(find.text('尚未连接 OpenRouter。'), findsOneWidget);
+        expect(find.text('尚未连接阿里云百炼。'), findsOneWidget);
         await tester.pumpWidget(const SizedBox());
       } finally {
         semantics.dispose();

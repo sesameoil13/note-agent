@@ -48,14 +48,20 @@ class ConnectionFailure implements Exception {
 }
 
 /// OpenRouter system boundary: this operation only reads key metadata.
-class OpenRouterKeyCheck {
-  OpenRouterKeyCheck({Uri? endpoint})
-    : endpoint = endpoint ?? Uri.https('openrouter.ai', '/api/v1/key');
+/// Bailian's AI service (ADR 0003), saved with the key so a device that
+/// still holds an old OpenRouter key is asked to reconnect.
+const aiProvider = 'bailian-cn';
+const bailianApiBase = 'https://dashscope.aliyuncs.com/compatible-mode/v1/';
+
+/// Checks a key by listing models, which Bailian does not bill (issue #34).
+class AiKeyCheck {
+  AiKeyCheck({Uri? endpoint})
+    : endpoint = endpoint ?? Uri.parse(bailianApiBase).resolve('models');
   final Uri endpoint;
 
   Future<void> verify(String key) async {
     if (key.length < 16 || key.length > 256 || RegExp(r'\s').hasMatch(key)) {
-      throw const ConnectionFailure('请输入完整的 OpenRouter API Key。');
+      throw const ConnectionFailure('请输入完整的阿里云百炼 API Key。');
     }
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
@@ -72,21 +78,18 @@ class OpenRouterKeyCheck {
         throw const ConnectionFailure('Key 无效或已被撤销，请在 App 内重新连接。');
       }
       if (response.statusCode != 200) {
-        throw const ConnectionFailure('OpenRouter 暂时无法连接，请稍后手动重试。');
+        throw const ConnectionFailure('阿里云百炼暂时无法连接，请稍后手动重试。');
       }
       final bytes = <int>[];
       await for (final chunk in response.timeout(const Duration(seconds: 20))) {
         bytes.addAll(chunk);
-        if (bytes.length > 65536) {
+        if (bytes.length > 1048576) {
           throw const ConnectionFailure('连接检测响应异常，请稍后重试。');
         }
       }
       final body = jsonDecode(utf8.decode(bytes));
-      final data = body is Map ? body['data'] : null;
-      if (data is! Map) throw const ConnectionFailure('连接检测响应异常，请稍后重试。');
-      if (data['is_management_key'] == true ||
-          data['is_provisioning_key'] == true) {
-        throw const ConnectionFailure('请使用普通模型 API Key，不要使用账户管理 Key。');
+      if (body is! Map || body['data'] is! List) {
+        throw const ConnectionFailure('连接检测响应异常，请稍后重试。');
       }
     } on ConnectionFailure {
       rethrow;
@@ -102,7 +105,7 @@ class WorkspaceConnectionState {
   const WorkspaceConnectionState({
     this.hasKey = false,
     this.connectionVerified = false,
-    this.message = '尚未连接 OpenRouter。',
+    this.message = '尚未连接阿里云百炼。',
   });
   final bool hasKey;
   final bool connectionVerified;
@@ -113,16 +116,16 @@ class WorkspaceConnectionState {
 class WorkspaceConnection {
   WorkspaceConnection({
     required SecureCredentialStore secureStore,
-    OpenRouterKeyCheck? openRouter,
+    AiKeyCheck? keyCheck,
     Uri? pairingEndpoint,
     Uri? textApiBase,
     bool allowLocalPairingForTests = false,
   }) : _store = secureStore,
-       _openRouter = openRouter ?? OpenRouterKeyCheck(),
-       _textApiBase = textApiBase ?? Uri.parse('https://openrouter.ai/api/v1/'),
+       _keyCheck = keyCheck ?? AiKeyCheck(),
+       _textApiBase = textApiBase ?? Uri.parse(bailianApiBase),
        _configuredEndpoint = pairingEndpoint,
        _allowLocalPairing = allowLocalPairingForTests {
-    final production = Uri.parse('https://openrouter.ai/api/v1/');
+    final production = Uri.parse(bailianApiBase);
     final loopback =
         allowLocalPairingForTests &&
         _textApiBase.scheme == 'http' &&
@@ -157,6 +160,7 @@ class WorkspaceConnection {
   }
   final Uri? _configuredEndpoint;
   final Uri _textApiBase;
+  Uri get textApiBase => _textApiBase;
   final bool _allowLocalPairing;
   bool _loaded = false;
   WorkspacePairingState _pairing = const WorkspacePairingState();
@@ -164,10 +168,17 @@ class WorkspaceConnection {
   bool get pairingServiceConfigured => _configuredEndpoint != null;
   Uri? get pairingEndpoint => _configuredEndpoint;
   final SecureCredentialStore _store;
-  final OpenRouterKeyCheck _openRouter;
+  final AiKeyCheck _keyCheck;
   Map<String, dynamic> _credentials = {};
   WorkspaceConnectionState _state = const WorkspaceConnectionState();
   WorkspaceConnectionState get state => _state;
+
+  /// The Bailian key, or null when none (or only an old OpenRouter key) is kept.
+  String? get _aiKey =>
+      _credentials['aiProvider'] == aiProvider &&
+          _credentials['aiKey'] is String
+      ? _credentials['aiKey'] as String
+      : null;
 
   Future<void> _ensureLoaded() async {
     if (!_loaded) await restore();
@@ -191,31 +202,34 @@ class WorkspaceConnection {
       await _presentPairing();
       _loaded = true;
       _state = WorkspaceConnectionState(
-        hasKey: _credentials['openRouterKey'] is String,
-        message: _credentials['openRouterKey'] is String
+        hasKey: _aiKey != null,
+        message: _aiKey != null
             ? 'Key 已保存在系统安全存储，待检测连接。'
-            : '尚未连接 OpenRouter。',
+            // The old OpenRouter key stays on this device only (ADR 0003).
+            : _credentials['openRouterKey'] is String
+            ? 'AI 服务已改为阿里云百炼，请重新连接。'
+            : '尚未连接阿里云百炼。',
       );
     } catch (_) {
       throw const ConnectionFailure('系统安全存储暂时不可用，请解锁设备后重试。');
     }
   }
 
-  Future<void> connectOpenRouter(String enteredKey) async {
+  Future<void> connectAi(String enteredKey) async {
     await _ensureLoaded();
     final key = enteredKey.trim();
     try {
-      await _openRouter.verify(key);
-      final next = {..._credentials, 'openRouterKey': key};
+      await _keyCheck.verify(key);
+      final next = {..._credentials, 'aiKey': key, 'aiProvider': aiProvider};
       await _commit(next);
       _state = const WorkspaceConnectionState(
         hasKey: true,
         connectionVerified: true,
-        message: 'OpenRouter 连接成功。Key 已存入系统安全存储；检测未调用收费模型。',
+        message: '阿里云百炼连接成功。Key 已存入系统安全存储；检测未调用收费模型。',
       );
     } on ConnectionFailure catch (error) {
       _state = WorkspaceConnectionState(
-        hasKey: _credentials['openRouterKey'] is String,
+        hasKey: _aiKey != null,
         message: error.message,
       );
       rethrow;
@@ -224,11 +238,11 @@ class WorkspaceConnection {
     }
   }
 
-  Future<void> checkOpenRouter() async {
+  Future<void> checkAi() async {
     await _ensureLoaded();
-    final key = _credentials['openRouterKey'] as String?;
-    if (key == null) throw const ConnectionFailure('请先在 App 内连接 OpenRouter。');
-    await connectOpenRouter(key);
+    final key = _aiKey;
+    if (key == null) throw const ConnectionFailure('请先在 App 内连接阿里云百炼。');
+    await connectAi(key);
   }
 
   /// First-run answers are per device and exist before any vault is chosen,
@@ -246,10 +260,12 @@ class WorkspaceConnection {
     await _commit({..._credentials, 'firstRun': answers.toJson()});
   }
 
-  Future<void> disconnectOpenRouter() async {
+  Future<void> disconnectAi() async {
     await _ensureLoaded();
-    final next = {..._credentials}..remove('openRouterKey');
+    final next = {..._credentials}
+      ..remove('aiKey')
+      ..remove('aiProvider');
     await _commit(next);
-    _state = const WorkspaceConnectionState(message: '已从本机移除 OpenRouter Key。');
+    _state = const WorkspaceConnectionState(message: '已从本机移除阿里云百炼 Key。');
   }
 }

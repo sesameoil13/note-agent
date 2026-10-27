@@ -17,7 +17,7 @@ extension WorkspaceAudioNetwork on WorkspaceConnection {
     required String format,
   }) async {
     await _ensureLoaded();
-    final key = _credentials['openRouterKey'] as String?;
+    final key = _aiKey;
     if (key == null) throw const ConnectionFailure('请先在 App 连接 OpenRouter。');
     await requestSharedBudget('/v1/budget/attempt/$attemptId/send', body: {});
     final client = HttpClient()

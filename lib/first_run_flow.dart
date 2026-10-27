@@ -12,8 +12,8 @@ abstract interface class FirstRunServices {
   WorkspaceConnectionState get state;
   WorkspacePairingState get pairing;
   bool get pairingServiceConfigured;
-  Future<void> connectOpenRouter(String key);
-  Future<void> checkOpenRouter();
+  Future<void> connectAi(String key);
+  Future<void> checkAi();
   Future<void> activatePairing({
     required String setupToken,
     required String deviceName,
@@ -33,10 +33,9 @@ class ConnectionFirstRunServices implements FirstRunServices {
   @override
   bool get pairingServiceConfigured => connection.pairingServiceConfigured;
   @override
-  Future<void> connectOpenRouter(String key) =>
-      connection.connectOpenRouter(key);
+  Future<void> connectAi(String key) => connection.connectAi(key);
   @override
-  Future<void> checkOpenRouter() => connection.checkOpenRouter();
+  Future<void> checkAi() => connection.checkAi();
   @override
   Future<void> activatePairing({
     required String setupToken,
@@ -367,7 +366,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
         () => _run(() async {
           // A saved key is not entered again when only registration failed.
           if (!widget.connection.state.hasKey) {
-            await widget.connection.connectOpenRouter(_key.text);
+            await widget.connection.connectAi(_key.text);
             _key.clear();
           }
           try {
@@ -394,7 +393,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
   /// The outcome is saved, so a restart after a failed check comes back here.
   Future<void> _checkReceivedKey() async {
     try {
-      await widget.connection.checkOpenRouter();
+      await widget.connection.checkAi();
     } catch (_) {
       await widget.saveAnswers(
         _answers = _answers.copyWith(keyCheckFailed: true),

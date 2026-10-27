@@ -29,17 +29,14 @@ void main() {
         }
         await request.response.close();
       });
-      final metadata = OpenRouterKeyCheck(
+      final metadata = AiKeyCheck(
         endpoint: Uri.parse('http://127.0.0.1:${server.port}/key'),
       );
       await store.delete();
       final workspace = await NoteWorkspace.open(
         localDirectory: Directory('${folder.path}/state'),
         vaultDirectory: vault,
-        connection: WorkspaceConnection(
-          secureStore: store,
-          openRouter: metadata,
-        ),
+        connection: WorkspaceConnection(secureStore: store, keyCheck: metadata),
       );
       try {
         await tester.pumpWidget(NoteAgentApp(initialWorkspace: workspace));
@@ -56,10 +53,10 @@ void main() {
         expect(workspace.connection.state.connectionVerified, isTrue);
         final restored = WorkspaceConnection(
           secureStore: store,
-          openRouter: metadata,
+          keyCheck: metadata,
         );
         await restored.restore();
-        await restored.checkOpenRouter();
+        await restored.checkAi();
         expect(restored.state.connectionVerified, isTrue);
         expect(find.text('sk-or-v1-native-fixture-key'), findsNothing);
       } finally {

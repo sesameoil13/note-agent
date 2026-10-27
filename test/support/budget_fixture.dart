@@ -144,7 +144,7 @@ class BudgetFixture {
           r.response.write('{}');
         }
       } else {
-        r.response.write('{"data":{"is_management_key":false}}');
+        r.response.write('{"object":"list","data":[{"id":"qwen-plus"}]}');
       }
       await r.response.close();
     });
@@ -159,7 +159,7 @@ class BudgetFixture {
           connection: WorkspaceConnection(
             secureStore: store,
             textApiBase: Uri.parse('http://127.0.0.1:${router.port}/'),
-            openRouter: OpenRouterKeyCheck(
+            keyCheck: AiKeyCheck(
               endpoint: Uri.parse('http://127.0.0.1:${router.port}/key'),
             ),
             pairingEndpoint: endpoint,
@@ -169,7 +169,7 @@ class BudgetFixture {
       );
     }
     final owner = workspaces.first.connection;
-    await owner.connectOpenRouter('sk-or-v1-budget-fixture-only-key');
+    await owner.connectAi('sk-or-v1-budget-fixture-only-key');
     await owner.activatePairing(
       setupToken: 'local-test-setup-only',
       deviceName: 'owner',
@@ -209,7 +209,7 @@ class BudgetFixture {
       connection: WorkspaceConnection(
         secureStore: stores[i],
         textApiBase: Uri.parse('http://127.0.0.1:${router.port}/'),
-        openRouter: OpenRouterKeyCheck(
+        keyCheck: AiKeyCheck(
           endpoint: Uri.parse('http://127.0.0.1:${router.port}/key'),
         ),
         pairingEndpoint: endpoint,

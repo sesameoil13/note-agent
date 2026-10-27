@@ -37,7 +37,7 @@ class FakeConnection implements FirstRunServices {
   );
 
   @override
-  Future<void> connectOpenRouter(String enteredKey) async {
+  Future<void> connectAi(String enteredKey) async {
     calls.add('key');
     if (enteredKey == 'bad') {
       throw const ConnectionFailure('请输入完整的 OpenRouter API Key。');
@@ -46,7 +46,7 @@ class FakeConnection implements FirstRunServices {
   }
 
   @override
-  Future<void> checkOpenRouter() async {
+  Future<void> checkAi() async {
     calls.add('check');
     if (keyRevoked) throw const ConnectionFailure('OpenRouter Key 无效或已撤销。');
   }

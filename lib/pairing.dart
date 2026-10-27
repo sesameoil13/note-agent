@@ -205,8 +205,8 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
     required String deviceName,
   }) async {
     await _ensureLoaded();
-    if (_credentials['openRouterKey'] is! String) {
-      throw const ConnectionFailure('请先在 App 内连接 OpenRouter。');
+    if (_aiKey == null) {
+      throw const ConnectionFailure('请先在 App 内连接阿里云百炼。');
     }
     if (_configuredEndpoint == null) {
       throw const ConnectionFailure('配对服务尚待首次部署。');
@@ -248,8 +248,7 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
   Future<void> createPairing() async {
     await _ensureLoaded();
     final device = _device;
-    if (device?['role'] != 'owner' ||
-        _credentials['openRouterKey'] is! String) {
+    if (device?['role'] != 'owner' || _aiKey == null) {
       throw const ConnectionFailure('请在已连接 OpenRouter 的原设备生成配对码。');
     }
     final pair =
@@ -368,7 +367,8 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
           // Persist the received secret before acknowledging its one-time removal.
           await _commit({
             ..._credentials,
-            'openRouterKey': config['openRouterKey'],
+            'aiKey': config['openRouterKey'],
+            'aiProvider': aiProvider,
             'incomingPair': {...incoming, 'received': true},
             'device': {
               'id': incoming['deviceId'],
@@ -391,9 +391,7 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
       } else if (result['status'] != 'completed') {
         throw const ConnectionFailure('配对状态异常，请重新配对。');
       }
-      if (_credentials['openRouterKey'] is! String ||
-          _device == null ||
-          _incoming?['received'] != true) {
+      if (_aiKey == null || _device == null || _incoming?['received'] != true) {
         throw const ConnectionFailure('配对配置未保存，请重新配对。');
       }
       await _request(
@@ -482,7 +480,7 @@ extension WorkspaceDevicePairing on WorkspaceConnection {
         verificationCode) {
       throw const ConnectionFailure('请求设备已变化，请取消并重新配对。');
     }
-    final key = _credentials['openRouterKey'] as String?;
+    final key = _aiKey;
     if (key == null) throw const ConnectionFailure('请先连接 OpenRouter。');
     final plain = jsonEncode({
       'version': 1,

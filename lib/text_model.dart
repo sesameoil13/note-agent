@@ -314,7 +314,7 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
     Map<String, dynamic> payload,
   ) async {
     await _ensureLoaded();
-    final key = _credentials['openRouterKey'] as String?;
+    final key = _aiKey;
     if (key == null) {
       throw const ConnectionFailure(
         '请先在 App 连接 OpenRouter。',
@@ -392,7 +392,7 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
       throw const ConnectionFailure('缺少有效费用记录编号，预留保留。');
     }
     await _ensureLoaded();
-    final key = _credentials['openRouterKey'] as String?;
+    final key = _aiKey;
     if (key == null) throw const ConnectionFailure('请先在 App 连接原账户，费用预留保留。');
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);

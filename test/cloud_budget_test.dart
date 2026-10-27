@@ -322,7 +322,7 @@ void main() {
     final w = f.workspaces.first;
     final note = await w.captureText(title: '凭据移除', text: '保存后再决定是否发送。');
     final ready = await w.prepareTextProcessing(note.id);
-    await w.connection.disconnectOpenRouter();
+    await w.connection.disconnectAi();
     await w.processTextNote(note.id);
     expect(w.budget.reservedCnyMicros, greaterThan(0));
     await f.reopen(0);

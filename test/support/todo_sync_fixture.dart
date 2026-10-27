@@ -50,7 +50,7 @@ class TodoSyncFixture {
       workspaces.add(await _open(i));
     }
     final owner = workspaces.first.connection;
-    await owner.connectOpenRouter('sk-or-v1-todo-sync-fixture-only-key');
+    await owner.connectAi('sk-or-v1-todo-sync-fixture-only-key');
     await owner.activatePairing(
       setupToken: 'local-test-setup-only',
       deviceName: 'owner',
@@ -73,7 +73,7 @@ class TodoSyncFixture {
       return;
     }
     if (r.uri.path == '/key') {
-      r.response.write('{"data":{"is_management_key":false}}');
+      r.response.write('{"object":"list","data":[{"id":"qwen-plus"}]}');
       await r.response.close();
       return;
     }
@@ -108,7 +108,7 @@ class TodoSyncFixture {
     connection: WorkspaceConnection(
       secureStore: _stores[i],
       textApiBase: Uri.parse('http://127.0.0.1:${_proxy.port}/'),
-      openRouter: OpenRouterKeyCheck(
+      keyCheck: AiKeyCheck(
         endpoint: Uri.parse('http://127.0.0.1:${_proxy.port}/key'),
       ),
       pairingEndpoint: Uri.parse('http://127.0.0.1:${_proxy.port}'),

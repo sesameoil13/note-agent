@@ -131,16 +131,14 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                     onPressed: _busy
                         ? null
                         : () => _run(() async {
-                            await connection.connectOpenRouter(_key.text);
+                            await connection.connectAi(_key.text);
                             _key.clear();
                           }),
                     child: const Text('检测并安全保存'),
                   ),
                   if (connection.state.hasKey)
                     OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _run(connection.checkOpenRouter),
+                      onPressed: _busy ? null : () => _run(connection.checkAi),
                       child: const Text('重新检测'),
                     ),
                   if (connection.state.hasKey)
@@ -403,7 +401,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
       ),
     );
     if (confirmed == true && mounted) {
-      await _run(connection.disconnectOpenRouter);
+      await _run(connection.disconnectAi);
     }
   }
 }

@@ -44,7 +44,9 @@ void main() {
         if (request.method == 'GET' &&
             request.headers.value('authorization') ==
                 'Bearer sk-or-v1-still-valid-test-key') {
-          request.response.write('{"data":{"is_management_key":false}}');
+          request.response.write(
+            '{"object":"list","data":[{"id":"qwen-plus"}]}',
+          );
         } else {
           request.response.statusCode = 401;
         }
@@ -62,7 +64,7 @@ void main() {
       vaultDirectory: vault,
       connection: WorkspaceConnection(
         secureStore: MemorySecureStore(),
-        openRouter: OpenRouterKeyCheck(endpoint: endpoint.resolve('/key')),
+        keyCheck: AiKeyCheck(endpoint: endpoint.resolve('/key')),
         pairingEndpoint: endpoint,
         allowLocalPairingForTests: true,
       ),
@@ -72,9 +74,7 @@ void main() {
       await server.close(force: true);
       await folder.delete(recursive: true);
     });
-    await workspace.connection.connectOpenRouter(
-      'sk-or-v1-still-valid-test-key',
-    );
+    await workspace.connection.connectAi('sk-or-v1-still-valid-test-key');
     await workspace.connection.activatePairing(
       setupToken: 'test-setup',
       deviceName: 'Mac',
@@ -85,7 +85,7 @@ void main() {
     );
     await workspace.connection.cancelPairing();
     expect(workspace.connection.pairing.phase, 'ready');
-    await workspace.connection.checkOpenRouter();
+    await workspace.connection.checkAi();
     expect(workspace.connection.state.connectionVerified, isTrue);
   });
 
@@ -114,7 +114,9 @@ void main() {
         if (request.method == 'GET' &&
             request.headers.value('authorization') ==
                 'Bearer sk-or-v1-paired-test-key') {
-          request.response.write('{"data":{"is_management_key":false}}');
+          request.response.write(
+            '{"object":"list","data":[{"id":"qwen-plus"}]}',
+          );
         } else {
           request.response.statusCode = 401;
         }
@@ -152,7 +154,7 @@ void main() {
       await request.response.close();
     });
     final pairingEndpoint = Uri.parse('http://127.0.0.1:${server.port}');
-    final keyCheck = OpenRouterKeyCheck(
+    final keyCheck = AiKeyCheck(
       endpoint: Uri.parse('http://127.0.0.1:${server.port}/key'),
     );
     final ownVault = await Directory('${root.path}/mac-vault').create();
@@ -162,7 +164,7 @@ void main() {
       vaultDirectory: ownVault,
       connection: WorkspaceConnection(
         secureStore: ownerStore,
-        openRouter: keyCheck,
+        keyCheck: keyCheck,
         pairingEndpoint: pairingEndpoint,
         allowLocalPairingForTests: true,
       ),
@@ -172,7 +174,7 @@ void main() {
       vaultDirectory: otherVault,
       connection: WorkspaceConnection(
         secureStore: memberStore,
-        openRouter: keyCheck,
+        keyCheck: keyCheck,
         pairingEndpoint: pairingEndpoint,
         allowLocalPairingForTests: true,
       ),
@@ -188,7 +190,7 @@ void main() {
     });
     await owner.captureText(title: 'Mac 本机笔记', text: '仅保留在原库');
     await phone.captureText(title: '手机本机笔记', text: '目录仍由此设备授权');
-    await owner.connection.connectOpenRouter('sk-or-v1-paired-test-key');
+    await owner.connection.connectAi('sk-or-v1-paired-test-key');
     await owner.connection.activatePairing(
       setupToken: 'local-test-setup-only',
       deviceName: 'Mac',
@@ -232,7 +234,7 @@ void main() {
     expect(phone.connection.state.hasKey, isTrue);
     await phone.connection.restore();
     await phone.connection.refreshPairing();
-    await phone.connection.checkOpenRouter();
+    await phone.connection.checkAi();
     expect(phone.connection.state.connectionVerified, isTrue);
     expect(phone.connection.pairing.role, 'member');
     expect(owner.notes.single.title, 'Mac 本机笔记');
@@ -241,68 +243,74 @@ void main() {
     expect(await File('${otherVault.path}/Mac 本机笔记.md').exists(), isFalse);
   });
 
-  test('a checked OpenRouter connection survives reopening without changing the vault', () async {
-    final folder = await Directory.systemTemp.createTemp('connection-');
-    final vault = await Directory('${folder.path}/vault').create();
-    final store = MemorySecureStore();
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    server.listen((request) async {
-      if (request.method == 'GET' &&
-          request.uri.path == '/key' &&
-          request.headers.value('authorization') ==
-              'Bearer sk-or-v1-test-only-key') {
-        request.response.write(
-          jsonEncode({
-            'data': {'is_management_key': false, 'limit_remaining': 4.2},
-          }),
-        );
-      } else {
-        request.response.statusCode = 401;
-      }
-      await request.response.close();
-    });
-    final endpoint = Uri.parse('http://127.0.0.1:${server.port}/key');
-    final first = await NoteWorkspace.open(
-      localDirectory: Directory('${folder.path}/state'),
-      vaultDirectory: vault,
-      connection: WorkspaceConnection(
-        secureStore: store,
-        openRouter: OpenRouterKeyCheck(endpoint: endpoint),
-      ),
-    );
-    addTearDown(() async {
-      await server.close(force: true);
-      await folder.delete(recursive: true);
-    });
-    await first.connection.connectOpenRouter('sk-or-v1-test-only-key');
-    expect(first.connection.state.message, contains('连接成功'));
-    await first.captureText(title: '本机记录', text: '连接不代替本机笔记授权');
-    await first.close();
-    final reopened = await NoteWorkspace.open(
-      localDirectory: Directory('${folder.path}/state'),
-      vaultDirectory: vault,
-      connection: WorkspaceConnection(
-        secureStore: store,
-        openRouter: OpenRouterKeyCheck(endpoint: endpoint),
-      ),
-    );
-    addTearDown(reopened.close);
-    await reopened.connection.restore();
-    await reopened.connection.checkOpenRouter();
-    expect(reopened.connection.state.hasKey, isTrue);
-    expect(reopened.connection.state.connectionVerified, isTrue);
-    await expectLater(
-      reopened.connection.connectOpenRouter('sk-or-v1-invalid-new-key'),
-      throwsA(isA<ConnectionFailure>()),
-    );
-    expect(
-      reopened.connection.state.message,
-      isNot(contains('sk-or-v1-invalid-new-key')),
-    );
-    await reopened.connection.restore();
-    await reopened.connection.checkOpenRouter();
-    expect(reopened.connection.state.connectionVerified, isTrue);
-    expect(reopened.notes.single.text, '连接不代替本机笔记授权');
-    expect(reopened.connection.state.message, isNot(contains('笔记已同步')));
-  });
+  test(
+    'a checked AI connection survives reopening without changing the vault',
+    () async {
+      final folder = await Directory.systemTemp.createTemp('connection-');
+      final vault = await Directory('${folder.path}/vault').create();
+      final store = MemorySecureStore();
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) async {
+        if (request.method == 'GET' &&
+            request.uri.path == '/key' &&
+            request.headers.value('authorization') ==
+                'Bearer sk-or-v1-test-only-key') {
+          request.response.write(
+            jsonEncode({
+              'object': 'list',
+              'data': [
+                {'id': 'qwen-plus'},
+              ],
+            }),
+          );
+        } else {
+          request.response.statusCode = 401;
+        }
+        await request.response.close();
+      });
+      final endpoint = Uri.parse('http://127.0.0.1:${server.port}/key');
+      final first = await NoteWorkspace.open(
+        localDirectory: Directory('${folder.path}/state'),
+        vaultDirectory: vault,
+        connection: WorkspaceConnection(
+          secureStore: store,
+          keyCheck: AiKeyCheck(endpoint: endpoint),
+        ),
+      );
+      addTearDown(() async {
+        await server.close(force: true);
+        await folder.delete(recursive: true);
+      });
+      await first.connection.connectAi('sk-or-v1-test-only-key');
+      expect(first.connection.state.message, contains('连接成功'));
+      await first.captureText(title: '本机记录', text: '连接不代替本机笔记授权');
+      await first.close();
+      final reopened = await NoteWorkspace.open(
+        localDirectory: Directory('${folder.path}/state'),
+        vaultDirectory: vault,
+        connection: WorkspaceConnection(
+          secureStore: store,
+          keyCheck: AiKeyCheck(endpoint: endpoint),
+        ),
+      );
+      addTearDown(reopened.close);
+      await reopened.connection.restore();
+      await reopened.connection.checkAi();
+      expect(reopened.connection.state.hasKey, isTrue);
+      expect(reopened.connection.state.connectionVerified, isTrue);
+      await expectLater(
+        reopened.connection.connectAi('sk-or-v1-invalid-new-key'),
+        throwsA(isA<ConnectionFailure>()),
+      );
+      expect(
+        reopened.connection.state.message,
+        isNot(contains('sk-or-v1-invalid-new-key')),
+      );
+      await reopened.connection.restore();
+      await reopened.connection.checkAi();
+      expect(reopened.connection.state.connectionVerified, isTrue);
+      expect(reopened.notes.single.text, '连接不代替本机笔记授权');
+      expect(reopened.connection.state.message, isNot(contains('笔记已同步')));
+    },
+  );
 }
