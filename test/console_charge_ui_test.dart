@@ -67,4 +67,45 @@ void main() {
       }, _LoopbackHttpOverrides());
     },
   );
+
+  testWidgets(
+    'a completed recording can still record an organizing charge, and says when none is left',
+    (tester) async {
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final f = BudgetFixture();
+        await tester.runAsync(() async {
+          await f.start();
+          final w = f.workspaces.first;
+          final source = await w.importAudio(
+            original: await File('${f.root.path}/done.wav')
+                .writeAsBytes(wave(seconds: 4)),
+            submissionId: 'ui-completed',
+          );
+          await w.prepareAudioProcessing(source.id);
+          await w.confirmAudioProcessing(source.id);
+        });
+        addTearDown(() => tester.runAsync(f.close));
+        final w = f.workspaces.first;
+        expect(w.audioJobs.single.status.name, 'completed');
+        tester.view.physicalSize = const Size(1280, 1000);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(MaterialApp(home: BudgetPanel(workspace: w)));
+        await pumpUntil(tester);
+        await tester.pumpAndSettle();
+        final button = find.text('按控制台账单记录费用');
+        expect(button, findsOneWidget);
+        await tester.ensureVisible(button);
+        await tester.pumpAndSettle();
+        await tester.runAsync(() async {
+          await tester.tap(button);
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+        });
+        await pumpUntil(tester);
+        await tester.pump();
+        expect(find.text('没有待核对的请求。'), findsOneWidget);
+      }, _LoopbackHttpOverrides());
+    },
+  );
 }

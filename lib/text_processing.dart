@@ -861,11 +861,11 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
             receipts[attempt] = {'released': true, 'settled': true};
           } else if (row['state'] == 'released') {
             receipts[attempt] = {'released': true, 'settled': true};
-          } else if (row['state'] == 'settled' &&
-              row['generation_id'] is String) {
+          } else if (row['state'] == 'settled') {
+            // Also a charge the user confirmed from the console (no id).
             receipts[attempt] = {
               ...?receipts[attempt] as Map?,
-              'generationId': row['generation_id'],
+              'generationId': ?row['generation_id'] as String?,
               'cnyMicros': row['actual_cny'],
               'settled': true,
             };

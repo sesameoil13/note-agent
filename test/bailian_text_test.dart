@@ -189,4 +189,32 @@ void main() {
     expect(await w.unconfirmedCharges(key), isEmpty);
     expect(f.modelRequests, hasLength(1));
   });
+
+  test(
+    'a confirmed charge whose reply was lost is taken from the ledger',
+    () async {
+      final f = BudgetFixture()..omitCost = true;
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final note = await w.captureText(title: '想法', text: '明天十点给物业打电话。');
+      final job = await w.processTextNote(note.id);
+      final key = 'text:${job.id}';
+      final attempt = (await w.unconfirmedCharges(key)).single.attemptId;
+      f.loseBudgetReply = (path) => path.endsWith('/settle');
+      await expectLater(
+        w.recordConfirmedCharge(key, attempt, 650),
+        throwsA(anything),
+      );
+      f.loseBudgetReply = null;
+
+      // The Worker settled it: the job adopts that amount, nothing is left.
+      expect(await w.unconfirmedCharges(key), isEmpty);
+      await w.reconcileTextProcessing(job.id);
+      expect(w.textJobs.single.knownCostCnyMicros, 650);
+      await w.refreshBudget();
+      expect(w.budget.reservedCnyMicros, 0);
+      expect(w.budget.spentCnyMicros, 650);
+    },
+  );
 }

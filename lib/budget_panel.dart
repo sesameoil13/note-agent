@@ -227,7 +227,12 @@ class _BudgetPanelState extends State<BudgetPanel> {
                               }),
                         child: const Text('取消未上传任务'),
                       ),
-                    if (job.status == AudioJobStatus.paused)
+                    // Completed can still owe an organizing fee (e.g. a
+                    // result left for review without its usage).
+                    if ([
+                      AudioJobStatus.paused,
+                      AudioJobStatus.completed,
+                    ].contains(job.status))
                       OutlinedButton(
                         onPressed: _busy
                             ? null

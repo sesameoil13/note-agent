@@ -44,6 +44,10 @@ class BudgetFixture {
   /// Budget-service requests (paths under /v1/) to fail with a 503, as a
   /// network blip would; others pass through to the local Worker.
   bool Function(String path)? failBudgetRequest;
+
+  /// Budget-service requests the Worker carries out whose reply is then
+  /// lost (a 503 instead), as when the connection drops mid-response.
+  bool Function(String path)? loseBudgetReply;
   // Widget tests mock every HttpClient made in their zone; the proxy to the
   // local Worker needs a real one.
   final _proxy = HttpOverrides.runWithHttpOverrides(
@@ -224,6 +228,13 @@ class BudgetFixture {
     });
     await upstream.addStream(r);
     final result = await upstream.close();
+    if (loseBudgetReply?.call(r.uri.path) ?? false) {
+      await result.drain<void>();
+      r.response.statusCode = 503;
+      r.response.write('{"error":"service_unavailable"}');
+      await r.response.close();
+      return;
+    }
     r.response.statusCode = result.statusCode;
     r.response.headers.contentType = result.headers.contentType;
     await r.response.addStream(result);

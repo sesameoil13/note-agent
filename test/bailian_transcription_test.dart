@@ -209,4 +209,34 @@ void main() {
     expect(await w.unconfirmedCharges(failure.id), isEmpty);
     expect(f.audioRequests, 1);
   });
+
+  test(
+    'a confirmed part charge whose reply was lost is taken from the ledger',
+    () async {
+      final f = BudgetFixture()..omitAudioCost = true;
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final source = await importWave(f, 4, 'lost-confirm');
+      await w.prepareAudioProcessing(source.id);
+      await w.confirmAudioProcessing(source.id);
+      final key = 'audio:${source.id}';
+      final attempt = (await w.unconfirmedCharges(key)).single.attemptId;
+      f.loseBudgetReply = (path) => path.endsWith('/settle');
+      await expectLater(
+        w.recordConfirmedCharge(key, attempt, 1000),
+        throwsA(anything),
+      );
+      f.loseBudgetReply = null;
+
+      expect(await w.unconfirmedCharges(key), isEmpty);
+      await w.reconcileAudioProcessing(source.id);
+      expect(
+        w.processingFailures.single.recovery,
+        ProcessingRecovery.reorganizeOnly,
+      );
+      await w.refreshBudget();
+      expect(w.budget.spentCnyMicros, 1000);
+    },
+  );
 }

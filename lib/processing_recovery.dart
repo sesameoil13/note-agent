@@ -277,7 +277,9 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
 
   Future<List<UnconfirmedCharge>> _unconfirmedCharges(String failureId) async {
     final out = <UnconfirmedCharge>[];
-    for (final (attempt, label, _) in _chargeCandidates(failureId)) {
+    var adopted = false;
+    for (final candidate in _chargeCandidates(failureId)) {
+      final (attempt, label, _) = candidate;
       try {
         final r = await connection.requestSharedBudget(
           '/v1/budget/attempt/$attempt',
@@ -286,12 +288,63 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
         // Only what the shared ledger still holds as possibly billed.
         if (['sent', 'uncertain'].contains(a['state'])) {
           out.add(UnconfirmedCharge(attempt, label, a['reserve_cny'] as int));
+        } else if (a['state'] == 'settled') {
+          // Settled already (e.g. a recorded charge whose reply was lost).
+          await _adoptSettledCharge(failureId, candidate, a['actual_cny']);
+          adopted = true;
         }
       } on ConnectionFailure catch (e) {
         if (e.code != 'attempt_missing') rethrow;
       }
     }
+    if (adopted) await _reconcileCharges(failureId);
     return out;
+  }
+
+  /// Notes a settlement the shared ledger holds in the local job.
+  Future<void> _adoptSettledCharge(
+    String failureId,
+    (String, String, String?) candidate,
+    Object? actual,
+  ) async {
+    final (attemptId, _, textJob) = candidate;
+    if (textJob != null) {
+      final p = _textPayload(textJob);
+      p['receipts'] = {
+        ...?p['receipts'] as Map?,
+        attemptId: {'settled': true, 'confirmed': true, 'cnyMicros': actual},
+      };
+      await _saveText(
+        textJob,
+        textJobs.firstWhere((j) => j.id == textJob).status,
+        p,
+      );
+      return;
+    }
+    final key = failureId.substring(failureId.indexOf(':') + 1);
+    final p = _audioPayload(key);
+    Map<String, dynamic>? payload = p;
+    while (payload != null) {
+      for (final part in (payload['parts'] as List?) ?? const []) {
+        if ((part as Map)['attempt'] == attemptId) {
+          part
+            ..['settled'] = true
+            ..['confirmed'] = true
+            ..['cnyMicros'] = actual;
+        }
+      }
+      payload = (payload['previous'] as Map?)?.cast<String, dynamic>();
+    }
+    await _saveAudioJob(key, _audioJob(key).status, p);
+  }
+
+  Future<void> _reconcileCharges(String failureId) async {
+    final key = failureId.substring(failureId.indexOf(':') + 1);
+    if (failureId.startsWith('audio:')) {
+      await _reconcileAudio(key);
+    } else {
+      await _reconcileText(key);
+    }
   }
 
   Future<void> _recordConfirmedCharge(
@@ -308,40 +361,11 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
       body: {'confirmedCnyMicros': cnyMicros},
     );
     _readTextBudget((r['budget'] as Map).cast<String, dynamic>());
-    final actual = (r['attempt'] as Map)['actual_cny'];
-    final key = failureId.substring(failureId.indexOf(':') + 1);
-    final textJob = candidate.$3;
-    if (textJob != null) {
-      final p = _textPayload(textJob);
-      p['receipts'] = {
-        ...?p['receipts'] as Map?,
-        attemptId: {'settled': true, 'confirmed': true, 'cnyMicros': actual},
-      };
-      await _saveText(
-        textJob,
-        textJobs.firstWhere((j) => j.id == textJob).status,
-        p,
-      );
-    } else {
-      final p = _audioPayload(key);
-      Map<String, dynamic>? payload = p;
-      while (payload != null) {
-        for (final part in (payload['parts'] as List?) ?? const []) {
-          if ((part as Map)['attempt'] == attemptId) {
-            part
-              ..['settled'] = true
-              ..['confirmed'] = true
-              ..['cnyMicros'] = actual;
-          }
-        }
-        payload = (payload['previous'] as Map?)?.cast<String, dynamic>();
-      }
-      await _saveAudioJob(key, _audioJob(key).status, p);
-    }
-    if (failureId.startsWith('audio:')) {
-      await _reconcileAudio(key);
-    } else {
-      await _reconcileText(key);
-    }
+    await _adoptSettledCharge(
+      failureId,
+      candidate,
+      (r['attempt'] as Map)['actual_cny'],
+    );
+    await _reconcileCharges(failureId);
   }
 }
