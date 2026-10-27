@@ -190,6 +190,120 @@ async function audioQuote(env, now) {
     .run();
   return q;
 }
+// Bailian (ADR 0003) publishes no price API: rates come from the BAILIAN_PRICES
+// configuration and are frozen onto each quote, so a later price change never
+// re-prices an open or settled attempt.
+const BAILIAN = "bailian-cn";
+const BAILIAN_MAX_CHUNK_MS = 290000;
+const BAILIAN_MAX_CHUNK_BYTES = 7000000;
+function bailianPrices(env) {
+  let p;
+  try {
+    p = JSON.parse(env.BAILIAN_PRICES);
+  } catch {
+    throw Error("quote_unavailable");
+  }
+  const t = p?.text,
+    a = p?.transcription;
+  if (
+    typeof p?.version !== "string" ||
+    !/^[a-zA-Z0-9._-]{1,40}$/.test(p.version) ||
+    t?.model !== "qwen-plus" ||
+    !integer(t.promptNanoCnyPerToken, 1, 100000) ||
+    !integer(t.completionNanoCnyPerToken, 1, 100000) ||
+    a?.model !== "qwen3-asr-flash" ||
+    !integer(a.secondNanoCny, 1, 100000000) ||
+    !integer(a.minimumSeconds, 0, 60)
+  )
+    throw Error("quote_unavailable");
+  return p;
+}
+async function bailianQuote(env, now, purpose) {
+  const p = bailianPrices(env);
+  const q =
+    purpose === "transcription"
+      ? {
+          purpose: "transcription",
+          provider: BAILIAN,
+          currency: "CNY",
+          rateVersion: p.version,
+          model: p.transcription.model,
+          secondNanoCny: p.transcription.secondNanoCny,
+          minimumSeconds: p.transcription.minimumSeconds,
+          durationMarginPercent: 25,
+          retryMarginPercent: 25,
+          maxDurationMs: BAILIAN_MAX_CHUNK_MS,
+          maxInput: BAILIAN_MAX_CHUNK_BYTES,
+        }
+      : {
+          provider: BAILIAN,
+          currency: "CNY",
+          rateVersion: p.version,
+          model: p.text.model,
+          promptNanoCny: p.text.promptNanoCnyPerToken,
+          completionNanoCny: p.text.completionNanoCnyPerToken,
+          retryMarginPercent: 25,
+          maxOutput: MAX_OUTPUT,
+          maxInput: MAX_INPUT,
+        };
+  q.id = await sha(JSON.stringify(q));
+  q.expiresAt = now + 600000;
+  await env.DB.prepare(
+    "INSERT INTO budget_quotes(id,payload,expires_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,expires_at=excluded.expires_at",
+  )
+    .bind(q.id, JSON.stringify(q), q.expiresAt)
+    .run();
+  return q;
+}
+/// Micro-元 for a Bailian quote: rounded up, then the 25% margin.
+function bailianReserve(q, d) {
+  const nano =
+    q.purpose === "transcription"
+      ? BigInt(
+          ceilRatio(
+            BigInt(
+              Math.max(q.minimumSeconds, Math.ceil(d.source.durationMs / 1000)),
+            ) * BigInt(100 + q.durationMarginPercent),
+            100,
+          ),
+        ) * BigInt(q.secondNanoCny)
+      : BigInt(d.inputBytes + 512) * BigInt(q.promptNanoCny) +
+        BigInt(MAX_OUTPUT) * BigInt(q.completionNanoCny);
+  return ceilRatio(
+    BigInt(ceilRatio(nano, 1000)) * BigInt(100 + q.retryMarginPercent),
+    100,
+  );
+}
+/// The receipt Bailian returns (ADR 0003): tokens for text, seconds for audio.
+function bailianUsage(q, d) {
+  const u = d.usage;
+  if (q.purpose === "transcription") {
+    if (!u || !integer(u.seconds, 0, 3600) || Object.keys(u).length !== 1)
+      return null;
+    return {
+      usage: JSON.stringify({ seconds: u.seconds }),
+      micro: ceilRatio(BigInt(u.seconds) * BigInt(q.secondNanoCny), 1000),
+    };
+  }
+  if (
+    !u ||
+    !integer(u.promptTokens, 0, 1000000) ||
+    !integer(u.completionTokens, 0, 1000000) ||
+    Object.keys(u).length !== 2
+  )
+    return null;
+  return {
+    usage: JSON.stringify({
+      promptTokens: u.promptTokens,
+      completionTokens: u.completionTokens,
+    }),
+    micro: ceilRatio(
+      BigInt(u.promptTokens) * BigInt(q.promptNanoCny) +
+        BigInt(u.completionTokens) * BigInt(q.completionNanoCny),
+      1000,
+    ),
+  };
+}
 function sourceBinding(d) {
   if (d.purpose !== "transcription") return null;
   const s = d.source;
@@ -198,7 +312,11 @@ function sourceBinding(d) {
     !id(s.sourceId) ||
     !/^[a-f0-9]{64}$/.test(s.digest || "") ||
     !["wav", "mp3", "m4a", "aac"].includes(s.format) ||
-    !integer(s.durationMs, 1, 600000)
+    !integer(s.durationMs, 1, 600000) ||
+    (s.chunk !== undefined &&
+      (!integer(s.chunk.count, 1, 3) ||
+        !integer(s.chunk.index, 0, s.chunk.count - 1) ||
+        Object.keys(s.chunk).length !== 2))
   )
     throw Error("invalid_budget");
   return JSON.stringify({
@@ -207,6 +325,10 @@ function sourceBinding(d) {
     digest: s.digest,
     format: s.format,
     durationMs: s.durationMs,
+    // One part of a recording split for Bailian's per-request limit.
+    ...(s.chunk
+      ? { chunk: { index: s.chunk.index, count: s.chunk.count } }
+      : {}),
   });
 }
 async function state(env, now) {
@@ -242,11 +364,14 @@ export async function budgetRequest(request, env, context) {
     return response(await state(env, now));
   if (path === "/v1/budget/quote" && request.method === "POST") {
     try {
+      const d = await body(request);
       return response({
         quote:
-          (await body(request)).purpose === "transcription"
-            ? await audioQuote(env, now)
-            : await quote(env, now),
+          d.provider === BAILIAN
+            ? await bailianQuote(env, now, d.purpose)
+            : d.purpose === "transcription"
+              ? await audioQuote(env, now)
+              : await quote(env, now),
         budget: await state(env, now),
       });
     } catch {
@@ -306,16 +431,30 @@ export async function budgetRequest(request, env, context) {
     const q = JSON.parse(row.payload);
     if ((q.purpose || null) !== (d.purpose || null))
       fail(409, "attempt_conflict");
+    if (
+      q.provider === BAILIAN &&
+      q.purpose === "transcription" &&
+      (d.source.durationMs > q.maxDurationMs || d.inputBytes > q.maxInput)
+    )
+      fail(400, "invalid_budget");
     const usd =
-      q.purpose === "transcription"
-        ? ceilRatio(
-            BigInt(
-              Math.max(q.minimumSeconds, Math.ceil(d.source.durationMs / 1000)),
-            ) * 125n,
-            100,
-          ) * q.secondNano
-        : (d.inputBytes + 512) * q.promptNano + MAX_OUTPUT * q.completionNano;
-    const amount = ceilRatio(BigInt(cny(usd, q.fxMicros)) * 125n, 100);
+      q.provider === BAILIAN
+        ? null
+        : q.purpose === "transcription"
+          ? ceilRatio(
+              BigInt(
+                Math.max(
+                  q.minimumSeconds,
+                  Math.ceil(d.source.durationMs / 1000),
+                ),
+              ) * 125n,
+              100,
+            ) * q.secondNano
+          : (d.inputBytes + 512) * q.promptNano + MAX_OUTPUT * q.completionNano;
+    const amount =
+      q.provider === BAILIAN
+        ? bailianReserve(q, d)
+        : ceilRatio(BigInt(cny(usd, q.fxMicros)) * 125n, 100);
     const result = await env.DB.prepare(
       `INSERT INTO budget_attempts(id,operation_id,device_id,month,state,reserve_cny,quote_id,created_at,input_bytes,source_binding)
       SELECT ?,?,?,?,'reserved',?,?,?,?,? WHERE
@@ -415,6 +554,16 @@ export async function budgetRequest(request, env, context) {
       )
         .bind(a.id)
         .run();
+    } else if (
+      JSON.parse(
+        (
+          await env.DB.prepare("SELECT payload FROM budget_quotes WHERE id=?")
+            .bind(a.quote_id)
+            .first()
+        ).payload,
+      ).provider === BAILIAN
+    ) {
+      await settleBailian(env, a, await body(request), fail);
     } else {
       const d = await body(request);
       if (!integer(d.usdNanos) || !id(d.generationId))
@@ -492,4 +641,58 @@ export async function budgetRequest(request, env, context) {
     });
   }
   fail(404, "not_found");
+}
+
+/// Settles from the saved usage receipt; the same receipt replays, a different
+/// one or a charge above the reservation durably blocks paid admission.
+async function settleBailian(env, a, d, fail) {
+  const q = JSON.parse(
+    (
+      await env.DB.prepare("SELECT payload FROM budget_quotes WHERE id=?")
+        .bind(a.quote_id)
+        .first()
+    ).payload,
+  );
+  const receipt = bailianUsage(q, d);
+  if (!receipt || !id(d.responseId)) fail(400, "invalid_cost");
+  const dispute = () =>
+    env.DB.prepare("UPDATE budget_attempts SET disputed=1 WHERE id=?")
+      .bind(a.id)
+      .run();
+  if (a.state === "settled") {
+    if (a.usage !== receipt.usage || a.generation_id !== d.responseId) {
+      await dispute();
+      fail(409, "cost_conflict");
+    }
+    return;
+  }
+  if (!["sent", "uncertain"].includes(a.state)) fail(409, "attempt_not_sent");
+  try {
+    await env.DB.prepare(
+      "UPDATE budget_attempts SET state='settled',usage=?,actual_cny=?,generation_id=?,disputed=CASE WHEN ?>reserve_cny THEN 1 ELSE disputed END WHERE id=? AND state IN ('sent','uncertain')",
+    )
+      .bind(receipt.usage, receipt.micro, d.responseId, receipt.micro, a.id)
+      .run();
+  } catch {
+    const collision = await env.DB.prepare(
+      "SELECT id FROM budget_attempts WHERE generation_id=? AND id<>?",
+    )
+      .bind(d.responseId, a.id)
+      .first();
+    if (!collision) fail(503, "budget_unavailable");
+    await dispute();
+    fail(409, "generation_conflict");
+  }
+  const committed = await env.DB.prepare(
+    "SELECT usage,generation_id FROM budget_attempts WHERE id=?",
+  )
+    .bind(a.id)
+    .first();
+  if (
+    committed.usage !== receipt.usage ||
+    committed.generation_id !== d.responseId
+  ) {
+    await dispute();
+    fail(409, "cost_conflict");
+  }
 }
