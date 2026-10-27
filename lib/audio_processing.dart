@@ -200,7 +200,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       ))['quote'];
       p['textQuote'] = (await connection.requestSharedBudget(
         '/v1/budget/quote',
-        body: {},
+        body: {'provider': aiProvider},
       ))['quote'];
       await _saveAudioJob(id, AudioJobStatus.preparing, p);
       final a = await connection.requestSharedBudget(
@@ -476,7 +476,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
         p['textAttempt'] = '$operation-text';
         p['textQuote'] = (await connection.requestSharedBudget(
           '/v1/budget/quote',
-          body: {},
+          body: {'provider': aiProvider},
         ))['quote'];
         await _saveAudioJob(id, AudioJobStatus.preparing, p);
         // Validate the entire request before reserving or asking for consent.
@@ -579,7 +579,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       var unknown = false;
       while (receipt != null) {
         if (receipt['generationId'] is String) {
-          receipt['usdNanos'] = await connection.lookupTextCost(
+          receipt['usdNanos'] = await connection.lookupOpenRouterCost(
             receipt['generationId'] as String,
           );
           await _settleAudio(receipt);

@@ -66,6 +66,20 @@ const mf = new Miniflare({
     ENROLLMENT_HASH: createHash("sha256")
       .update("local-test-setup-only")
       .digest("hex"),
+    // Synthetic Bailian yuan price table (ADR 0003), not real prices.
+    BAILIAN_PRICES: JSON.stringify({
+      version: "fixture",
+      text: {
+        model: "qwen-plus",
+        promptNanoCnyPerToken: 800,
+        completionNanoCnyPerToken: 2000,
+      },
+      transcription: {
+        model: "qwen3-asr-flash",
+        secondNanoCny: 250000,
+        minimumSeconds: 1,
+      },
+    }),
   },
   fetchMock: mock,
   host: "127.0.0.1",
@@ -77,6 +91,7 @@ for (const file of [
   "0002_budget.sql",
   "0003_audio_budget.sql",
   "0004_todo_sync.sql",
+  "0005_bailian_budget.sql",
 ]) {
   for (const sql of (await readFile("migrations/" + file, "utf8"))
     .split(";")

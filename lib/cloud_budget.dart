@@ -51,7 +51,7 @@ class WorkspaceTextJob {
     this.quoteDescription = '尚未取得费率',
     this.canRetry = false,
     this.generationIds = const [],
-    this.knownCostUsdNanos,
+    this.knownCostCnyMicros,
     this.inputTokens,
     this.outputTokens,
     this.reorganization = false,
@@ -65,6 +65,8 @@ class WorkspaceTextJob {
   final String quoteDescription;
   final bool canRetry;
   final List<String> generationIds;
-  final int? knownCostUsdNanos;
+
+  /// Settled cost in micro-元 from the shared ledger.
+  final int? knownCostCnyMicros;
   final int? inputTokens, outputTokens;
 }

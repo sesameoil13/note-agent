@@ -24,7 +24,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
               (p['receipts'] as Map?)?.values.whereType<Map>().toList() ??
               <Map>[];
           final costs = receipts
-              .map((receipt) => receipt['usdNanos'])
+              .map((receipt) => receipt['cnyMicros'])
               .whereType<int>()
               .toList();
           final reply = p['reply'];
@@ -51,7 +51,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
                   .map((receipt) => receipt['generationId'])
                   .whereType<String>(),
             ),
-            knownCostUsdNanos: costs.isEmpty
+            knownCostCnyMicros: costs.isEmpty
                 ? null
                 : costs.fold<int>(0, (a, b) => a + b),
             inputTokens: tokens('prompt_tokens'),
@@ -63,6 +63,11 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
 
   String _textQuoteDescription(dynamic value) {
     if (value is! Map) return '尚未取得费率';
+    if (value['currency'] == 'CNY') {
+      String perMillion(Object? nano) => '¥${(nano as int) / 1000}/百万 token';
+      return '固定 ${value['model']} · 报价 ${value['id']} · 价格版本 ${value['rateVersion']}\n输入 ${perMillion(value['promptNanoCny'])}；输出 ${perMillion(value['completionNanoCny'])}\n每次预留另含 25% 余量。最多 1024 输出 token。';
+    }
+    // A quote saved before the switch to Bailian (ADR 0003).
     return '固定 DeepSeek V4.1 Flash · 报价 ${value['id']} · 路由 ${value['provider']}\n输入 \$${(value['promptNano'] as int) / 1000}/百万 token；输出 \$${(value['completionNano'] as int) / 1000}/百万 token\n汇率日期 ${value['fxDate']}；冻结换算 ¥${(value['fxMicros'] as int) / 1000000}/USD（含 10% 汇率余量）；每次预留另含 25% 余量。最多 1024 输出 token。';
   }
 
@@ -174,7 +179,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       if (payload['quote'] == null) {
         final quoted = await connection.requestSharedBudget(
           '/v1/budget/quote',
-          body: {},
+          body: {'provider': aiProvider},
         );
         payload['quote'] = quoted['quote'];
       }
@@ -327,6 +332,19 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     final job = textJobs.firstWhere((j) => j.id == jobId);
     if (job.status != TextProcessingStatus.prepared) return job;
     final payload = _textPayload(job.id);
+    // Estimated before the switch to Bailian (ADR 0003): its request is in
+    // OpenRouter's format, so it is released rather than sent.
+    if ((payload['quote'] as Map?)?['currency'] != 'CNY') {
+      final cancelled = await _cancelText(jobId);
+      if (cancelled.status != TextProcessingStatus.cancelled) return cancelled;
+      await _saveText(
+        jobId,
+        TextProcessingStatus.cancelled,
+        _textPayload(jobId),
+        error: 'AI 服务已改为阿里云百炼，切换前的预估已释放；原文保留，请重新预估。',
+      );
+      return textJobs.firstWhere((j) => j.id == jobId);
+    }
     payload['autoRetries'] = 0;
     for (var retry = 0; retry <= maxRetries; retry++) {
       final attempt = (payload['attempts'] as List).last as String;
@@ -344,7 +362,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           ...?payload['receipts'] as Map?,
           attempt: {
             'generationId': reply.generationId,
-            'usdNanos': reply.usdNanos,
+            'settle': reply.settleBody,
             'settled': false,
           },
         };
@@ -360,12 +378,14 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           payload['validationError'] = e.message;
         }
         await _saveText(job.id, TextProcessingStatus.costPending, payload);
-        final generation = reply.generationId, cost = reply.usdNanos;
-        if (generation != null && cost != null) {
+        final receipt = reply.settleBody;
+        if (receipt != null) {
           final settled = await connection.requestSharedBudget(
             '/v1/budget/attempt/$attempt/settle',
-            body: {'generationId': generation, 'usdNanos': cost},
+            body: receipt,
           );
+          (payload['receipts'] as Map)[attempt]['cnyMicros'] =
+              (settled['attempt'] as Map)['actual_cny'];
           _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
           payload['settled'] =
               (payload['receipts'] as Map).length ==
@@ -497,7 +517,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     if (pending == null) {
       final quoted = await connection.requestSharedBudget(
         '/v1/budget/quote',
-        body: {},
+        body: {'provider': aiProvider},
       );
       payload['quote'] = quoted['quote'];
       payload['associationCandidates'] ??= await _associationCandidates(
@@ -846,7 +866,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
             receipts[attempt] = {
               ...?receipts[attempt] as Map?,
               'generationId': row['generation_id'],
-              'usdNanos': row['usd_nanos'],
+              'cnyMicros': row['actual_cny'],
               'settled': true,
             };
           } else {
@@ -879,19 +899,22 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       for (final entry in receipts.entries) {
         final receipt = (entry.value as Map).cast<String, dynamic>();
         if (receipt['released'] == true) continue;
-        final generation = receipt['generationId'];
-        if (generation is! String) {
-          throw const ConnectionFailure(
-            '本次发送没有可核对的费用编号；请在阿里云百炼控制台核对，预留不会自动释放。',
+        // Bailian has no cost lookup by id (issue #34, Q9): only a receipt
+        // saved from the response can settle; otherwise the hold stays.
+        final saved = receipt['settle'];
+        if (saved is! Map) {
+          throw ConnectionFailure(
+            (payload['quote'] as Map?)?['currency'] == 'CNY'
+                ? '本次发送没有可核对的用量；请在阿里云百炼控制台核对，预留不会自动释放。'
+                : '这是切换前的 OpenRouter 请求，请在 OpenRouter 官网核对费用；预留不会自动释放。',
           );
         }
-        final cost = await connection.lookupTextCost(generation);
         final settled = await connection.requestSharedBudget(
           '/v1/budget/attempt/${entry.key}/settle',
-          body: {'generationId': generation, 'usdNanos': cost},
+          body: saved.cast<String, dynamic>(),
         );
         _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
-        receipt['usdNanos'] = cost;
+        receipt['cnyMicros'] = (settled['attempt'] as Map)['actual_cny'];
         receipt['settled'] = true;
         receipts[entry.key] = receipt;
         payload['receipts'] = receipts;

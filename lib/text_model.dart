@@ -15,7 +15,8 @@ int _usdNanos(num value) {
   return ((digits + denominator - BigInt.one) ~/ denominator).toInt();
 }
 
-const textModelId = 'deepseek/deepseek-v4.1-flash';
+/// Fixed text model on Bailian (ADR 0003); thinking is off.
+const textModelId = 'qwen-plus';
 Map<String, dynamic> textModelPayload(
   String sourceId,
   String text,
@@ -25,17 +26,7 @@ Map<String, dynamic> textModelPayload(
   'model': textModelId,
   'max_tokens': 1024,
   'stream': false,
-  'reasoning': {'effort': 'none'},
-  'provider': {
-    'only': [q['provider']],
-    'allow_fallbacks': false,
-    'require_parameters': true,
-    'max_price': {
-      'request': 0,
-      'prompt': (q['promptNano'] as int) / 1000,
-      'completion': (q['completionNano'] as int) / 1000,
-    },
-  },
+  'enable_thinking': false,
   'messages': [
     {
       'role': 'system',
@@ -132,12 +123,23 @@ class TextModelReply {
   final Map<String, dynamic> data;
   String? get generationId =>
       data['id'] is String ? data['id'] as String : null;
-  int? get usdNanos {
-    final usage = data['usage'];
-    final cost = usage is Map ? usage['cost'] : null;
-    return cost is num && cost.isFinite && cost >= 0 && cost <= 1000
-        ? _usdNanos(cost)
-        : null;
+
+  /// The receipt the Worker settles from: the response id and its token
+  /// usage. Null when either is missing, so the hold stays unconfirmed.
+  Map<String, dynamic>? get settleBody {
+    final id = generationId, usage = data['usage'];
+    if (id == null || !RegExp(r'^[a-zA-Z0-9_-]{8,80}$').hasMatch(id)) {
+      return null;
+    }
+    if (usage is! Map) return null;
+    final input = usage['prompt_tokens'], output = usage['completion_tokens'];
+    if (input is! int || output is! int || input < 0 || output < 0) {
+      return null;
+    }
+    return {
+      'responseId': id,
+      'usage': {'promptTokens': input, 'completionTokens': output},
+    };
   }
 
   Map<String, dynamic> validated(
@@ -316,10 +318,7 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
     await _ensureLoaded();
     final key = _aiKey;
     if (key == null) {
-      throw const ConnectionFailure(
-        '请先在 App 连接 OpenRouter。',
-        code: 'credentials',
-      );
+      throw const ConnectionFailure('请先在 App 连接阿里云百炼。', code: 'credentials');
     }
     await requestSharedBudget('/v1/budget/attempt/$attemptId/send', body: {});
     final client = HttpClient()
@@ -350,7 +349,7 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
       }
       if (response.statusCode == 402) {
         throw const TextNetworkFailure(
-          'OpenRouter 余额不足，请在官网核对；App 不自动充值。',
+          '阿里云账户余额不足，请在控制台核对；App 不自动充值。',
           code: 'balance',
         );
       }
@@ -387,7 +386,9 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
     }
   }
 
-  Future<int> lookupTextCost(String generationId) async {
+  /// OpenRouter's cost lookup, still used by the transcription stage until it
+  /// moves to Bailian's usage receipts; text no longer uses it (ADR 0003).
+  Future<int> lookupOpenRouterCost(String generationId) async {
     if (!RegExp(r'^[a-zA-Z0-9_-]{8,80}$').hasMatch(generationId)) {
       throw const ConnectionFailure('缺少有效费用记录编号，预留保留。');
     }

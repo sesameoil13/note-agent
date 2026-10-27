@@ -104,16 +104,13 @@ void main() {
     final source = await File(note.sourcePath).readAsBytes();
     final job = await w.processTextNote(note.id);
     expect(job.status, TextProcessingStatus.completed);
-    expect(job.generationIds, ['gen-budget-fixture-1']);
-    expect(job.knownCostUsdNanos, 10000);
+    expect(job.generationIds, ['chatcmpl-budget-fixture-1']);
+    expect(job.knownCostCnyMicros, 74);
     expect(job.inputTokens, 37);
     expect(job.outputTokens, 22);
-    expect(f.modelRequests.single['model'], 'deepseek/deepseek-v4.1-flash');
+    expect(f.modelRequests.single['model'], 'qwen-plus');
     expect(f.modelRequests.single['max_tokens'], 1024);
-    expect(
-      (f.modelRequests.single['provider'] as Map)['allow_fallbacks'],
-      isFalse,
-    );
+    expect(f.modelRequests.single['enable_thinking'], isFalse);
     final result = w.notes.single;
     expect(result.id, note.id);
     expect(result.title, '记录想法');
@@ -130,32 +127,34 @@ void main() {
     expect((await f.workspaces.first.processTextNote(note.id)).id, job.id);
     expect(f.modelRequests.length, 1);
   });
-  test('a missing cost keeps its hold across restart and delayed receipt settles once without another model call', () async {
-    final f = BudgetFixture()..omitCost = true;
-    await f.start();
-    addTearDown(f.close);
-    final note = await f.workspaces.first.captureText(
-      title: '账单待核对',
-      text: '普通想法原文。',
-    );
-    final job = await f.workspaces.first.processTextNote(note.id);
-    expect(job.status, TextProcessingStatus.costPending);
-    await f.workspaces.first.refreshBudget();
-    final held = f.workspaces.first.budget.reservedCnyMicros;
-    expect(held, greaterThan(0));
-    await f.reopen(0);
-    await f.workspaces.first.reconcileTextProcessing(job.id);
-    expect(f.workspaces.first.budget.reservedCnyMicros, held);
-    expect(f.workspaces.first.budget.spentCnyMicros, 0);
-    f.generationAvailable = true;
-    await f.workspaces.first.reconcileTextProcessing(job.id);
-    expect(f.workspaces.first.budget.reservedCnyMicros, 0);
-    expect(f.workspaces.first.budget.spentCnyMicros, 154);
-    await f.workspaces.first.reconcileTextProcessing(job.id);
-    expect(f.workspaces.first.budget.spentCnyMicros, 154);
-    expect(f.modelRequests.length, 1);
-    expect(f.workspaces.first.notes.length, 1);
-  });
+  // Bailian has no cost lookup by id (issue #34, Q9), so a missing receipt is
+  // never settled later; the hold stays until checked in the console.
+  test(
+    'a missing cost keeps its hold across restart without another model call',
+    () async {
+      final f = BudgetFixture()..omitCost = true;
+      await f.start();
+      addTearDown(f.close);
+      final note = await f.workspaces.first.captureText(
+        title: '账单待核对',
+        text: '普通想法原文。',
+      );
+      final job = await f.workspaces.first.processTextNote(note.id);
+      expect(job.status, TextProcessingStatus.costPending);
+      await f.workspaces.first.refreshBudget();
+      final held = f.workspaces.first.budget.reservedCnyMicros;
+      expect(held, greaterThan(0));
+      await f.reopen(0);
+      await f.workspaces.first.reconcileTextProcessing(job.id);
+      expect(f.workspaces.first.budget.reservedCnyMicros, held);
+      expect(f.workspaces.first.budget.spentCnyMicros, 0);
+      await f.workspaces.first.reconcileTextProcessing(job.id);
+      expect(f.workspaces.first.budget.reservedCnyMicros, held);
+      expect(f.generationReads, 0);
+      expect(f.modelRequests.length, 1);
+      expect(f.workspaces.first.notes.length, 1);
+    },
+  );
   test('recoverable failures use at most four separately reserved attempts and retain unknown charges', () async {
     final f = BudgetFixture()..modelStatuses.addAll([503, 503, 503, 503, 200]);
     await f.start();
@@ -206,24 +205,6 @@ void main() {
     expect(w.budget.spentCnyMicros, 0);
     expect(w.budget.reservedCnyMicros, hold);
     expect(w.budget.unknownCnyMicros, hold);
-  });
-  test('a conflicting final receipt pauses new paid admission and never overwrites the settled total', () async {
-    final f = BudgetFixture();
-    await f.start();
-    addTearDown(f.close);
-    final w = f.workspaces.first;
-    final note = await w.captureText(title: '账单冲突', text: '原文仍保留。');
-    final job = await w.processTextNote(note.id);
-    final cost = w.budget.spentCnyMicros;
-    f.generationAvailable = true;
-    await w.reconcileTextProcessing(job.id);
-    expect(w.budget.paused, isTrue);
-    expect(w.budget.spentCnyMicros, cost);
-    final next = await w.captureText(title: '冲突后收集', text: '本机继续收集。');
-    final pending = await w.prepareTextProcessing(next.id);
-    expect(pending.status, TextProcessingStatus.failed);
-    expect(f.modelRequests.length, 1);
-    expect(w.notes.length, 2);
   });
   test('cancelling an unsent prepared job releases only its own hold and preserves every original', () async {
     final f = BudgetFixture();

@@ -316,7 +316,7 @@ class _BudgetPanelState extends State<BudgetPanel> {
                 SelectableText('费用编号：${job.generationIds.join('、')}'),
               if (job.generationIds.isNotEmpty)
                 Text(
-                  '费用回执金额：${job.knownCostUsdNanos == null ? '未知' : '\$${(job.knownCostUsdNanos! / 1000000000).toStringAsFixed(9)}'}；最后一次输入 ${job.inputTokens ?? '未知'} / 输出 ${job.outputTokens ?? '未知'} token。尚未取得的费用仍按预留计。',
+                  '费用回执金额：${job.knownCostCnyMicros == null ? '未知' : '¥${(job.knownCostCnyMicros! / 1000000).toStringAsFixed(6)}'}；最后一次输入 ${job.inputTokens ?? '未知'} / 输出 ${job.outputTokens ?? '未知'} token。尚未取得的费用仍按预留计。',
                 ),
               Wrap(
                 spacing: 12,

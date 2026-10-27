@@ -95,15 +95,13 @@ class BudgetFixture {
         await beforeReply?.call();
         r.response.write(
           jsonEncode({
+            // Bailian's OpenAI-compatible reply: an id and token usage.
             'id': reuseGenerationId
-                ? 'gen-reused-receipt'
-                : 'gen-budget-fixture-${modelRequests.length}',
-            'model': 'deepseek/deepseek-v4.1-flash',
-            'usage': {
-              if (!omitCost) 'cost': 0.00001,
-              'prompt_tokens': 37,
-              'completion_tokens': 22,
-            },
+                ? 'chatcmpl-reused-receipt'
+                : 'chatcmpl-budget-fixture-${modelRequests.length}',
+            'model': 'qwen-plus',
+            if (!omitCost)
+              'usage': {'prompt_tokens': 37, 'completion_tokens': 22},
             'choices': [
               {
                 'finish_reason': 'stop',
@@ -198,8 +196,15 @@ class BudgetFixture {
     client.close();
   }
 
-  Future<void> reopen(int i, {VaultStorage? vaultStorage}) async {
+  /// [whileClosed] runs between closing and reopening, e.g. to stand in for
+  /// data an older app version saved.
+  Future<void> reopen(
+    int i, {
+    VaultStorage? vaultStorage,
+    void Function(Directory local)? whileClosed,
+  }) async {
     await workspaces[i].close();
+    whileClosed?.call(Directory('${root.path}/local$i'));
     workspaces[i] = await NoteWorkspace.open(
       localDirectory: Directory('${root.path}/local$i'),
       vaultDirectory: vaultStorage == null

@@ -154,8 +154,6 @@ void main() {
     await w.resolveNoteActions(n.id, kind: NoteKind.todo, actions: [last]);
     expect(w.notes.single.actions.single.id, last.id);
     await w.resolveNoteActions(n.id, kind: NoteKind.ordinary, actions: []);
-    f.generationAvailable = true;
-    f.generationCost = 0.00001;
     await w.reconcileTextProcessing(j.id);
     await f.reopen(0);
     expect(f.workspaces.first.notes.single.actions, isEmpty);
@@ -224,7 +222,7 @@ void main() {
       expect(j.status, TextProcessingStatus.review);
       expect(w.notes.firstWhere((x) => x.id == n.id).actions, isEmpty);
       expect(await File(n.notePath).readAsString(), original);
-      expect(j.knownCostUsdNanos, 10000);
+      expect(j.knownCostCnyMicros, 74);
     }
     expect(f.modelRequests.length, invalid.length);
   });
@@ -354,9 +352,9 @@ void main() {
     expect(restored.budget.reservedCnyMicros, held);
     expect(restored.pendingActionNotes, isEmpty);
     expect(f.modelRequests.length, 1);
-    f.generationAvailable = true;
+    // No cost lookup exists (issue #34, Q9): the unknown fee stays held.
     await restored.reconcileTextProcessing(job.id);
-    expect(restored.budget.reservedCnyMicros, 0);
+    expect(restored.budget.reservedCnyMicros, held);
     final markdown = await File(restored.notes.single.notePath).readAsString();
     expect(
       RegExp(
