@@ -7,6 +7,8 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:flutter/services.dart';
+
+import 'first_run.dart';
 part 'pairing.dart';
 part 'budget_connection.dart';
 part 'todo_connection.dart';
@@ -227,6 +229,21 @@ class WorkspaceConnection {
     final key = _credentials['openRouterKey'] as String?;
     if (key == null) throw const ConnectionFailure('请先在 App 内连接 OpenRouter。');
     await connectOpenRouter(key);
+  }
+
+  /// First-run answers are per device and exist before any vault is chosen,
+  /// so they are kept with the device's connection state.
+  Future<FirstRunAnswers?> loadFirstRun() async {
+    await _ensureLoaded();
+    final stored = _credentials['firstRun'];
+    return stored is Map
+        ? FirstRunAnswers.fromJson(Map<String, dynamic>.from(stored))
+        : null;
+  }
+
+  Future<void> saveFirstRun(FirstRunAnswers answers) async {
+    await _ensureLoaded();
+    await _commit({..._credentials, 'firstRun': answers.toJson()});
   }
 
   Future<void> disconnectOpenRouter() async {
