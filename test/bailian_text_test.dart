@@ -7,6 +7,18 @@ import 'package:note_agent/note_workspace.dart';
 
 import 'support/budget_fixture.dart';
 
+/// A quote as the app saved it before the switch to Bailian.
+Map<String, Object?> openRouterQuote(Map current) => {
+  'id': current['id'],
+  'model': 'deepseek/deepseek-v4.1-flash',
+  'provider': 'fixture/provider',
+  'promptNano': 600,
+  'completionNano': 2400,
+  'fxMicros': 7700000,
+  'fxDate': '2026-10-20',
+  'expiresAt': current['expiresAt'],
+};
+
 /// Text organizing through Bailian (ADR 0003) against the local Worker with a
 /// yuan price table (800 / 2000 nano-元 per input / output token).
 void main() {
@@ -84,16 +96,7 @@ void main() {
           job.id,
         ]);
         final payload = jsonDecode(row.single['payload'] as String) as Map;
-        payload['quote'] = {
-          'id': (payload['quote'] as Map)['id'],
-          'model': 'deepseek/deepseek-v4.1-flash',
-          'provider': 'fixture/provider',
-          'promptNano': 600,
-          'completionNano': 2400,
-          'fxMicros': 7700000,
-          'fxDate': '2026-10-20',
-          'expiresAt': (payload['quote'] as Map)['expiresAt'],
-        };
+        payload['quote'] = openRouterQuote(payload['quote'] as Map);
         (payload['request'] as Map)['model'] = 'deepseek/deepseek-v4.1-flash';
         db.execute('UPDATE text_jobs SET payload=? WHERE id=?', [
           jsonEncode(payload),
@@ -113,4 +116,52 @@ void main() {
     expect(w.budget.reservedCnyMicros, 0);
     expect(File(note.sourcePath).existsSync(), isTrue);
   });
+
+  test(
+    'a job settled before the switch stays settled when reconciled',
+    () async {
+      final f = BudgetFixture();
+      await f.start();
+      addTearDown(f.close);
+      final note = await f.workspaces.first.captureText(
+        title: '切换前已结算',
+        text: '切换前已整理并结清的想法。',
+      );
+      final done = await f.workspaces.first.processTextNote(note.id);
+      expect(done.status, TextProcessingStatus.completed);
+      await f.reopen(
+        0,
+        whileClosed: (local) {
+          // The old app's receipt: an OpenRouter generation id and USD cost.
+          final db = sqlite3.open('${local.path}/workspace.sqlite3');
+          final row = db.select('SELECT payload FROM text_jobs WHERE id=?', [
+            done.id,
+          ]);
+          final payload = jsonDecode(row.single['payload'] as String) as Map;
+          for (final receipt in (payload['receipts'] as Map).values) {
+            (receipt as Map)
+              ..remove('settle')
+              ..remove('cnyMicros')
+              ..['usdNanos'] = 10000;
+          }
+          payload['quote'] = openRouterQuote(payload['quote'] as Map);
+          db.execute('UPDATE text_jobs SET payload=? WHERE id=?', [
+            jsonEncode(payload),
+            done.id,
+          ]);
+          db.close();
+        },
+      );
+      final w = f.workspaces.first;
+      final reconciled = await w.reconcileTextProcessing(done.id);
+      expect(
+        reconciled.status,
+        TextProcessingStatus.completed,
+        reason: reconciled.message,
+      );
+      await w.refreshBudget();
+      expect(w.budget.reservedCnyMicros, 0);
+      expect(f.modelRequests.length, 1);
+    },
+  );
 }

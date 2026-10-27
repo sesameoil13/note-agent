@@ -898,7 +898,9 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       await _saveText(id, TextProcessingStatus.costPending, payload);
       for (final entry in receipts.entries) {
         final receipt = (entry.value as Map).cast<String, dynamic>();
-        if (receipt['released'] == true) continue;
+        // Released, or settled as the shared ledger confirmed above (also an
+        // attempt settled before the switch, with no Bailian receipt).
+        if (receipt['released'] == true || receipt['settled'] == true) continue;
         // Bailian has no cost lookup by id (issue #34, Q9): only a receipt
         // saved from the response can settle; otherwise the hold stays.
         final saved = receipt['settle'];
@@ -918,27 +920,26 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         receipt['settled'] = true;
         receipts[entry.key] = receipt;
         payload['receipts'] = receipts;
-        payload['settled'] =
-            receipts.values.every((v) => (v as Map)['settled'] == true) &&
-            receipts.length == (payload['attempts'] as List).length;
-        await _saveText(
-          id,
-          payload['validationError'] is String
-              ? TextProcessingStatus.review
-              : notes
-                    .firstWhere(
-                      (n) =>
-                          n.id == textJobs.firstWhere((j) => j.id == id).noteId,
-                    )
-                    .presentation
-                    .needsConfirmation
-              ? TextProcessingStatus.review
-              : payload['settled'] == true && payload['applyPhase'] == 'applied'
-              ? TextProcessingStatus.completed
-              : TextProcessingStatus.costPending,
-          payload,
-        );
+        await _saveText(id, TextProcessingStatus.costPending, payload);
       }
+      payload['settled'] =
+          receipts.values.every((v) => (v as Map)['settled'] == true) &&
+          receipts.length == (payload['attempts'] as List).length;
+      final noteId = textJobs.firstWhere((j) => j.id == id).noteId;
+      await _saveText(
+        id,
+        payload['validationError'] is String
+            ? TextProcessingStatus.review
+            : notes
+                  .firstWhere((n) => n.id == noteId)
+                  .presentation
+                  .needsConfirmation
+            ? TextProcessingStatus.review
+            : payload['settled'] == true && payload['applyPhase'] == 'applied'
+            ? TextProcessingStatus.completed
+            : TextProcessingStatus.costPending,
+        payload,
+      );
     } on ConnectionFailure catch (e) {
       await _saveText(
         id,
