@@ -32,6 +32,14 @@ Decision: [ADR 0003](../adr/0003-bailian-instead-of-openrouter.md). Probe result
   provider still use OpenRouter, so older apps keep working during the switch. Migration
   `0005_bailian_budget.sql` adds `usage`.
 
+- **Lost responses** (`lib/processing_recovery.dart`, `lib/console_charge_dialog.dart`):
+  Bailian cannot look up a cost by id, so the budget panel offers 按控制台账单记录费用 on a text
+  job with a pending cost and on a paused or completed recording. Each request the ledger still
+  holds as sent or uncertain is shown with its hold; the amount the user reads in the console
+  (0 if not billed) settles it as `confirmedCnyMicros`. Above the hold it is recorded as it is
+  and pauses paid admission. A request the ledger already holds as settled (a reply lost after
+  recording) is adopted into the job.
+
 ## Deploying
 
 1. In the Bailian console (Beijing), read the per-second price of `qwen3-asr-flash` and the
@@ -63,6 +71,4 @@ Decision: [ADR 0003](../adr/0003-bailian-instead-of-openrouter.md). Probe result
 - A real Bailian call from the app (the probe made the real calls), real recordings from each
   platform's recorder, and real MP3 files (no MP3 encoder was available; MP3 frames are
   synthetic).
-- **A hold for a lost response cannot yet be cleared from the app.** Without a cost lookup, the
-  user can only check the charge in the console; there is no in-app action to record it, so the
-  hold stays (it never releases silently, also across months).
+
