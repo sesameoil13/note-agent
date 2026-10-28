@@ -221,14 +221,17 @@ void main() {
     expect(workspace.notes, isEmpty);
   });
 
-  test('an eleven minute WAV stays locally eligible while Standard publication is blocked', () async {
+  test('imported audio longer than five minutes is refused before sending and the original is kept', () async {
     final root = await Directory.systemTemp.createTemp(
       'note-agent-audio-large-',
     );
     addTearDown(() => root.delete(recursive: true));
+    final service = await _ProcessingService.start();
+    addTearDown(service.close);
     final workspace = await NoteWorkspace.open(
       localDirectory: Directory('${root.path}/local'),
       vaultDirectory: await Directory('${root.path}/vault').create(),
+      audioProcessor: _LoopbackProcessor(service.uri),
     );
     addTearDown(workspace.close);
     final file = await File('${root.path}/long.wav')
@@ -237,13 +240,43 @@ void main() {
       original: file,
       submissionId: 'long',
     );
-    expect(saved.metadata!.duration, const Duration(minutes: 11));
-    expect(saved.originalSaved, isTrue);
-    expect(saved.processingStatus, AudioProcessingStatus.pending);
-    expect(saved.publicationStatus, AudioPublicationStatus.exceedsFileLimit);
-    expect(saved.publicationError, contains('5 MB'));
+    await workspace.resumePendingAudioProcessing();
+    final refused = workspace.audioSources.single;
+    expect(service.transcriptionStarted.isCompleted, isFalse);
+    expect(refused.processingStatus, AudioProcessingStatus.failed);
+    expect(refused.processingReason, contains('5 分钟'));
+    expect(refused.originalSaved, isTrue);
     expect(await File(saved.originalPath).length(), 10560044);
-    expect(await File(saved.sourcePath).exists(), isFalse);
+    expect(refused.publicationStatus, AudioPublicationStatus.exceedsFileLimit);
+    expect(await File(refused.sourcePath).exists(), isFalse);
+    // A manual retry cannot undo the refusal.
+    await workspace.retryAudioProcessing(refused.id);
+    expect(service.transcriptionStarted.isCompleted, isFalse);
+    expect(
+      workspace.audioSources.single.processingStatus,
+      AudioProcessingStatus.failed,
+    );
+    expect(workspace.notes, isEmpty);
+  });
+
+  test('imported audio of exactly five minutes is accepted for processing', () async {
+    final root = await Directory.systemTemp.createTemp(
+      'note-agent-audio-five-',
+    );
+    addTearDown(() => root.delete(recursive: true));
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${root.path}/local'),
+      vaultDirectory: await Directory('${root.path}/vault').create(),
+    );
+    addTearDown(workspace.close);
+    final file = await File('${root.path}/five.wav')
+        .writeAsBytes(wave(seconds: 300), flush: true);
+    final saved = await workspace.importAudio(
+      original: file,
+      submissionId: 'five',
+    );
+    expect(saved.metadata!.duration, const Duration(minutes: 5));
+    expect(saved.processingStatus, AudioProcessingStatus.pending);
   });
 
   test('three automatic retries persist across restarts then manual retry keeps the output identity', () async {

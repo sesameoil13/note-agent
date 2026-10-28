@@ -35,7 +35,7 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
-constexpr long long kMaximumRecordingMs = 600000;  // Ten minutes, as macOS.
+constexpr long long kMaximumRecordingMs = 300000;  // Five minutes, as macOS.
 constexpr UINT32 kAacBytesPerSecond = 12000;  // 96 kbit/s, the encoder minimum.
 constexpr unsigned long long kMaximumSourceBytes = 256ull * 1024 * 1024;
 const DWORD kFirstAudio =

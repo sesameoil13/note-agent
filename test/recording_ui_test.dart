@@ -37,6 +37,7 @@ void main() {
       await tester.pumpWidget(NoteAgentApp(initialWorkspace: workspace));
       await tester.tap(find.text('录音'));
       await tester.pumpAndSettle();
+      expect(find.text('支持 15 秒至 5 分钟；达到 5 分钟自动结束保存。'), findsOneWidget);
       await _tapAndWait(
         tester,
         '开始录音',

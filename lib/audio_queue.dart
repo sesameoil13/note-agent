@@ -58,6 +58,10 @@ class WorkspaceAudioSource {
   final String? failureKind;
   final AudioSourceMetadata? metadata;
   final AudioProcessingStatus processingStatus;
+
+  /// Recordings are adopted under this submission prefix; imports never are.
+  static const recordingSubmissionPrefix = 'capture:';
+  bool get isRecording => submissionId.startsWith(recordingSubmissionPrefix);
   final AudioPublicationStatus publicationStatus;
   final DateTime? nextAttemptAt;
   bool get originalSaved => originalStatus == AudioOriginalStatus.saved;
@@ -160,6 +164,8 @@ class WorkspaceAudioQueue {
   Timer? _retryTimer;
   bool _stopped = false;
   static const maximumInspectionBytes = 256 * 1024 * 1024;
+  /// Bailian transcribes at most 5 minutes per request (ADR 0003, 0004).
+  static const maximumImportDuration = Duration(minutes: 5);
   List<WorkspaceAudioSource> get sources => List.unmodifiable(
     database
         .select(
@@ -332,7 +338,7 @@ class WorkspaceAudioQueue {
       [
         id,
         vault.identity,
-        'capture:$id',
+        '${WorkspaceAudioSource.recordingSubmissionPrefix}$id',
         '$id-note',
         p.basename(original.path),
         original.path,
@@ -372,6 +378,11 @@ class WorkspaceAudioQueue {
           metadata.container.isEmpty ||
           metadata.codec.isEmpty) {
         throw const AudioInspectionFailure('音频时长或参数超出本机处理范围，原件已保留。');
+      }
+      // Recordings are capped by the recorder; their encoded length may run a
+      // few milliseconds past it, so only imported audio is held to the limit.
+      if (!item.isRecording && metadata.duration > maximumImportDuration) {
+        throw const AudioInspectionFailure('导入音频超过 5 分钟，未发送；原件已保留。');
       }
       database.execute(
         "UPDATE audio_queue SET metadata = ?, processing_status = ?, processing_reason = NULL, failure_kind = NULL, stage = CASE WHEN organized IS NOT NULL THEN 'materialize' WHEN transcript IS NOT NULL THEN 'organize' ELSE 'transcribe' END WHERE id = ?",

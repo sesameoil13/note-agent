@@ -97,7 +97,7 @@ class WorkspaceRecordings {
       status TEXT NOT NULL, error TEXT
     )''');
   }
-  static const maximumDuration = Duration(minutes: 10);
+  static const maximumDuration = Duration(minutes: 5);
   static const maximumSyncBytes = ObsidianSyncStandard.maximumFileBytes;
   final Database database;
   final Directory localDirectory;

@@ -35,7 +35,7 @@ class RecordingService : Service() {
         const val TOGGLE = "dev.noteagent.recording.TOGGLE"
         private const val CHANNEL = "note-agent-recording"
         private const val NOTIFICATION = 902
-        const val MAX_DURATION = 600_000L
+        const val MAX_DURATION = 300_000L
         private const val MAX_WALL_TIME = 1_800_000L
         var current: RecordingService? = null
             private set

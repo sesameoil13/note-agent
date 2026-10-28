@@ -53,13 +53,13 @@ void main() {
   );
 
   test(
-    'a six-minute recording is sent as two parts in order and joined',
+    'a recording of exactly five minutes is sent as two parts in order and joined',
     () async {
       final f = BudgetFixture()..partTranscripts = ['第一段内容。', '第二段内容。'];
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
-      final source = await importWave(f, 360, 'long');
+      final source = await importWave(f, 300, 'long');
       final prepared = await w.prepareAudioProcessing(source.id);
       expect(
         prepared.status,
@@ -70,12 +70,12 @@ void main() {
       await w.confirmAudioProcessing(source.id);
 
       expect(f.audioRequests, 2);
-      expect(f.audioSeconds, [180, 180]);
+      expect(f.audioSeconds, [150, 150]);
       expect(w.notes.single.originalText, '第一段内容。第二段内容。');
       await w.refreshBudget();
       expect(w.budget.reservedCnyMicros, 0);
-      // 2 × 180 s × 250000 nano-元 = 90000 micro-元, plus organizing.
-      expect(w.budget.spentCnyMicros, 90000 + 74);
+      // 2 × 150 s × 250000 nano-元 = 75000 micro-元, plus organizing.
+      expect(w.budget.spentCnyMicros, 75000 + 74);
     },
   );
 
@@ -88,7 +88,7 @@ void main() {
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
-      final source = await importWave(f, 360, 'retry');
+      final source = await importWave(f, 300, 'retry');
       await w.prepareAudioProcessing(source.id);
       final failed = await w.confirmAudioProcessing(source.id);
       expect(failed.status, AudioJobStatus.paused);
@@ -96,7 +96,7 @@ void main() {
       expect(f.modelRequests, isEmpty);
       // The first part is settled; the failed second keeps an unknown hold.
       await w.refreshBudget();
-      expect(w.budget.spentCnyMicros, 45000);
+      expect(w.budget.spentCnyMicros, 37500);
       final unknown = w.budget.unknownCnyMicros;
       expect(unknown, greaterThan(0));
 
@@ -106,7 +106,7 @@ void main() {
       expect(retry.status, AudioJobStatus.prepared, reason: retry.message);
       await again.confirmAudioProcessing(source.id);
       expect(f.audioRequests, 3);
-      expect(f.audioSeconds.last, 180);
+      expect(f.audioSeconds.last, 150);
       expect(again.notes.single.originalText, '第一段内容。第二段内容。');
       await again.refreshBudget();
       expect(again.budget.unknownCnyMicros, unknown);
@@ -170,7 +170,7 @@ void main() {
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
-      final source = await importWave(f, 360, 'cancel-retry');
+      final source = await importWave(f, 300, 'cancel-retry');
       await w.prepareAudioProcessing(source.id);
       await w.confirmAudioProcessing(source.id);
       expect(f.audioRequests, 2);
