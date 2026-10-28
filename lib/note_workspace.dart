@@ -39,6 +39,7 @@ export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
 part 'text_processing.dart';
+part 'organize_queue.dart';
 part 'audio_processing.dart';
 part 'note_actions.dart';
 part 'note_reminders.dart';
@@ -423,17 +424,25 @@ class NoteWorkspace {
   WorkspaceBudgetState get budget => _budget;
   Future<void> refreshBudget() => _refreshTextBudget();
   Future<void> setMonthlyBudgetLimit(int micros) => _setTextBudget(micros);
-  final Map<String, Future<WorkspaceTextJob>> _preparingText = {};
-  Future<WorkspaceTextJob> prepareTextProcessing(String noteId) {
-    if (_closing) return Future.error(StateError('工作区正在关闭。'));
-    return _preparingText.putIfAbsent(
-      noteId,
-      () => _trackText(_prepareText(noteId)).whenComplete(() {
-        _preparingText.remove(noteId);
-      }),
+  Future<void>? _sendingWaiting;
+
+  /// Sends the captures waiting for 整理, oldest first. The App calls this
+  /// after each capture, at launch and on a timer; a call made while one is
+  /// running joins it.
+  Future<void> sendWaitingNow() {
+    if (_closing) return Future.value();
+    return _sendingWaiting ??= _sendWaiting().whenComplete(
+      () => _sendingWaiting = null,
     );
   }
 
+  /// Null for a note this device did not capture, or one never organized.
+  OrganizeStatus? organizeStatus(String noteId) => _organizeStatus(noteId);
+
+  /// Why a capture failed, or why its result was not written; empty if none.
+  String organizeMessage(String noteId) => _organizeJob(noteId)?.message ?? '';
+
+  /// Cancels an unsent job started from the correction screen.
   Future<WorkspaceTextJob> cancelTextProcessing(String id) =>
       _trackText(_cancelText(id));
   List<WorkspaceTextJob> get textJobs => _textJobs();
@@ -500,11 +509,20 @@ class NoteWorkspace {
   final Map<String, Future<WorkspaceTextJob>> _processingText = {};
   final Set<Future<void>> _textOperations = {};
 
-  Future<WorkspaceTextJob> processTextNote(String noteId) =>
-      _runTextAction(noteId, () => _processText(noteId));
+  /// Sends a failed capture again (重试).
   Future<WorkspaceTextJob> retryTextProcessing(String id) {
     final job = textJobs.firstWhere((j) => j.id == id);
-    return _runTextAction(job.noteId, () => _retryText(id));
+    if (job.status != TextProcessingStatus.failed ||
+        _textPayload(id)['automatic'] != true) {
+      return Future.error(StateError('只有整理失败的收集可以重试。'));
+    }
+    return _runTextAction(job.noteId, () async {
+      await _saveText(id, TextProcessingStatus.waiting, _textPayload(id));
+      // Sent by the single queue run, never alongside it; a run under way
+      // picks it up before it ends.
+      await sendWaitingNow();
+      return textJobs.firstWhere((j) => j.id == id);
+    });
   }
 
   Future<WorkspaceTextJob> _runTextAction(
@@ -1039,6 +1057,7 @@ class NoteWorkspace {
     await workspace._recoverActionCompletion();
     await workspace._recoverAssociationChanges();
     await workspace._recoverCorrections();
+    await workspace._dropUnfinishedBudgetJobs();
     await workspace._recoverText();
     await workspace._recoverAudioJobs();
     await workspace._readVaultEdits();
@@ -1111,6 +1130,7 @@ class NoteWorkspace {
     );
   }
 
+  /// Saves typed or pasted text and queues it for automatic 整理.
   Future<WorkspaceNote> captureText({
     required String title,
     required String text,
@@ -1120,6 +1140,7 @@ class NoteWorkspace {
       title: title,
       text: text,
       semanticTitleCandidates: semanticTitleCandidates,
+      organize: true,
     ),
   );
 
@@ -1128,6 +1149,7 @@ class NoteWorkspace {
     required String text,
     List<String> semanticTitleCandidates = const [],
     String? noteId,
+    bool organize = false,
   }) async {
     if (text.trim().isEmpty) throw ArgumentError('请输入要保存的文字。');
     final safeTitle = _safeTitle(title);
@@ -1164,6 +1186,7 @@ class NoteWorkspace {
         }),
       ],
     );
+    if (organize) _queueOrganize(id, original: text);
     return _retryNoteExport(id);
   }
 
@@ -1740,6 +1763,8 @@ $source
               DocumentImportStatus.savingOriginal.name,
             ],
           );
+          // Sent once its text is extracted and saved.
+          _queueOrganize(id);
           _database.execute('COMMIT');
         } catch (_) {
           _database.execute('ROLLBACK');
@@ -1830,8 +1855,9 @@ $source
   /// Re-extraction must never mutate an input already reserved or sent to AI.
   /// A cancelled, provably unsent attempt may safely obtain a new local input.
   bool canRetryDocumentExtraction(String noteId) {
-    if (_preparingText.containsKey(noteId)) return false;
     for (final job in textJobs.where((j) => j.noteId == noteId)) {
+      // Not sent yet: it is built from the extraction when it is sent.
+      if (job.status == TextProcessingStatus.waiting) continue;
       final payload = _textPayload(job.id);
       final receipts = payload['receipts'] as Map? ?? {};
       if (job.status != TextProcessingStatus.cancelled ||

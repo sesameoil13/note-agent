@@ -189,14 +189,7 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
     final key = id.substring(id.indexOf(':') + 1);
     switch (failure.source) {
       case ProcessingFailureSource.text:
-        final job = textJobs.firstWhere((j) => j.id == key);
-        if (job.status == TextProcessingStatus.failed) {
-          await prepareTextProcessing(job.noteId);
-        } else if (job.status == TextProcessingStatus.prepared) {
-          await processTextNote(job.noteId);
-        } else {
-          await retryTextProcessing(key);
-        }
+        await retryTextProcessing(key);
       case ProcessingFailureSource.audio:
         if (audioJobs.every((j) => j.sourceId != key)) {
           if (failure.recovery == ProcessingRecovery.reselectOriginal) {

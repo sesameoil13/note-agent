@@ -106,7 +106,6 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
     if (_activeDocuments.containsKey(noteId) ||
         _retryingDocuments.contains(noteId) ||
         _processingText.containsKey(noteId) ||
-        _preparingText.containsKey(noteId) ||
         textJobs.any(
           (j) =>
               j.noteId == noteId &&

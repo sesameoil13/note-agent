@@ -30,6 +30,8 @@ class WorkspaceBudgetState {
 }
 
 enum TextProcessingStatus {
+  /// A capture queued for automatic 整理 on this device, not yet sent.
+  waiting,
   cancelled,
   queued,
   prepared,

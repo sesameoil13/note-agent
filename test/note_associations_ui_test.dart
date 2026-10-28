@@ -7,6 +7,7 @@ import 'package:note_agent/main.dart';
 import 'support/budget_fixture.dart';
 
 import 'support/async_settle.dart';
+import 'support/organize_now.dart';
 
 class _LoopbackHttpOverrides extends HttpOverrides {}
 
@@ -32,7 +33,7 @@ void main() {
               {'title': '新手研究', 'reason': '积累新手的体验反馈。'},
             ],
           };
-          await w.processTextNote(n.id);
+          await w.organizeNow(n.id);
           return w;
         }, _LoopbackHttpOverrides()),
       ))!;

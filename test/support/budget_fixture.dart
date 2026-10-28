@@ -59,6 +59,29 @@ class BudgetFixture {
   bool malformedContent = false;
   bool reuseGenerationId = false;
   Map<String, dynamic>? modelResult;
+
+  /// Results for particular notes (by sourceId), before [modelResult].
+  final modelResults = <String, Map<String, dynamic>>{};
+
+  /// Organizes [note] into itself: same kind of note, title and body.
+  void keepAsIs(WorkspaceNote note) => modelResults[note.id] = {
+    'manifestVersion': 3,
+    'kind': 'ordinary',
+    'title': note.title,
+    'body': note.text,
+    'actions': [],
+    'associations': [],
+    'newTopics': [],
+  };
+
+  /// qwen-plus requests for the note [noteId].
+  List<Map<String, dynamic>> requestsFor(String noteId) => [
+    for (final r in modelRequests)
+      if ((jsonDecode((r['messages'] as List).last['content'] as String)
+              as Map)['sourceId'] ==
+          noteId)
+        r,
+  ];
   double generationCost = 0.00002;
   Future<void> Function()? beforeReply;
   final modelRequests = <Map<String, dynamic>>[];
@@ -123,7 +146,12 @@ class BudgetFixture {
                   'content': malformedContent
                       ? '{broken'
                       : jsonEncode(
-                          modelResult == null
+                          modelResults[input['sourceId']] != null
+                              ? {
+                                  'sourceId': input['sourceId'],
+                                  ...modelResults[input['sourceId']]!,
+                                }
+                              : modelResult == null
                               ? {
                                   'sourceId': input['sourceId'],
                                   'kind': 'ordinary',

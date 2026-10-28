@@ -5,6 +5,7 @@ import 'package:note_agent/note_workspace.dart';
 
 import 'support/pending_notification_fixture.dart';
 import 'support/budget_fixture.dart';
+import 'support/organize_now.dart';
 
 void main() {
   test('new pending actions form one quiet durable burst and resolved items leave its body', () async {
@@ -175,7 +176,7 @@ void main() {
         {'title': '采购建议', 'reason': '记录采购建议。'},
       ],
     };
-    await w.processTextNote(n.id);
+    await w.organizeNow(n.id);
     expect(w.pendingConfirmationItems.map((i) => i.kind).toSet(), {
       PendingConfirmationKind.action,
       PendingConfirmationKind.topic,
@@ -264,7 +265,7 @@ void main() {
       'associations': [],
       'newTopics': [],
     };
-    await w.processTextNote(n.id);
+    await w.organizeNow(n.id);
     expect(
       w.pendingConfirmationItems.single.kind,
       PendingConfirmationKind.content,

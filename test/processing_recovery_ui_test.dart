@@ -6,6 +6,7 @@ import 'package:note_agent/processing_recovery_screen.dart';
 
 import 'audio_queue_test.dart' show wave;
 import 'support/budget_fixture.dart';
+import 'support/organize_now.dart';
 
 class _LoopbackHttpOverrides extends HttpOverrides {}
 
@@ -43,7 +44,7 @@ void main() {
           await f.start();
           final w = f.workspaces.first;
           final note = await w.captureText(title: '界面失败', text: '界面中恢复。');
-          await w.processTextNote(note.id);
+          await w.organizeNow(note.id);
         });
         addTearDown(() => tester.runAsync(f.close));
         final w = f.workspaces.first;

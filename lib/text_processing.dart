@@ -319,7 +319,8 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     String noteId, {
     int maxRetries = 3,
   }) async {
-    final job = await prepareTextProcessing(noteId);
+    // Only the organizing step of a recording still goes through the budget.
+    final job = await _prepareText(noteId);
     if (job.status != TextProcessingStatus.prepared) return job;
     return _sendText(job.id, noteId, maxRetries: maxRetries);
   }
@@ -482,29 +483,6 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       }
     }
     return textJobs.firstWhere((j) => j.id == job.id);
-  }
-
-  Future<WorkspaceTextJob> _retryText(String id) async {
-    final job = textJobs.firstWhere((j) => j.id == id);
-    final payload = _textPayload(id);
-    if (!job.canRetry) {
-      throw StateError('仅发送失败且没有可用结果的任务可再次付费重试。');
-    }
-    try {
-      await _reserveNextText(id, job.noteId, payload);
-      return await _sendText(id, job.noteId);
-    } on ConnectionFailure catch (e) {
-      await _saveText(
-        id,
-        TextProcessingStatus.costPending,
-        payload,
-        error: e.code == 'budget_exceeded'
-            ? '重试需要另行预留，剩余额度不足，已暂停；原文保留。'
-            : e.message,
-      );
-      await refreshBudget();
-      return textJobs.firstWhere((j) => j.id == id);
-    }
   }
 
   Future<void> _reserveNextText(
@@ -818,7 +796,11 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         await _applyText(job.id, payload);
         continue;
       }
-      if (job.status == TextProcessingStatus.sending) {
+      if (job.status == TextProcessingStatus.sending &&
+          payload['automatic'] == true) {
+        // Interrupted before a result arrived: it waits to be sent again.
+        await _saveText(job.id, TextProcessingStatus.waiting, payload);
+      } else if (job.status == TextProcessingStatus.sending) {
         await _saveText(
           job.id,
           TextProcessingStatus.costPending,

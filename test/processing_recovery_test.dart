@@ -6,41 +6,47 @@ import 'package:note_agent/note_workspace.dart';
 
 import 'support/budget_fixture.dart';
 import 'audio_queue_test.dart' show wave;
+import 'support/organize_now.dart';
 
 void main() {
-  test('a text failure after three automatic retries is listed once and recovers manually into the same note', () async {
-    final f = BudgetFixture()..modelStatuses.addAll([503, 503, 503, 503]);
-    await f.start();
-    addTearDown(f.close);
-    final w = f.workspaces.first;
-    final note = await w.captureText(title: '失败恢复', text: '恢复前的原文。');
-    await w.processTextNote(note.id);
-    expect(f.modelRequests, hasLength(4));
-    final failure = w.processingFailures.single;
-    expect(failure.source, ProcessingFailureSource.text);
-    expect(failure.noteId, note.id);
-    expect(failure.title, '失败恢复');
-    expect(failure.recovery, ProcessingRecovery.retry);
-    expect(failure.automaticRetriesUsed, 3);
-    expect(failure.needsAccountAction, false);
-    await f.reopen(0);
-    final reopened = f.workspaces.first;
-    expect(reopened.processingFailures.single.id, failure.id);
-    await reopened.recoverProcessingFailure(failure.id);
-    expect(f.modelRequests, hasLength(5));
-    expect(reopened.processingFailures, isEmpty);
-    expect(reopened.notes, hasLength(1));
-    expect(reopened.notes.single.id, note.id);
-    expect(reopened.notes.single.text, '整理后的普通想法。');
-    expect(reopened.notes.single.originalText, '恢复前的原文。');
-  });
+  // Automatic retries of a capture come with the retry schedule (#40).
+  test(
+    'a text failure is listed once and recovers manually into the same note',
+    () async {
+      final f = BudgetFixture()..modelStatuses.add(503);
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final note = await w.captureText(title: '失败恢复', text: '恢复前的原文。');
+      await w.organizeNow(note.id);
+      expect(f.modelRequests, hasLength(1));
+      expect(w.organizeStatus(note.id), OrganizeStatus.failed);
+      final failure = w.processingFailures.single;
+      expect(failure.source, ProcessingFailureSource.text);
+      expect(failure.noteId, note.id);
+      expect(failure.title, '失败恢复');
+      expect(failure.recovery, ProcessingRecovery.retry);
+      expect(failure.automaticRetriesUsed, 0);
+      expect(failure.needsAccountAction, false);
+      await f.reopen(0);
+      final reopened = f.workspaces.first;
+      expect(reopened.processingFailures.single.id, failure.id);
+      await reopened.recoverProcessingFailure(failure.id);
+      expect(f.modelRequests, hasLength(2));
+      expect(reopened.processingFailures, isEmpty);
+      expect(reopened.notes, hasLength(1));
+      expect(reopened.notes.single.id, note.id);
+      expect(reopened.notes.single.text, '整理后的普通想法。');
+      expect(reopened.notes.single.originalText, '恢复前的原文。');
+    },
+  );
   test('credential and balance failures are listed for account action without automatic requests', () async {
     final f = BudgetFixture()..modelStatuses.addAll([401, 402]);
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
     final note = await w.captureText(title: '凭据失败', text: '凭据错误也保留原文。');
-    await w.processTextNote(note.id);
+    await w.organizeNow(note.id);
     expect(f.modelRequests, hasLength(1));
     var failure = w.processingFailures.single;
     expect(failure.needsAccountAction, true);
@@ -60,7 +66,7 @@ void main() {
     addTearDown(f.close);
     final w = f.workspaces.first;
     final note = await w.captureText(title: '无效结果', text: '无效结果不覆盖原文。');
-    await w.processTextNote(note.id);
+    await w.organizeNow(note.id);
     expect(f.modelRequests, hasLength(1));
     final failure = w.processingFailures.single;
     expect(failure.recovery, ProcessingRecovery.retry);
@@ -346,7 +352,7 @@ void main() {
     addTearDown(f.close);
     final w = f.workspaces.first;
     final note = await w.captureText(title: '重复点击', text: '重复点击只发送一次。');
-    await w.processTextNote(note.id);
+    await w.organizeNow(note.id);
     final failure = w.processingFailures.single;
     await Future.wait([
       w.recoverProcessingFailure(failure.id),

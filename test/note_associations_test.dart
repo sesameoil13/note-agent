@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'support/budget_fixture.dart';
+import 'support/organize_now.dart';
 
 void main() {
   test('semantic model links multiple existing notes and defers a new topic without blocking the original save', () async {
@@ -21,6 +22,9 @@ void main() {
       title: '观察记录',
       text: '受访者第一次打开工具，不知道下一步该点哪里。',
     );
+    f
+      ..keepAsIs(research)
+      ..keepAsIs(design);
     f.modelResult = {
       'manifestVersion': 3,
       'kind': 'ordinary',
@@ -35,7 +39,7 @@ void main() {
         {'title': '引导流程', 'reason': '集中记录后续首次使用体验的改进线索。'},
       ],
     };
-    await w.processTextNote(source.id);
+    await w.organizeNow(source.id);
     final note = w.notes.firstWhere((n) => n.id == source.id);
     expect(note.associations.map((a) => a.targetNoteId), [
       research.id,
@@ -51,7 +55,7 @@ void main() {
     expect(markdown, isNot(contains('[[引导流程]]')));
     expect(await File(note.sourcePath).readAsString(), source.text);
     final input = jsonDecode(
-      f.modelRequests.single['messages'].last['content'] as String,
+      f.requestsFor(source.id).single['messages'].last['content'] as String,
     ) as Map;
     expect(
       (input['associationCandidates'] as List).map((c) => c['noteId']),
@@ -74,6 +78,7 @@ void main() {
     final w = f.workspaces.first;
     final target = await w.captureText(title: '旧主题', text: '体验记录');
     final source = await w.captureText(title: '待处理', text: '观察首次使用体验。');
+    f.keepAsIs(target);
     f.modelResult = {
       'manifestVersion': 3,
       'kind': 'ordinary',
@@ -88,7 +93,7 @@ void main() {
         {'title': '问题清单', 'reason': '待研究的问题。'},
       ],
     };
-    await w.processTextNote(source.id);
+    await w.organizeNow(source.id);
     await w.renameNote(target.id, title: '体验设计');
     final suggestion = w.pendingTopicSuggestions.first;
     await w.confirmTopicSuggestion(suggestion.id);
@@ -109,7 +114,7 @@ void main() {
       w.notes.firstWhere((n) => n.id == source.id).associations.single.title,
       '引导设计',
     );
-    expect(f.modelRequests.length, 1);
+    expect(f.requestsFor(source.id), hasLength(1));
     await f.reopen(0);
     expect(f.workspaces.first.pendingTopicSuggestions, isEmpty);
     expect(
@@ -141,12 +146,12 @@ void main() {
         ],
         'newTopics': [],
       };
-      await w.processTextNote(n.id);
+      await w.organizeNow(n.id);
       expect(w.notes.single.text, n.text);
       expect(w.notes.single.associations, isEmpty);
       expect(w.pendingTopicSuggestions, isEmpty);
       expect(await File(n.sourcePath).readAsString(), n.text);
-      expect(w.textJobs.single.status, TextProcessingStatus.review);
+      expect(w.organizeStatus(n.id), OrganizeStatus.failed);
     },
   );
 
@@ -167,7 +172,7 @@ void main() {
         {'title': '导航设计', 'reason': '收集导航问题。'},
       ],
     };
-    await w.processTextNote(n.id);
+    await w.organizeNow(n.id);
     final suggestion = w.pendingTopicSuggestions.single.id;
     final storage = _FailAssociationStorage(
       (w.vaultStorage as DirectoryVaultStorage).directory,
@@ -209,6 +214,7 @@ void main() {
     var w = f.workspaces.first;
     final n = await w.captureText(title: '原记录', text: '研究新手的体验问题。');
     final target = await w.captureText(title: '研究', text: '用户体验研究');
+    f.keepAsIs(target);
     final storage = _FailAssociationStorage(
       (w.vaultStorage as DirectoryVaultStorage).directory,
     );
@@ -225,7 +231,7 @@ void main() {
       ],
       'newTopics': [],
     };
-    await w.processTextNote(n.id);
+    await w.organizeNow(n.id);
     expect(
       w.notes.firstWhere((v) => v.id == n.id).associationSavePending,
       isTrue,
@@ -247,8 +253,8 @@ void main() {
       w.notes.firstWhere((v) => v.id == n.id).associations.single.targetNoteId,
       target.id,
     );
-    expect(w.textJobs.single.status, TextProcessingStatus.completed);
-    expect(f.modelRequests.length, 1);
+    expect(w.organizeStatus(n.id), OrganizeStatus.organized);
+    expect(f.requestsFor(n.id), hasLength(1));
   });
 }
 

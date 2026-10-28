@@ -5,14 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'support/budget_fixture.dart';
+import 'support/organize_now.dart';
 
 void main() {
-  test('a retained Word table uses the existing text budget and semantic pipeline without replacing its complete source', () async {
+  test('a retained Word table goes through the semantic pipeline without replacing its complete source', () async {
     final f = BudgetFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
     final topic = await w.captureText(title: '产品研究', text: '收集产品使用情况。');
+    f.keepAsIs(topic);
     final note = await w.importDocument(
       original: File('test/fixtures/word/body-table.docx'),
     );
@@ -37,10 +39,7 @@ void main() {
       ],
       'newTopics': [],
     };
-    final prepared = await w.prepareTextProcessing(note.id);
-    expect(prepared.status, TextProcessingStatus.prepared);
-    expect(f.modelRequests, isEmpty);
-    final job = await w.processTextNote(note.id);
+    final job = await w.organizeNow(note.id);
     expect(job.status, TextProcessingStatus.completed);
     final saved = w.notes.firstWhere((n) => n.id == note.id);
     expect(saved.title, '产品记录');
@@ -72,7 +71,7 @@ void main() {
     expect(markdown, contains('[[手工主题]]'));
     expect(markdown, contains('提取结果'));
     final input = jsonDecode(
-      f.modelRequests.single['messages'].last['content'] as String,
+      f.requestsFor(note.id).single['messages'].last['content'] as String,
     ) as Map;
     expect(input['text'], raw);
     expect(input['text'], contains('| 苹果 | 2 | A &#124; B |'));
@@ -82,7 +81,7 @@ void main() {
       f.workspaces.first.notes.firstWhere((n) => n.id == note.id).originalText,
       raw,
     );
-    expect(f.modelRequests.length, 1);
+    expect(f.requestsFor(note.id), hasLength(1));
   });
   test('mixed Word images stay disclosed while extracted text can form a todo and be corrected locally', () async {
     final f = BudgetFixture();
@@ -112,7 +111,7 @@ void main() {
       'newTopics': [],
     };
     expect(
-      (await w.processTextNote(note.id)).status,
+      (await w.organizeNow(note.id)).status,
       TextProcessingStatus.completed,
     );
     var saved = w.notes.single;
@@ -146,41 +145,47 @@ void main() {
     expect(f.workspaces.first.notes.single.originalText, raw);
     expect(f.workspaces.first.notes.single.kind, NoteKind.ordinary);
   });
-  test('image-only, scanned and failed documents cannot reserve or send placeholder text', () async {
-    final f = BudgetFixture();
-    await f.start();
-    addTearDown(f.close);
-    final w = f.workspaces.first;
-    for (final path in [
-      'word/images-only.docx',
-      'scan.pdf',
-      'word/broken.docx',
-    ]) {
-      final note = await w.importDocument(
-        original: File('test/fixtures/$path'),
+  test(
+    'image-only, scanned and failed documents never send placeholder text',
+    () async {
+      final f = BudgetFixture();
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      for (final path in [
+        'word/images-only.docx',
+        'scan.pdf',
+        'word/broken.docx',
+      ]) {
+        final note = await w.importDocument(
+          original: File('test/fixtures/$path'),
+        );
+        expect(
+          w.textProcessingReadiness(note.id).canPrepare,
+          isFalse,
+          reason: path,
+        );
+        expect(
+          await File(note.attachments.single.originalPath).exists(),
+          isTrue,
+        );
+      }
+      await expectLater(
+        w.importDocument(original: File('${f.root.path}/missing.docx')),
+        throwsA(isA<FileSystemException>()),
       );
+      final unready = w.notes.firstWhere(
+        (n) => n.document!.status == DocumentImportStatus.originalFailed,
+      );
+      expect(w.textProcessingReadiness(unready.id).canPrepare, isFalse);
+      await w.sendWaitingNow();
+      expect(f.modelRequests, isEmpty);
       expect(
-        w.textProcessingReadiness(note.id).canPrepare,
-        isFalse,
-        reason: path,
+        w.notes.map((n) => w.organizeStatus(n.id)),
+        isNot(contains(OrganizeStatus.organized)),
       );
-      await expectLater(w.prepareTextProcessing(note.id), throwsStateError);
-      expect(await File(note.attachments.single.originalPath).exists(), isTrue);
-    }
-    await expectLater(
-      w.importDocument(original: File('${f.root.path}/missing.docx')),
-      throwsA(isA<FileSystemException>()),
-    );
-    final unready = w.notes.firstWhere(
-      (n) => n.document!.status == DocumentImportStatus.originalFailed,
-    );
-    expect(w.textProcessingReadiness(unready.id).canPrepare, isFalse);
-    await expectLater(w.prepareTextProcessing(unready.id), throwsStateError);
-    expect(w.textJobs, isEmpty);
-    expect(f.modelRequests, isEmpty);
-    await w.refreshBudget();
-    expect(w.budget.reservedCnyMicros, 0);
-  });
+    },
+  );
   test('real PDF text and table reach the same pipeline with source pages and raw bytes retained', () async {
     final f = BudgetFixture();
     await f.start();
@@ -193,7 +198,7 @@ void main() {
     expect(note.document!.result!.tables, isNotEmpty);
     expect(note.document!.result!.tables.first.location.page, 1);
     expect(
-      (await w.processTextNote(note.id)).status,
+      (await w.organizeNow(note.id)).status,
       TextProcessingStatus.completed,
     );
     final saved = w.notes.single;
@@ -224,7 +229,7 @@ void main() {
       1,
     );
   });
-  test('re-extraction cannot replace reserved or sent input; safely cancelled unsent input can be re-extracted', () async {
+  test('a capture can be re-extracted until it is sent, and the extracted text is what is sent', () async {
     final f = BudgetFixture();
     await f.start();
     addTearDown(f.close);
@@ -234,22 +239,16 @@ void main() {
       options: const DocumentExtractionOptions(maximumTableCells: 1),
     );
     final limited = note.text;
-    final first = await w.prepareTextProcessing(note.id);
-    expect(w.canRetryDocumentExtraction(note.id), isFalse);
-    await expectLater(w.retryDocumentExtraction(note.id), throwsStateError);
-    await w.cancelTextProcessing(first.id);
     expect(w.canRetryDocumentExtraction(note.id), isTrue);
     final extracting = w.retryDocumentExtraction(note.id);
     expect(w.textProcessingReadiness(note.id).canPrepare, isFalse);
-    await expectLater(w.prepareTextProcessing(note.id), throwsStateError);
+    // Not sent while it is being extracted.
+    await w.sendWaitingNow();
+    expect(f.modelRequests, isEmpty);
     final extracted = await extracting;
     expect(extracted.text, isNot(limited));
     expect(extracted.originalText, extracted.text);
-    expect(
-      (await w.prepareTextProcessing(note.id)).status,
-      TextProcessingStatus.prepared,
-    );
-    await w.processTextNote(note.id);
+    await w.organizeNow(note.id);
     final input = jsonDecode(
       f.modelRequests.single['messages'].last['content'] as String,
     ) as Map;
@@ -276,10 +275,7 @@ void main() {
     f.beforeReply = () async {
       await File(note.notePath).writeAsString(changed);
     };
-    expect(
-      (await w.processTextNote(note.id)).status,
-      TextProcessingStatus.review,
-    );
+    expect((await w.organizeNow(note.id)).status, TextProcessingStatus.review);
     expect(await File(note.notePath).readAsString(), changed);
     expect(await File(note.sourcePath).readAsString(), original);
     expect(w.notes.single.text, note.text);

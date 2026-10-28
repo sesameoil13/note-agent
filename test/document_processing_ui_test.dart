@@ -2,8 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:note_agent/budget_panel.dart';
 import 'package:note_agent/document_panel.dart';
+import 'package:note_agent/main.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'support/budget_fixture.dart';
@@ -13,78 +13,22 @@ class _LoopbackHttpOverrides extends HttpOverrides {}
 
 void main() {
   testWidgets(
-    'phone document review discloses omissions and reserves only on explicit action',
+    'a document organized after extraction keeps its extracted version and original',
     (tester) async {
       final f = BudgetFixture();
       final w = (await tester.runAsync(
         () => HttpOverrides.runWithHttpOverrides(() async {
           await f.start();
-          await f.workspaces.first.importDocument(
+          final w = f.workspaces.first;
+          await w.importDocument(
             original: File('test/fixtures/word/mixed.docx'),
           );
-          return f.workspaces.first;
+          await w.sendWaitingNow();
+          return w;
         }, _LoopbackHttpOverrides()),
       ))!;
       addTearDown(() => tester.runAsync(f.close));
-      tester.view.physicalSize = const Size(390, 844);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(
-        MaterialApp(
-          home: BudgetPanel(workspace: w, noteId: w.notes.single.id),
-        ),
-      );
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 100)),
-      );
-      await pumpUntil(tester);
-      await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(
-        find.text('预估并预留（不调用模型）'),
-        300,
-        scrollable: find
-            .descendant(
-              of: find.byType(ListView),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
-      expect(find.textContaining('扫描页、图片及其他未处理区域不会被补写'), findsOneWidget);
-      expect(w.textJobs, isEmpty);
-      expect(f.modelRequests, isEmpty);
-      await tester.runAsync(
-        () => HttpOverrides.runWithHttpOverrides(() async {
-          await tester.tap(find.text('预估并预留（不调用模型）'));
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-        }, _LoopbackHttpOverrides()),
-      );
-      await pumpUntil(tester);
-      await tester.pumpAndSettle();
-      expect(w.textJobs.single.status, TextProcessingStatus.prepared);
-      expect(f.modelRequests, isEmpty);
-      await tester.scrollUntilVisible(
-        find.text('确认发送并整理（可能产生费用）'),
-        200,
-        scrollable: find
-            .descendant(
-              of: find.byType(ListView),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
-      // Fully on screen, not just its edge, so the tap lands on it.
-      await tester.ensureVisible(find.text('确认发送并整理（可能产生费用）'));
-      await tester.pumpAndSettle();
-      await tester.runAsync(
-        () => HttpOverrides.runWithHttpOverrides(() async {
-          await tester.tap(find.text('确认发送并整理（可能产生费用）'));
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-        }, _LoopbackHttpOverrides()),
-      );
-      await pumpUntil(tester);
-      await tester.pumpAndSettle();
-      expect(w.textJobs.single.status, TextProcessingStatus.completed);
+      expect(w.organizeStatus(w.notes.single.id), OrganizeStatus.organized);
       expect(f.modelRequests, hasLength(1));
       await tester.pumpWidget(
         MaterialApp(
@@ -113,52 +57,36 @@ void main() {
     },
   );
 
-  testWidgets('image-only document visibly refuses an AI reservation', (
+  testWidgets('an image-only document is never sent and the note says why', (
     tester,
   ) async {
-    final f = BudgetFixture();
-    final w = (await tester.runAsync(
-      () => HttpOverrides.runWithHttpOverrides(() async {
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final f = BudgetFixture();
+      await tester.runAsync(() async {
         await f.start();
         await f.workspaces.first.importDocument(
           original: File('test/fixtures/word/images-only.docx'),
         );
-        return f.workspaces.first;
-      }, _LoopbackHttpOverrides()),
-    ))!;
-    addTearDown(() => tester.runAsync(f.close));
-    await tester.pumpWidget(
-      MaterialApp(
-        home: BudgetPanel(workspace: w, noteId: w.notes.single.id),
-      ),
-    );
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 100)),
-    );
-    await pumpUntil(tester);
-    await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(
-      find.text('预估并预留（不调用模型）'),
-      300,
-      scrollable: find
-          .descendant(
-            of: find.byType(ListView),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    expect(find.textContaining('扫描页与图片尚未识别'), findsOneWidget);
-    expect(
-      tester
-          .widget<OutlinedButton>(
-            find.widgetWithText(OutlinedButton, '预估并预留（不调用模型）'),
-          )
-          .onPressed,
-      isNull,
-    );
-    expect(w.textJobs, isEmpty);
-    expect(f.modelRequests, isEmpty);
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(const SizedBox());
+      });
+      addTearDown(() => tester.runAsync(f.close));
+      final w = f.workspaces.first;
+      tester.view.physicalSize = const Size(1280, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(NoteAgentApp(initialWorkspace: w));
+      await pumpUntil(
+        tester,
+        () => w.organizeStatus(w.notes.single.id) == OrganizeStatus.failed,
+      );
+      await pumpUntil(tester);
+      expect(find.textContaining('本机已保存 · 失败'), findsOneWidget);
+      await tester.tap(find.text(w.notes.single.title).first);
+      await pumpUntil(tester);
+      expect(find.textContaining('整理：失败'), findsOneWidget);
+      expect(find.textContaining('扫描页与图片尚未识别'), findsOneWidget);
+      expect(f.modelRequests, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    }, _LoopbackHttpOverrides());
   });
 }

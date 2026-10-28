@@ -467,7 +467,10 @@ void main() {
         final note = w.notes.firstWhere((n) => n.id == source.outputNoteId);
         expect(note.originalText, f.transcript);
         expect(note.associations, isEmpty);
-        expect(w.textJobs.single.status, TextProcessingStatus.review);
+        expect(
+          w.textJobs.singleWhere((j) => j.noteId == note.id).status,
+          TextProcessingStatus.review,
+        );
         expect(note.text, f.transcript);
         expect(await File(note.sourcePath).readAsString(), f.transcript);
         expect(f.audioRequests, 1);

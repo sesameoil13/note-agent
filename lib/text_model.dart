@@ -301,11 +301,21 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
     Map<String, dynamic> payload,
   ) async {
     await _ensureLoaded();
+    if (_aiKey == null) {
+      throw const ConnectionFailure('请先在 App 连接阿里云百炼。', code: 'credentials');
+    }
+    await requestSharedBudget('/v1/budget/attempt/$attemptId/send', body: {});
+    return sendText(payload);
+  }
+
+  /// Sends [payload] straight to Bailian with this device's key; nothing
+  /// reaches the Worker (ADR 0004).
+  Future<TextModelReply> sendText(Map<String, dynamic> payload) async {
+    await _ensureLoaded();
     final key = _aiKey;
     if (key == null) {
       throw const ConnectionFailure('请先在 App 连接阿里云百炼。', code: 'credentials');
     }
-    await requestSharedBudget('/v1/budget/attempt/$attemptId/send', body: {});
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
     try {

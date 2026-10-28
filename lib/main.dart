@@ -129,6 +129,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   StreamSubscription<void>? _notificationInteractions;
   StreamSubscription<void>? _networkReturn;
 
+  /// Sends captures waiting for 整理 (ADR 0004) between other triggers.
+  Timer? _organizeTimer;
+
   /// macOS, Android and Windows re-check local reminders when the network
   /// comes back (Windows also after waking from sleep), as on resume, and send
   /// the to-do operations queued while offline; the OS reports it through the
@@ -147,6 +150,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             }, onError: (Object _) {})
             .whenComplete(_syncTodos),
       );
+      _sendWaiting();
     });
     return port;
   }
@@ -224,11 +228,33 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       });
     }
     _watchNotificationInteractions();
+    _sendWaiting();
+    _organizeTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _sendWaiting(),
+    );
+  }
+
+  /// Sends what is waiting for 整理, then shows the new statuses.
+  void _sendWaiting() {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    unawaited(
+      workspace.sendWaitingNow().then(
+        (_) {
+          if (mounted && workspace == _workspace) setState(() {});
+        },
+        onError: (Object _) {
+          /* Captures keep their status and are sent on a later call. */
+        },
+      ),
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _organizeTimer?.cancel();
     unawaited(_notificationInteractions?.cancel());
     unawaited(_networkReturn?.cancel());
     _title.dispose();
@@ -454,6 +480,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     _recordingPage = workspace.recordingAvailable;
     if (old != widget.initialWorkspace) await old?.close();
     _resumeAudioQueue();
+    _sendWaiting();
   }
 
   Future<void> _save() async {
@@ -470,6 +497,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       final note = pending
           ? await _workspace!.retryNoteExport(_pendingCaptureId!)
           : await _workspace!.captureText(title: _title.text, text: _text.text);
+      _sendWaiting();
       if (!mounted) return;
       setState(() {
         _selectedId = note.id;
@@ -538,6 +566,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
 
   void _documentChanged(String? id) {
     if (!mounted) return;
+    if (id != null) _sendWaiting();
     setState(() {
       if (id != null) {
         _selectedId = id;
@@ -1141,7 +1170,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                                 ),
                                 const SizedBox(height: 16),
                                 Text(
-                                  '${note.status == NoteStatus.localSaved ? '本机已保存' : '原文已保留 · 待写入'}${note.archived ? ' · 已归档' : ''}',
+                                  [
+                                    note.status == NoteStatus.localSaved
+                                        ? '本机已保存'
+                                        : '原文已保留 · 待写入',
+                                    ?_workspace!.organizeStatus(note.id)?.label,
+                                    if (note.archived) '已归档',
+                                  ].join(' · '),
                                   style: const TextStyle(
                                     fontSize: 12,
                                     color: ash,
@@ -1489,6 +1524,19 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                     ),
                 ],
               ),
+              if (_workspace!.organizeStatus(note.id) case final status?)
+                Text(
+                  [
+                    '整理：${status.label}',
+                    if (_workspace!.organizeMessage(note.id) case final m
+                        when m.isNotEmpty)
+                      m,
+                  ].join(' · '),
+                  style: TextStyle(
+                    color: status == OrganizeStatus.failed ? oxide : ash,
+                    fontSize: 12,
+                  ),
+                ),
               const SizedBox(height: 8),
               NoteSyncSummary(note: note, todoSync: _workspace!.todoSync),
               Align(

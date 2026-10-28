@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'console_charge_dialog.dart';
 
 import 'note_workspace.dart';
-import 'action_confirmation_screen.dart';
 
 /// All paid actions are explicit. Refreshing this page only reads the ledger.
 class BudgetPanel extends StatefulWidget {
@@ -63,25 +62,9 @@ class _BudgetPanelState extends State<BudgetPanel> {
     }
   }
 
-  String status(TextProcessingStatus value) => switch (value) {
-    TextProcessingStatus.queued => '等待预算确认',
-    TextProcessingStatus.prepared => '已预留，尚未发送',
-    TextProcessingStatus.sending => '正在处理，请勿重复发送',
-    TextProcessingStatus.costPending => '费用待核对',
-    TextProcessingStatus.completed => '已整理并结算',
-    TextProcessingStatus.failed => '暂停，原文已保存',
-    TextProcessingStatus.review => '待确认，原文保留',
-    TextProcessingStatus.cancelled => '未发送，已取消',
-  };
   @override
   Widget build(BuildContext context) {
     final budget = w.budget;
-    final jobs = w.textJobs;
-    final notes = w.notes.where(
-      (n) =>
-          (n.document != null || n.attachments.isEmpty) &&
-          (widget.noteId == null || n.id == widget.noteId),
-    );
     return Scaffold(
       appBar: AppBar(
         title: const Text('AI 与共享预算'),
@@ -288,128 +271,6 @@ class _BudgetPanelState extends State<BudgetPanel> {
                   ],
                 ),
               ],
-            ],
-          ],
-          for (final note in notes) ...[
-            const SizedBox(height: 20),
-            Text(note.title, style: Theme.of(context).textTheme.titleMedium),
-            if (w.textProcessingReadiness(note.id).message.isNotEmpty)
-              Text(w.textProcessingReadiness(note.id).message),
-            if (!jobs.any((j) => j.noteId == note.id))
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton(
-                  onPressed:
-                      _busy || !w.textProcessingReadiness(note.id).canPrepare
-                      ? null
-                      : () => _run(() async {
-                          await w.prepareTextProcessing(note.id);
-                        }),
-                  child: const Text('预估并预留（不调用模型）'),
-                ),
-              ),
-            for (final job in jobs.where((j) => j.noteId == note.id)) ...[
-              Text('${status(job.status)} · 已准备 ${job.attemptCount} 次尝试'),
-              if (job.message.isNotEmpty) Text(job.message),
-              if (w.pendingActionNotes.any((n) => n.id == note.id))
-                OutlinedButton(
-                  onPressed: _busy
-                      ? null
-                      : () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => ActionConfirmationScreen(
-                                workspace: w,
-                                noteId: note.id,
-                              ),
-                            ),
-                          );
-                          if (mounted) setState(() {});
-                        },
-                  child: const Text('核对行动（不调用模型）'),
-                ),
-              if (job.estimatedCnyMicros > 0)
-                Text('首次尝试预留 ${money(job.estimatedCnyMicros)}；实际按费用回执结算。'),
-              Text(job.quoteDescription),
-              if (job.generationIds.isNotEmpty)
-                SelectableText('费用编号：${job.generationIds.join('、')}'),
-              if (job.generationIds.isNotEmpty)
-                Text(
-                  '费用回执金额：${job.knownCostCnyMicros == null ? '未知' : '¥${(job.knownCostCnyMicros! / 1000000).toStringAsFixed(6)}'}；最后一次输入 ${job.inputTokens ?? '未知'} / 输出 ${job.outputTokens ?? '未知'} token。尚未取得的费用仍按预留计。',
-                ),
-              Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                children: [
-                  if (job.status == TextProcessingStatus.costPending)
-                    OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () => recordConsoleCharges(
-                              context,
-                              w,
-                              'text:${job.id}',
-                              run: _run,
-                            ),
-                      child: const Text('按控制台账单记录费用'),
-                    ),
-                  if (job.status == TextProcessingStatus.prepared &&
-                      !job.reorganization)
-                    FilledButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _run(() async {
-                              await w.processTextNote(note.id);
-                            }),
-                      child: const Text('确认发送并整理（可能产生费用）'),
-                    ),
-                  if (!job.reorganization &&
-                      [
-                        TextProcessingStatus.failed,
-                        TextProcessingStatus.queued,
-                        TextProcessingStatus.cancelled,
-                      ].contains(job.status))
-                    OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _run(() async {
-                              await w.prepareTextProcessing(note.id);
-                            }),
-                      child: const Text('重新核对预留（不调用模型）'),
-                    ),
-                  if (job.status == TextProcessingStatus.prepared)
-                    TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _run(() async {
-                              await w.cancelTextProcessing(job.id);
-                            }),
-                      child: const Text('取消未发送任务'),
-                    ),
-                  if (job.canRetry)
-                    OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _run(() async {
-                              await w.retryTextProcessing(job.id);
-                            }),
-                      child: const Text('另行预留并手动重试（可能计费）'),
-                    ),
-                  if ([
-                    TextProcessingStatus.costPending,
-                    TextProcessingStatus.review,
-                    TextProcessingStatus.completed,
-                  ].contains(job.status))
-                    OutlinedButton(
-                      onPressed: _busy
-                          ? null
-                          : () => _run(() async {
-                              await w.reconcileTextProcessing(job.id);
-                            }),
-                      child: const Text('核对费用（不重新调用模型）'),
-                    ),
-                ],
-              ),
             ],
           ],
         ],
