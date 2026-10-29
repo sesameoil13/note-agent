@@ -77,12 +77,15 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
         _ => null,
       };
       if (recovery == null) continue;
+      final audio = _audioQueue.sources
+          .where((s) => s.id == p['audio'])
+          .firstOrNull;
       failures.add(
         WorkspaceProcessingFailure(
           id: 'text:${job.id}',
           source: ProcessingFailureSource.text,
           noteId: job.noteId,
-          title: titleOf(job.noteId, '文字笔记'),
+          title: titleOf(job.noteId, audio?.originalName ?? '文字笔记'),
           message: job.message,
           recovery: recovery,
           automaticRetriesUsed: p['autoRetries'] as int? ?? 0,
@@ -91,41 +94,17 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
         ),
       );
     }
-    final jobs = {for (final job in audioJobs) job.sourceId: job};
+    // Old estimate/confirm jobs, finished or dropped on upgrade, are never
+    // sent again.
+    final oldJobSources = {
+      for (final row in _database.select(
+        'SELECT source_id FROM audio_jobs WHERE vault=?',
+        [vaultStorage.identity],
+      ))
+        row['source_id'] as String,
+    };
     for (final source in _audioQueue.sources) {
-      final job = jobs[source.id];
-      if (job != null) {
-        final p = _audioPayload(source.id);
-        // Organized already: only a fee is left to check, never a re-run.
-        final organized =
-            p['textJob'] is String &&
-            _textPayload(p['textJob'] as String)['result'] != null;
-        final recovery = switch (job.status) {
-          AudioJobStatus.paused when job.transcript == null =>
-            ProcessingRecovery.retry,
-          AudioJobStatus.paused when p['audioSettled'] != true || organized =>
-            ProcessingRecovery.reconcileCost,
-          AudioJobStatus.paused => ProcessingRecovery.reorganizeOnly,
-          AudioJobStatus.prepared
-              when p['previous'] != null || p['organizationOnly'] == true =>
-            ProcessingRecovery.confirmPrepared,
-          _ => null,
-        };
-        if (recovery == null) continue;
-        failures.add(
-          WorkspaceProcessingFailure(
-            id: 'audio:${source.id}',
-            source: ProcessingFailureSource.audio,
-            noteId: job.noteId,
-            title: titleOf(job.noteId, source.originalName),
-            message: job.message,
-            recovery: recovery,
-            needsAccountAction: _accountFailureKinds.contains(p['failureKind']),
-            estimatedCnyMicros: job.estimatedCnyMicros,
-          ),
-        );
-        continue;
-      }
+      if (oldJobSources.contains(source.id)) continue;
       if (source.processingStatus != AudioProcessingStatus.failed &&
           source.originalStatus != AudioOriginalStatus.incomplete) {
         continue;
@@ -191,25 +170,10 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
       case ProcessingFailureSource.text:
         await retryTextProcessing(key);
       case ProcessingFailureSource.audio:
-        if (audioJobs.every((j) => j.sourceId != key)) {
-          if (failure.recovery == ProcessingRecovery.reselectOriginal) {
-            throw StateError('原件尚未完整保存，请重新选择同一录音文件导入。');
-          }
-          await retryAudioProcessing(key);
-          return;
+        if (failure.recovery == ProcessingRecovery.reselectOriginal) {
+          throw StateError('原件尚未完整保存，请重新选择同一录音文件导入。');
         }
-        switch (failure.recovery) {
-          case ProcessingRecovery.retry:
-            await prepareAudioRetry(key);
-          case ProcessingRecovery.reconcileCost:
-            await reconcileAudioProcessing(key);
-          case ProcessingRecovery.reorganizeOnly:
-            await prepareAudioOrganization(key);
-          case ProcessingRecovery.confirmPrepared:
-            await confirmAudioProcessing(key);
-          default:
-            throw StateError('此失败项正在等待自动重试。');
-        }
+        await retryAudioProcessing(key);
       case ProcessingFailureSource.document:
         await retryDocumentExtraction(key, original: original);
     }
@@ -239,31 +203,6 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
 
     if (failureId.startsWith('text:')) {
       text(key, '整理');
-    } else if (failureId.startsWith('audio:') &&
-        audioJobs.any((j) => j.sourceId == key)) {
-      final current = _audioPayload(key);
-      Map<String, dynamic>? p = current;
-      while (p != null) {
-        final parts = _parts(p);
-        for (final part in parts) {
-          if (part['state'] == 'reserved' ||
-              part['settled'] == true ||
-              part['receipt'] != null) {
-            continue;
-          }
-          out.add((
-            part['attempt'] as String,
-            parts.length > 1
-                ? '转写第 ${(part['index'] as int) + 1}/${parts.length} 段'
-                : '转写',
-            null,
-          ));
-        }
-        p = (p['previous'] as Map?)?.cast<String, dynamic>();
-      }
-      if (current['textJob'] is String) {
-        text(current['textJob'] as String, '整理');
-      }
     }
     return out;
   }
@@ -301,43 +240,21 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
     Object? actual,
   ) async {
     final (attemptId, _, textJob) = candidate;
-    if (textJob != null) {
-      final p = _textPayload(textJob);
-      p['receipts'] = {
-        ...?p['receipts'] as Map?,
-        attemptId: {'settled': true, 'confirmed': true, 'cnyMicros': actual},
-      };
-      await _saveText(
-        textJob,
-        textJobs.firstWhere((j) => j.id == textJob).status,
-        p,
-      );
-      return;
-    }
-    final key = failureId.substring(failureId.indexOf(':') + 1);
-    final p = _audioPayload(key);
-    Map<String, dynamic>? payload = p;
-    while (payload != null) {
-      for (final part in (payload['parts'] as List?) ?? const []) {
-        if ((part as Map)['attempt'] == attemptId) {
-          part
-            ..['settled'] = true
-            ..['confirmed'] = true
-            ..['cnyMicros'] = actual;
-        }
-      }
-      payload = (payload['previous'] as Map?)?.cast<String, dynamic>();
-    }
-    await _saveAudioJob(key, _audioJob(key).status, p);
+    if (textJob == null) return;
+    final p = _textPayload(textJob);
+    p['receipts'] = {
+      ...?p['receipts'] as Map?,
+      attemptId: {'settled': true, 'confirmed': true, 'cnyMicros': actual},
+    };
+    await _saveText(
+      textJob,
+      textJobs.firstWhere((j) => j.id == textJob).status,
+      p,
+    );
   }
 
   Future<void> _reconcileCharges(String failureId) async {
-    final key = failureId.substring(failureId.indexOf(':') + 1);
-    if (failureId.startsWith('audio:')) {
-      await _reconcileAudio(key);
-    } else {
-      await _reconcileText(key);
-    }
+    await _reconcileText(failureId.substring(failureId.indexOf(':') + 1));
   }
 
   Future<void> _recordConfirmedCharge(

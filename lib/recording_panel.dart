@@ -105,7 +105,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
   String get _audioSignature => widget.workspace.audioSources
       .map(
         (s) =>
-            '${s.id}:${s.processingStatus}:${s.stage}:${s.processingReason}:${s.publicationStatus}',
+            '${s.id}:${s.processingStatus}:${s.stage}:${s.processingReason}:${s.publicationStatus}:${widget.workspace.organizeStatus(s.outputNoteId)}',
       )
       .join('|');
 
@@ -164,7 +164,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
             ),
             const SizedBox(height: 8),
             const Text(
-              '离线也可保存。保留原音频，尚未转写。',
+              '离线也可保存。保留原音频，联网后自动转写并整理。',
               style: TextStyle(color: Color(0xFF767C82), height: 1.5),
             ),
             const SizedBox(height: 24),
@@ -346,7 +346,52 @@ class _RecordingPanelState extends State<RecordingPanel> {
     );
   }
 
-  Widget _processing(WorkspaceAudioSource source) => Column(
+  Widget _processing(WorkspaceAudioSource source) {
+    final status = widget.workspace.organizeStatus(source.outputNoteId);
+    // Until its check succeeds, the check's result and retry are shown.
+    return status == null || source.metadata == null
+        ? _checking(source)
+        : _organizing(source, status);
+  }
+
+  /// Automatic 整理 (ADR 0004): transcribed, then organized, by itself.
+  Widget _organizing(WorkspaceAudioSource source, OrganizeStatus status) {
+    final message = widget.workspace.organizeMessage(source.outputNoteId);
+    final failure = widget.workspace.processingFailures
+        .where(
+          (f) =>
+              f.source == ProcessingFailureSource.text &&
+              f.noteId == source.outputNoteId,
+        )
+        .firstOrNull;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '整理：${status.label}',
+          style: TextStyle(
+            color: status == OrganizeStatus.failed
+                ? const Color(0xFFFF4A18)
+                : const Color(0xFF767C82),
+          ),
+        ),
+        if (message.isNotEmpty)
+          SelectableText(message, style: const TextStyle(fontSize: 12)),
+        if (failure != null)
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () => _act(
+                    () => widget.workspace.recoverProcessingFailure(failure.id),
+                  ),
+            child: const Text('重试'),
+          ),
+      ],
+    );
+  }
+
+  /// Audio not yet checked, refused at its check, or kept from before 整理.
+  Widget _checking(WorkspaceAudioSource source) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
@@ -530,7 +575,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
           Text(switch (recording.status) {
             RecordingStatus.capturing => '录制中 · 原音频尚未完成',
             RecordingStatus.savePending => '原音频已保留 · 待写入笔记库',
-            RecordingStatus.localSaved => '本机原音频已保存 · 尚未转写',
+            RecordingStatus.localSaved => '本机原音频已保存',
             RecordingStatus.exportFailed => '本机原音频已保留 · 笔记库写入未确认',
             RecordingStatus.interrupted => '录音意外中断 · 请回放核对',
             RecordingStatus.failed => '未能开始录音',

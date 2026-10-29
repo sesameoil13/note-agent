@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:note_agent/connection.dart';
 import 'package:note_agent/note_workspace.dart';
@@ -43,6 +44,25 @@ class AiFixture {
 
   /// Runs while a qwen-plus request is held, before the reply is written.
   Future<void> Function()? beforeReply;
+
+  /// qwen3-asr-flash requests, oldest first.
+  final audioRequests = <Map<String, dynamic>>[];
+
+  /// Seconds of audio in each transcription request, read from its WAV.
+  final audioSeconds = <int>[];
+
+  /// Statuses for successive transcription requests; 200 when empty.
+  final audioStatuses = <int>[];
+  String transcript = '明天下午两点整理会议记录。';
+
+  /// Transcripts for successive parts; [transcript] when empty.
+  final partTranscripts = <String>[];
+
+  /// Runs while a transcription request is held, before the reply.
+  Future<void> Function()? beforeAudioReply;
+
+  /// The first device's recorder, if a test records.
+  AudioPlatform? recorder;
   final workspaces = <NoteWorkspace>[];
   final _stores = <AiMemoryStore>[];
   // Widget tests mock every HttpClient made in their zone; the proxy to the
@@ -100,7 +120,13 @@ class AiFixture {
       return;
     }
     if (r.uri.path == '/chat/completions') {
-      await _organize(r);
+      final request =
+          jsonDecode(await utf8.decoder.bind(r).join()) as Map<String, dynamic>;
+      if (request['model'] == 'qwen3-asr-flash') {
+        await _transcribe(r, request);
+      } else {
+        await _organize(r, request);
+      }
       return;
     }
     // The key check lists models.
@@ -127,9 +153,7 @@ class AiFixture {
   }
 
   /// Bailian's OpenAI-compatible qwen-plus reply.
-  Future<void> _organize(HttpRequest r) async {
-    final request =
-        jsonDecode(await utf8.decoder.bind(r).join()) as Map<String, dynamic>;
+  Future<void> _organize(HttpRequest r, Map<String, dynamic> request) async {
     modelRequests.add(request);
     final status = modelStatuses.isEmpty ? 200 : modelStatuses.removeAt(0);
     await beforeReply?.call();
@@ -172,9 +196,54 @@ class AiFixture {
     await r.response.close();
   }
 
+  /// Bailian's qwen3-asr-flash reply through chat/completions.
+  Future<void> _transcribe(HttpRequest r, Map<String, dynamic> request) async {
+    audioRequests.add(request);
+    final status = audioStatuses.isEmpty ? 200 : audioStatuses.removeAt(0);
+    final content = ((request['messages'] as List).single as Map)['content'];
+    final data =
+        (((content as List).single as Map)['input_audio'] as Map)['data']
+            as String;
+    final header = ByteData.sublistView(
+      Uint8List.fromList(base64Decode(data.split(',').last)),
+    );
+    audioSeconds.add(
+      (header.getUint32(40, Endian.little) /
+              header.getUint32(28, Endian.little))
+          .ceil(),
+    );
+    await beforeAudioReply?.call();
+    r.response.statusCode = status;
+    if (status != 200) {
+      r.response.write('{}');
+      await r.response.close();
+      return;
+    }
+    r.response.write(
+      jsonEncode({
+        'id': 'chatcmpl-asr-fixture-${audioRequests.length}',
+        'model': 'qwen3-asr-flash',
+        'choices': [
+          {
+            'finish_reason': 'stop',
+            'message': {
+              'role': 'assistant',
+              'content': partTranscripts.isEmpty
+                  ? transcript
+                  : partTranscripts.removeAt(0),
+            },
+          },
+        ],
+        'usage': {'seconds': audioSeconds.last},
+      }),
+    );
+    await r.response.close();
+  }
+
   Future<NoteWorkspace> _open(int i) => NoteWorkspace.open(
     localDirectory: Directory('${root.path}/local$i'),
     vaultDirectory: Directory('${root.path}/vault$i'),
+    audioPlatform: i == 0 ? recorder : null,
     clock: () => now,
     connection: WorkspaceConnection(
       secureStore: _stores[i],

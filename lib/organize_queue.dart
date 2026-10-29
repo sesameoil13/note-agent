@@ -3,6 +3,9 @@ part of 'note_workspace.dart';
 /// Where a capture is in its automatic 整理 (GLOSSARY), as shown on the note.
 enum OrganizeStatus {
   waiting('等待发送'),
+
+  /// A recording or imported audio being sent to qwen3-asr-flash.
+  transcribing('转写中'),
   organizing('整理中'),
   organized('已整理'),
   failed('失败');
@@ -11,14 +14,16 @@ enum OrganizeStatus {
   final String label;
 }
 
-/// Automatic 整理 of text and document captures (ADR 0004): each capture is
-/// queued once on the device that captured it and sent straight to Bailian,
-/// with no estimate, confirmation or budget request.
+/// Automatic 整理 of every capture (ADR 0004): each is queued once on the
+/// device that captured it and sent straight to Bailian, with no estimate,
+/// confirmation or budget request. Audio is transcribed first.
 extension _WorkspaceOrganizeQueue on NoteWorkspace {
   /// Queues [noteId] for 整理. Only the capturing device calls this, so a
   /// note that arrives from another device is never sent from here.
   /// [original] is the captured text; a document's is its extraction.
-  void _queueOrganize(String noteId, {String? original}) {
+  /// [audio] is the source of a recording or imported audio, whose note is
+  /// created once its transcript arrives.
+  void _queueOrganize(String noteId, {String? original, String? audio}) {
     _database.execute(
       'INSERT INTO text_jobs(id,note_id,vault,status,payload) VALUES (?,?,?,?,?)',
       [
@@ -29,6 +34,7 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
         jsonEncode({
           'automatic': true,
           'original': ?original,
+          'audio': ?audio,
           'attempts': <dynamic>[],
         }),
       ],
@@ -49,6 +55,10 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     if (payload['result'] is Map) return OrganizeStatus.organized;
     return switch (job.status) {
       TextProcessingStatus.waiting => OrganizeStatus.waiting,
+      // A recording's original is set once its whole transcript arrived.
+      TextProcessingStatus.sending
+          when payload['audio'] is String && payload['original'] == null =>
+        OrganizeStatus.transcribing,
       TextProcessingStatus.sending => OrganizeStatus.organizing,
       _ when payload['automatic'] == true => OrganizeStatus.failed,
       _ => null,
@@ -103,10 +113,19 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
   /// False when sending must stop for now (no key connected); other
   /// captures are unaffected by this one's failure.
   Future<bool> _sendOrganize(String id, String noteId) async {
-    final readiness = textProcessingReadiness(noteId);
-    final note = notes.firstWhere((n) => n.id == noteId);
     final payload = _textPayload(id);
-    if (!readiness.canPrepare) {
+    final audio = payload['audio'] as String?;
+    if (audio != null) {
+      final source = _audioQueue.sources
+          .where((s) => s.id == audio)
+          .firstOrNull;
+      // Its original is still being saved or checked.
+      if (source == null || !source.originalSaved || source.metadata == null) {
+        return true;
+      }
+    } else if (textProcessingReadiness(noteId) case final readiness
+        when !readiness.canPrepare) {
+      final note = notes.firstWhere((n) => n.id == noteId);
       // A document with no usable text never becomes ready; anything else
       // (vault write or extraction still pending) waits for the next call.
       if (note.status == NoteStatus.localSaved &&
@@ -125,24 +144,32 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     try {
       // What was captured, never a later edit (GLOSSARY 整理).
       final original =
-          payload['original'] as String? ?? _originalTextFor(noteId)!;
+          payload['original'] as String? ??
+          (audio != null
+              ? await _transcribe(id, audio, payload)
+              : _originalTextFor(noteId)!);
+      final note = notes.firstWhere((n) => n.id == noteId);
       payload['original'] = original;
       payload['modifiedAt'] = note.modifiedAt.toIso8601String();
       payload['noteSnapshot'] = await vaultStorage.readText(
         vaultStorage.relativePath(note.notePath),
       );
-      payload['associationCandidates'] = await _associationCandidates(
-        noteId,
-        original,
-      );
-      payload['request'] = textModelPayload(
-        noteId,
-        original,
-        const {},
-        associationCandidates: (payload['associationCandidates'] as List)
-            .map((c) => (c as Map).cast<String, dynamic>())
-            .toList(),
-      );
+      if (audio != null) {
+        payload['request'] = await _audioTextRequest(noteId, original, payload);
+      } else {
+        payload['associationCandidates'] = await _associationCandidates(
+          noteId,
+          original,
+        );
+        payload['request'] = textModelPayload(
+          noteId,
+          original,
+          const {},
+          associationCandidates: (payload['associationCandidates'] as List)
+              .map((c) => (c as Map).cast<String, dynamic>())
+              .toList(),
+        );
+      }
       payload
         ..remove('reply')
         ..remove('validationError')
@@ -163,6 +190,12 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
       payload['settled'] = true;
       await _saveText(id, TextProcessingStatus.sending, payload);
       await _applyText(id, payload);
+      if (audio != null) {
+        _database.execute(
+          'UPDATE audio_queue SET processing_status=?,processing_reason=NULL WHERE id=? AND vault=?',
+          [AudioProcessingStatus.completed.name, audio, vaultStorage.identity],
+        );
+      }
       return true;
     } on ConnectionFailure catch (e) {
       if (e.code == 'credentials' && payload['reply'] == null) {
@@ -201,7 +234,7 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     }
   }
 
-  /// Old estimate/confirm jobs of text and documents that never got a result
+  /// Old estimate/confirm jobs of every capture that never got a result
   /// are dropped without being sent; their notes and originals stay.
   Future<void> _dropUnfinishedBudgetJobs() async {
     // Also jobs of notes in the 回收站, which return with a restore.
@@ -211,8 +244,8 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     )) {
       final id = row['id'] as String;
       final payload = _textPayload(id);
+      // Including the organizing step of an old recording job.
       if (payload['automatic'] == true ||
-          payload['audioPipeline'] is String ||
           payload['reorganize'] == true ||
           payload['result'] is Map ||
           payload['dropped'] == true) {

@@ -107,68 +107,6 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
     );
   }
 
-  Future<WorkspaceTextJob> _prepareText(String noteId) async {
-    final existing = textJobs
-        .where((j) => j.noteId == noteId && !j.reorganization)
-        .firstOrNull;
-    if (existing != null) {
-      if (existing.status == TextProcessingStatus.cancelled) {
-        final readiness = textProcessingReadiness(noteId);
-        if (!readiness.canPrepare) throw StateError(readiness.message);
-        final payload = _textPayload(existing.id);
-        final note = notes.firstWhere((n) => n.id == noteId);
-        payload['noteSnapshot'] = await vaultStorage.readText(
-          vaultStorage.relativePath(note.notePath),
-        );
-        if (note.document != null) {
-          payload['modifiedAt'] = note.modifiedAt.toIso8601String();
-          if (payload['original'] != note.text) {
-            payload['original'] = note.text;
-            payload.remove('associationCandidates');
-            payload.remove('request');
-            payload.remove('pendingReservation');
-          }
-        }
-        await _reserveNextText(existing.id, noteId, payload);
-        return textJobs.firstWhere((j) => j.id == existing.id);
-      }
-      if ([
-        TextProcessingStatus.queued,
-        TextProcessingStatus.failed,
-      ].contains(existing.status)) {
-        await _reserveTextJob(existing.id, noteId, _textPayload(existing.id));
-        return textJobs.firstWhere((j) => j.id == existing.id);
-      }
-      return existing;
-    }
-    final readiness = textProcessingReadiness(noteId);
-    if (!readiness.canPrepare) throw StateError(readiness.message);
-    final note = notes.firstWhere((n) => n.id == noteId);
-    final id = _createId();
-    final payload = <String, dynamic>{
-      'original': note.text,
-      'modifiedAt': note.modifiedAt.toIso8601String(),
-      'noteSnapshot': await vaultStorage.readText(
-        vaultStorage.relativePath(note.notePath),
-      ),
-      'attempts': <dynamic>[],
-    };
-    await _mutate(() async {
-      _database.execute(
-        'INSERT INTO text_jobs(id,note_id,vault,status,payload) VALUES (?,?,?,?,?)',
-        [
-          id,
-          noteId,
-          vaultStorage.identity,
-          TextProcessingStatus.queued.name,
-          jsonEncode(payload),
-        ],
-      );
-    });
-    await _reserveTextJob(id, noteId, payload);
-    return textJobs.firstWhere((j) => j.id == id);
-  }
-
   Future<void> _reserveTextJob(
     String id,
     String noteId,
@@ -315,16 +253,6 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       [status.name, jsonEncode(payload), error, id],
     );
   }, accepted: true);
-  Future<WorkspaceTextJob> _processText(
-    String noteId, {
-    int maxRetries = 3,
-  }) async {
-    // Only the organizing step of a recording still goes through the budget.
-    final job = await _prepareText(noteId);
-    if (job.status != TextProcessingStatus.prepared) return job;
-    return _sendText(job.id, noteId, maxRetries: maxRetries);
-  }
-
   Future<WorkspaceTextJob> _sendText(
     String jobId,
     String noteId, {
@@ -502,29 +430,14 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         noteId,
         payload['original'] as String,
       );
-      if (payload['audioPipeline'] is String) {
-        final audioContext = <String, dynamic>{
-          'noteId': noteId,
-          'transcript': payload['original'],
-          'textQuote': payload['quote'],
-          'associationCandidates': payload['associationCandidates'],
-        };
-        payload['request'] = await _audioTextRequest(audioContext);
-        payload['associationCandidates'] =
-            audioContext['associationCandidates'];
-        if (utf8.encode(jsonEncode(payload['request'])).length > 20000) {
-          throw const ConnectionFailure('完整转写超过整理上限，未发送或截断。');
-        }
-      } else {
-        payload['request'] = textModelPayload(
-          noteId,
-          payload['original'] as String,
-          (payload['quote'] as Map).cast<String, dynamic>(),
-          associationCandidates: (payload['associationCandidates'] as List)
-              .map((c) => (c as Map).cast<String, dynamic>())
-              .toList(),
-        );
-      }
+      payload['request'] = textModelPayload(
+        noteId,
+        payload['original'] as String,
+        (payload['quote'] as Map).cast<String, dynamic>(),
+        associationCandidates: (payload['associationCandidates'] as List)
+            .map((c) => (c as Map).cast<String, dynamic>())
+            .toList(),
+      );
       payload['pendingReservation'] =
           '$id-${(payload['attempts'] as List).length}';
       await _saveText(id, TextProcessingStatus.costPending, payload);

@@ -672,33 +672,6 @@ class NoteWorkspace {
       : FolderLocation('file', p.split(p.canonicalize(directory.path)));
   late final WorkspaceAudioQueue _audioQueue;
 
-  final Map<String, Future<WorkspaceAudioJob>> _audioOperations = {};
-  List<WorkspaceAudioJob> get audioJobs => _audioJobs();
-  Future<WorkspaceAudioJob> prepareAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _prepareAudio(sourceId));
-  Future<WorkspaceAudioJob> confirmAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _confirmAudio(sourceId));
-  Future<WorkspaceAudioJob> prepareAudioRetry(String sourceId) =>
-      _audioOperation(sourceId, () => _prepareAudio(sourceId, retry: true));
-  Future<WorkspaceAudioJob> prepareAudioOrganization(String sourceId) =>
-      _audioOperation(sourceId, () => _prepareAudioOrganization(sourceId));
-  Future<WorkspaceAudioJob> cancelAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _cancelAudio(sourceId));
-  Future<WorkspaceAudioJob> reconcileAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _reconcileAudio(sourceId));
-  Future<WorkspaceAudioJob> _audioOperation(
-    String sourceId,
-    Future<WorkspaceAudioJob> Function() action,
-  ) {
-    if (_closing) return Future.error(StateError('工作区正在关闭。'));
-    return _audioOperations.putIfAbsent(
-      sourceId,
-      () => _trackText(action()).whenComplete(() {
-        _audioOperations.remove(sourceId);
-      }),
-    );
-  }
-
   String newAudioSubmissionId() => _randomId();
   List<WorkspaceAudioSource> get audioSources => _audioQueue.sources;
   Future<WorkspaceAudioSource> importAudio({
@@ -707,6 +680,7 @@ class NoteWorkspace {
   }) => _mutate(() async {
     final result = await _audioQueue.import(original, submissionId);
     if (_audioQueue.processor == null) _audioQueue.markDisconnected();
+    _queueAudio(result.id);
     return _audioQueue.source(result.id);
   });
   late final WorkspaceAttachments _attachments;
@@ -729,13 +703,25 @@ class NoteWorkspace {
   Future<WorkspaceAttachment> retryAttachmentExport(String attachmentId) =>
       _mutate(() => _attachments.export(attachmentId));
 
-  Future<void> _adoptRecording(WorkspaceRecording recording) =>
-      _audioQueue.adoptRecording(
-        id: recording.id,
-        original: File(recording.originalPath),
-        sourcePath: recording.sourcePath,
-        createdAt: recording.createdAt,
-      );
+  Future<void> _adoptRecording(WorkspaceRecording recording) async {
+    if (_audioQueue.sources.any((s) => s.id == recording.id)) return;
+    await _audioQueue.adoptRecording(
+      id: recording.id,
+      original: File(recording.originalPath),
+      sourcePath: recording.sourcePath,
+      createdAt: recording.createdAt,
+    );
+    _queueAudio(recording.id);
+  }
+
+  /// Queues a new recording or imported audio for 整理 once. Audio refused
+  /// at its check (e.g. longer than 5 minutes) is never sent.
+  void _queueAudio(String id) {
+    final source = _audioQueue.source(id);
+    if (source.metadata == null && source.stage == 'inspectionFailed') return;
+    if (_organizeJob(source.outputNoteId) != null) return;
+    _queueOrganize(source.outputNoteId, audio: id);
+  }
 
   bool get audioSourcePlaybackAvailable =>
       _recordings.audio is AudioSourcePlayer;
@@ -1059,7 +1045,7 @@ class NoteWorkspace {
     await workspace._recoverCorrections();
     await workspace._dropUnfinishedBudgetJobs();
     await workspace._recoverText();
-    await workspace._recoverAudioJobs();
+    await workspace._dropUnfinishedAudioJobs();
     await workspace._readVaultEdits();
     await workspace._reconcileReminders();
     await workspace._reconcilePendingConfirmations();

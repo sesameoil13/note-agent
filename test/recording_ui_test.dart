@@ -63,7 +63,7 @@ void main() {
         '结束并保存',
         () => workspace.recordings.single.status == RecordingStatus.localSaved,
       );
-      expect(find.text('本机原音频已保存 · 尚未转写'), findsOneWidget);
+      expect(find.text('本机原音频已保存'), findsOneWidget);
       expect(workspace.notes, isEmpty);
       await tester.runAsync(() async {
         await tester.tap(find.byTooltip('回放原音频'));
@@ -229,7 +229,7 @@ void main() {
         () => workspace.recordings.single.status == RecordingStatus.localSaved,
       );
       expect(workspace.recordings, hasLength(1));
-      expect(find.text('本机原音频已保存 · 尚未转写'), findsOneWidget);
+      expect(find.text('本机原音频已保存'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );

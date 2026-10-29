@@ -79,12 +79,11 @@ void main() {
         await tester.runAsync(() async {
           await f.start();
           final w = f.workspaces.first;
-          final source = await w.importAudio(
+          await w.importAudio(
             original: await File('${f.root.path}/a.wav').writeAsBytes(wave()),
             submissionId: 'ui-reorganize',
           );
-          await w.prepareAudioProcessing(source.id);
-          await w.confirmAudioProcessing(source.id);
+          await w.sendWaitingNow();
         });
         addTearDown(() => tester.runAsync(f.close));
         tester.view.physicalSize = const Size(360, 800);

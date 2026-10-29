@@ -80,45 +80,6 @@ void main() {
     expect(w.notes.single.originalText, '无效结果不覆盖原文。');
   });
 
-  test('an audio failure recovers stage by stage without re-uploading a saved transcript', () async {
-    // The transcript is paid for; organizing fails once (a 503).
-    final f = BudgetFixture()..modelStatuses.add(503);
-    await f.start();
-    addTearDown(f.close);
-    final w = f.workspaces.first;
-    final source = await w.importAudio(
-      original: await File('${f.root.path}/a.wav').writeAsBytes(wave()),
-      submissionId: 'recover-audio',
-    );
-    await w.prepareAudioProcessing(source.id);
-    await w.confirmAudioProcessing(source.id);
-    expect(f.audioRequests, 1);
-    expect(f.modelRequests, hasLength(1));
-    var failure = w.processingFailures.single;
-    expect(failure.source, ProcessingFailureSource.audio);
-    expect(failure.recovery, ProcessingRecovery.reorganizeOnly);
-    await w.recoverProcessingFailure(failure.id);
-    failure = w.processingFailures.single;
-    expect(failure.recovery, ProcessingRecovery.confirmPrepared);
-    expect(failure.estimatedCnyMicros, greaterThan(0));
-    expect(f.modelRequests, hasLength(1));
-    await f.reopen(0);
-    final reopened = f.workspaces.first;
-    await reopened.recoverProcessingFailure(failure.id);
-    expect(f.audioRequests, 1);
-    expect(f.modelRequests, hasLength(2));
-    // Organized; only the failed first attempt's fee is unconfirmed, so the
-    // offer is to check that cost, never to organize (and pay) again.
-    expect(
-      reopened.processingFailures.single.recovery,
-      ProcessingRecovery.reconcileCost,
-    );
-    expect(reopened.notes, hasLength(1));
-    expect(reopened.notes.single.text, '整理后的普通想法。');
-    expect(reopened.notes.single.originalText, f.transcript);
-    expect(await File(source.originalPath).readAsBytes(), wave());
-  });
-
   test('a failed document extraction is listed and retried with its retained original', () async {
     final f = BudgetFixture();
     await f.start();
@@ -153,9 +114,8 @@ void main() {
       original: await File('${f.root.path}/a.wav').writeAsBytes(wave()),
       submissionId: 'processed-audio',
     );
-    await w.prepareAudioProcessing(source.id);
-    await w.confirmAudioProcessing(source.id);
-    expect(w.audioJobs.single.status, AudioJobStatus.completed);
+    await w.sendWaitingNow();
+    expect(w.organizeStatus(source.outputNoteId), OrganizeStatus.organized);
     return (f, w, source);
   }
 

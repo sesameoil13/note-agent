@@ -643,6 +643,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                                     workspace: _workspace!,
                                     onStateChanged: () {
                                       if (mounted) setState(() {});
+                                      // E.g. a recording or import saved.
+                                      _sendWaiting();
                                     },
                                   )
                                 : _composing
