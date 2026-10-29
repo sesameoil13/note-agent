@@ -152,6 +152,15 @@ class WorkspaceAudioQueue {
       transcript TEXT, organized TEXT, attempt_id TEXT, failure_kind TEXT, replay_safe INTEGER NOT NULL DEFAULT 0,
       UNIQUE(vault, submission_id)
     )''');
+    // Set on audio captured since 整理 became automatic (ADR 0004); audio
+    // from an older version is never queued by itself.
+    if (!database
+        .select('PRAGMA table_info(audio_queue)')
+        .any((row) => row['name'] == 'automatic')) {
+      database.execute(
+        'ALTER TABLE audio_queue ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0',
+      );
+    }
   }
   final Database database;
   final Directory local;
@@ -213,6 +222,15 @@ class WorkspaceAudioQueue {
   );
   WorkspaceAudioSource source(String id) =>
       sources.firstWhere((item) => item.id == id);
+
+  /// Ids of audio captured for automatic 整理 that passed its check.
+  List<String> checkedAutomaticIds() => [
+    for (final row in database.select(
+      'SELECT id FROM audio_queue WHERE vault = ? AND automatic = 1 AND metadata IS NOT NULL ORDER BY created_at, id',
+      [vault.identity],
+    ))
+      row['id'] as String,
+  ];
   Row row(String id) => database.select(
     'SELECT * FROM audio_queue WHERE id = ? AND vault = ?',
     [id, vault.identity],
@@ -275,8 +293,8 @@ class WorkspaceAudioQueue {
       database.execute(
         '''INSERT INTO audio_queue
         (id,vault,submission_id,output_note_id,original_name,original_path,source_path,created_at,
-        original_status,processing_status,processing_reason,publication_status)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+        original_status,processing_status,processing_reason,publication_status,automatic)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)''',
         [
           id,
           vault.identity,
@@ -333,8 +351,8 @@ class WorkspaceAudioQueue {
     database.execute(
       '''INSERT INTO audio_queue
       (id,vault,submission_id,output_note_id,original_name,original_path,source_path,created_at,
-       original_status,byte_length,digest,processing_status,publication_status)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+       original_status,byte_length,digest,processing_status,publication_status,automatic)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)''',
       [
         id,
         vault.identity,

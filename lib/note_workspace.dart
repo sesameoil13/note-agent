@@ -719,7 +719,13 @@ class NoteWorkspace {
   void _queueAudio(String id) {
     final source = _audioQueue.source(id);
     if (source.metadata == null && source.stage == 'inspectionFailed') return;
-    if (_organizeJob(source.outputNoteId) != null) return;
+    // Any job counts, also one of a note in the 回收站.
+    if (_database.select(
+      'SELECT 1 FROM text_jobs WHERE vault=? AND note_id=?',
+      [vaultStorage.identity, source.outputNoteId],
+    ).isNotEmpty) {
+      return;
+    }
     _queueOrganize(source.outputNoteId, audio: id);
   }
 
@@ -1046,6 +1052,10 @@ class NoteWorkspace {
     await workspace._dropUnfinishedBudgetJobs();
     await workspace._recoverText();
     await workspace._dropUnfinishedAudioJobs();
+    // Audio saved before the app closed may not have been queued yet.
+    for (final id in workspace._audioQueue.checkedAutomaticIds()) {
+      workspace._queueAudio(id);
+    }
     await workspace._readVaultEdits();
     await workspace._reconcileReminders();
     await workspace._reconcilePendingConfirmations();

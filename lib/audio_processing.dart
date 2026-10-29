@@ -107,10 +107,17 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
     Map<String, dynamic> payload,
   ) async {
     final source = _audioQueue.source(sourceId);
-    final split = splitForTranscription(
-      await _verifiedAudio(source),
-      format: source.metadata!.container.toLowerCase(),
-    );
+    final audio = await _verifiedAudio(source);
+    final List<TranscriptionPart> split;
+    try {
+      split = splitForTranscription(
+        audio,
+        format: source.metadata!.container.toLowerCase(),
+      );
+    } on FormatException catch (e) {
+      // The same original never splits differently, so it isn't retried.
+      throw ConnectionFailure('${e.message}原音保留，未发送。', code: 'unsupported');
+    }
     var parts = _parts(payload);
     // The same checked original always splits the same way.
     if (parts.length != split.length) {

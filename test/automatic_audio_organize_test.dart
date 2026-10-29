@@ -173,6 +173,80 @@ void main() {
     expect(f.modelRequests.map(sentText), ['先收集的文字。', f.transcript, '后收集的文字。']);
   });
 
+  for (final recorded in [true, false]) {
+    test(
+      '${recorded ? 'a recording' : 'imported audio'} saved before the app closed is queued when it reopens',
+      () async {
+        f.recorder = _WaveRecorder(seconds: 20);
+        await f.start();
+        final w = f.workspaces.first;
+        if (recorded) {
+          await w.startRecording();
+          await w.stopRecording();
+        } else {
+          await importWave(4, 'closed-early');
+        }
+        final noteId = w.audioSources.single.outputNoteId;
+        // Stand in for an app closed after the audio was saved and checked,
+        // before it was queued.
+        await f.reopen(
+          0,
+          whileClosed: (local) {
+            final db = sqlite3.open('${local.path}/workspace.sqlite3');
+            db.execute('DELETE FROM text_jobs');
+            db.close();
+          },
+        );
+        final reopened = f.workspaces.first;
+        expect(reopened.organizeStatus(noteId), OrganizeStatus.waiting);
+
+        await reopened.sendWaitingNow();
+
+        expect(reopened.organizeStatus(noteId), OrganizeStatus.organized);
+        expect(f.audioRequests, hasLength(1));
+        expect(f.modelRequests, hasLength(1));
+      },
+    );
+  }
+
+  test('an organized recording in the 回收站 is not sent again after reopening and restoring it', () async {
+    await f.start();
+    final w = f.workspaces.first;
+    final source = await importWave(4, 'recycled');
+    await w.sendWaitingNow();
+    await w.deleteNote(source.outputNoteId);
+
+    await f.reopen(0);
+    await f.reopen(0);
+    final reopened = f.workspaces.first;
+    await reopened.restoreNote(source.outputNoteId);
+    await reopened.sendWaitingNow();
+
+    expect(
+      reopened.organizeStatus(source.outputNoteId),
+      OrganizeStatus.organized,
+    );
+    expect(f.audioRequests, hasLength(1));
+    expect(f.modelRequests, hasLength(1));
+  });
+
+  test('audio the splitter cannot read shows 失败 with the reason and is not tried again', () async {
+    f.recorder = _FloatWaveRecorder(seconds: 20);
+    await f.start();
+    final w = f.workspaces.first;
+    await w.startRecording();
+    await w.stopRecording();
+    final noteId = w.audioSources.single.outputNoteId;
+
+    await w.sendWaitingNow();
+    await w.sendWaitingNow();
+
+    expect(w.organizeStatus(noteId), OrganizeStatus.failed);
+    expect(w.organizeMessage(noteId), contains('仅支持 PCM WAV'));
+    expect(f.audioRequests, isEmpty);
+    expect(f.modelRequests, isEmpty);
+  });
+
   test('only the capturing device sends audio', () async {
     await f.start();
     final source = await importWave(4, 'one-device');
@@ -347,6 +421,7 @@ void main() {
         // paused after its transcript arrived.
         final db = sqlite3.open('${local.path}/workspace.sqlite3');
         db.execute('DELETE FROM text_jobs');
+        db.execute('UPDATE audio_queue SET automatic = 0');
         for (final (source, status, payload) in [
           (
             estimated,
@@ -404,6 +479,30 @@ void main() {
     expect(await File(note.sourcePath).readAsString(), f.transcript);
     expect(budgetPaths(), isEmpty);
   });
+}
+
+/// Records a float WAV, which the platform check accepts (as macOS does)
+/// but the on-device splitter can't read.
+class _FloatWaveRecorder extends _WaveRecorder implements AudioSourceInspector {
+  _FloatWaveRecorder({required super.seconds});
+
+  @override
+  Future<void> startRecording(String path) async {
+    await super.startRecording(path);
+    final bytes = await File(path).readAsBytes();
+    bytes[20] = 3; // WAVE_FORMAT_IEEE_FLOAT
+    await File(path).writeAsBytes(bytes, flush: true);
+  }
+
+  @override
+  Future<AudioSourceMetadata> inspectAudioSource(String privatePath) async =>
+      AudioSourceMetadata(
+        container: 'wav',
+        codec: 'pcm_f32le',
+        duration: Duration(seconds: seconds),
+        sampleRate: 16000,
+        channels: 1,
+      );
 }
 
 /// A microphone that records a [seconds]-long WAV.
