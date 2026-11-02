@@ -8,11 +8,12 @@ import 'audio_queue_test.dart' show wave;
 import 'support/organize_now.dart';
 
 void main() {
-  // Automatic retries of a capture come with the retry schedule (#40).
+  // A failure that isn't temporary (a 400) is listed at once; temporary
+  // ones and account pauses are covered in organize_retries_test.
   test(
     'a text failure is listed once and recovers manually into the same note',
     () async {
-      final f = BudgetFixture()..modelStatuses.add(503);
+      final f = BudgetFixture()..modelStatuses.add(400);
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
@@ -39,26 +40,6 @@ void main() {
       expect(reopened.notes.single.originalText, '恢复前的原文。');
     },
   );
-  test('credential and balance failures are listed for account action without automatic requests', () async {
-    final f = BudgetFixture()..modelStatuses.addAll([401, 402]);
-    await f.start();
-    addTearDown(f.close);
-    final w = f.workspaces.first;
-    final note = await w.captureText(title: '凭据失败', text: '凭据错误也保留原文。');
-    await w.organizeNow(note.id);
-    expect(f.modelRequests, hasLength(1));
-    var failure = w.processingFailures.single;
-    expect(failure.needsAccountAction, true);
-    expect(failure.automaticRetriesUsed, 0);
-    expect(failure.recovery, ProcessingRecovery.retry);
-    await w.recoverProcessingFailure(failure.id);
-    expect(f.modelRequests, hasLength(2));
-    failure = w.processingFailures.single;
-    expect(failure.needsAccountAction, true);
-    expect(failure.message, contains('余额不足'));
-    expect(w.notes.single.text, '凭据错误也保留原文。');
-  });
-
   test('an invalid model result is listed and a manual retry applies one valid result', () async {
     final f = BudgetFixture()..malformedContent = true;
     await f.start();
@@ -157,7 +138,7 @@ void main() {
   test(
     'duplicate recovery requests send once and never duplicate notes',
     () async {
-      final f = BudgetFixture()..modelStatuses.addAll([401]);
+      final f = BudgetFixture()..modelStatuses.addAll([400]);
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;

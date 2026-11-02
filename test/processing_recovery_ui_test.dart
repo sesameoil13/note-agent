@@ -35,10 +35,10 @@ Future<void> _until(WidgetTester tester, bool Function() done) async {
 
 void main() {
   testWidgets(
-    'the failure list shows account problems and retries manually once',
+    'the failure list shows a failed capture and retries manually once',
     (tester) async {
       await HttpOverrides.runWithHttpOverrides(() async {
-        final f = BudgetFixture()..modelStatuses.add(401);
+        final f = BudgetFixture()..modelStatuses.add(400);
         await tester.runAsync(() async {
           await f.start();
           final w = f.workspaces.first;
@@ -51,7 +51,6 @@ void main() {
           MaterialApp(home: ProcessingFailuresScreen(workspace: w)),
         );
         expect(find.text('界面失败'), findsOneWidget);
-        expect(find.textContaining('Key、余额或预算'), findsOneWidget);
         await _tap(tester, find.text('手动重试（另行预留，可能计费）'));
         await _until(
           tester,

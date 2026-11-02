@@ -14,6 +14,22 @@ enum OrganizeStatus {
   final String label;
 }
 
+/// Why all automatic 整理 is paused: neither is retried automatically.
+enum OrganizePause {
+  key('百炼拒绝了 Key，自动发送已暂停。请在“连接与设备”中重新连接阿里云百炼 Key，之后会自动继续。'),
+  balance('阿里云账户余额不足，自动发送已暂停。请在阿里云控制台充值后点“继续发送”。');
+
+  const OrganizePause(this.message);
+  final String message;
+}
+
+/// Gaps before the automatic retries of a temporary failure (#39).
+const _organizeRetryGaps = [
+  Duration(minutes: 1),
+  Duration(minutes: 5),
+  Duration(minutes: 30),
+];
+
 /// Automatic 整理 of every capture (ADR 0004): each is queued once on the
 /// device that captured it and sent straight to Bailian, with no estimate,
 /// confirmation or budget request. Audio is transcribed first.
@@ -64,9 +80,40 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     };
   }
 
+  OrganizePause? _sendingPause() {
+    final kind = _database
+        .select('SELECT kind FROM organize_pause WHERE vault=?', [
+          vaultStorage.identity,
+        ])
+        .firstOrNull?['kind'];
+    return OrganizePause.values.where((p) => p.name == kind).firstOrNull;
+  }
+
+  void _setSendingPause(OrganizePause? pause) {
+    if (pause == null) {
+      _database.execute('DELETE FROM organize_pause WHERE vault=?', [
+        vaultStorage.identity,
+      ]);
+      return;
+    }
+    _keyConnectionsAtPause = connection.keyConnections;
+    _database.execute(
+      'INSERT OR REPLACE INTO organize_pause(vault,kind) VALUES (?,?)',
+      [vaultStorage.identity, pause.name],
+    );
+  }
+
   /// Sends due captures oldest first, one at a time, including captures
   /// queued while the run is under way.
   Future<void> _sendWaiting() async {
+    if (_sendingPause() != null) {
+      // Connecting a key ends either pause. For a pause saved before this
+      // workspace opened, any key connected since the app started counts,
+      // even before this vault was opened; at worst one more request is
+      // rejected and the pause returns.
+      if (connection.keyConnections <= (_keyConnectionsAtPause ?? 0)) return;
+      _setSendingPause(null);
+    }
     // Captures made before a key is connected keep waiting.
     if (!connection.state.hasKey) {
       try {
@@ -89,7 +136,7 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     while (!_closing) {
       final next = _database
           .select(
-            "SELECT id,note_id FROM text_jobs WHERE vault=? AND status=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state IN ('deleted','purged')) ORDER BY rowid",
+            "SELECT id,note_id,payload FROM text_jobs WHERE vault=? AND status=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state IN ('deleted','purged')) ORDER BY rowid",
             [
               vaultStorage.identity,
               TextProcessingStatus.waiting.name,
@@ -99,6 +146,11 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
           .where((row) => !tried.contains(row['id']))
           .firstOrNull;
       if (next == null) return;
+      // Oldest first: later captures wait until its retry is due too.
+      final retryAt = DateTime.tryParse(
+        '${jsonDecode(next['payload'] as String)['retryAt'] ?? ''}',
+      );
+      if (retryAt != null && _clock().isBefore(retryAt)) return;
       tried.add(next['id'] as String);
       if (!await _sendOrganize(
         next['id'] as String,
@@ -109,10 +161,16 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     }
   }
 
-  /// False when sending must stop for now (no key connected); other
-  /// captures are unaffected by this one's failure.
+  /// False when sending must stop for now (no key connected, or the
+  /// network or service is down); other failures don't hold back later
+  /// captures.
   Future<bool> _sendOrganize(String id, String noteId) async {
     final payload = _textPayload(id);
+    // A capture that got its result is never sent again (#39).
+    if (payload['result'] is Map) {
+      if (_awaitsApply(payload)) await _applyText(id, payload);
+      return true;
+    }
     final audio = payload['audio'] as String?;
     if (audio != null) {
       final source = _audioQueue.sources
@@ -213,6 +271,32 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
       );
       return true;
     } on TextNetworkFailure catch (e) {
+      if (e.code case 'credentials' || 'balance') {
+        // Not counted as a try: the capture waits for the account fix.
+        payload.remove('request');
+        await _saveText(id, TextProcessingStatus.waiting, payload);
+        _setSendingPause(
+          e.code == 'balance' ? OrganizePause.balance : OrganizePause.key,
+        );
+        return false;
+      }
+      final retries = payload['autoRetries'] as int? ?? 0;
+      if (e.recoverable && retries < _organizeRetryGaps.length) {
+        // Not a result: the capture waits for its next automatic try.
+        payload
+          ..remove('request')
+          ..['autoRetries'] = retries + 1
+          ..['retryAt'] = _clock()
+              .add(_organizeRetryGaps[retries])
+              .toIso8601String();
+        await _saveText(
+          id,
+          TextProcessingStatus.waiting,
+          payload,
+          error: '${e.message}稍后自动重试（${retries + 1}/3）。',
+        );
+        return false;
+      }
       payload['failureKind'] =
           e.code ?? (e.recoverable ? 'recoverable' : 'outcomeUnknown');
       await _saveText(

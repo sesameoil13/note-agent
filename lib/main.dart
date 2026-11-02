@@ -429,6 +429,71 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     );
   }
 
+  /// All sending is paused for a rejected key or an empty balance (#39).
+  Widget? _sendingPauseBanner() {
+    final pause = _workspace?.sendingPause;
+    if (pause == null) return null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+      color: slate,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(pause.message, style: const TextStyle(color: oxide)),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: _saving || _loading
+                ? null
+                : switch (pause) {
+                    OrganizePause.key => _openConnection,
+                    OrganizePause.balance => _resumeSending,
+                  },
+            child: Text(switch (pause) {
+              OrganizePause.key => '重新连接',
+              OrganizePause.balance => '继续发送',
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The next try after a top-up.
+  void _resumeSending() {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    unawaited(
+      workspace.resumeSending().then(
+        (_) {
+          if (mounted && workspace == _workspace) setState(() {});
+        },
+        onError: (Object _) {
+          /* Captures keep waiting and are sent on a later call. */
+        },
+      ),
+    );
+  }
+
+  /// 重试 of a capture that shows 失败: a new round of sends.
+  Future<void> _retryOrganize(String noteId) async {
+    final workspace = _workspace!;
+    final failure = workspace.processingFailures
+        .where(
+          (f) => f.source == ProcessingFailureSource.text && f.noteId == noteId,
+        )
+        .firstOrNull;
+    if (failure == null) return;
+    setState(() => _error = null);
+    try {
+      await workspace.recoverProcessingFailure(failure.id);
+    } catch (e) {
+      if (mounted) setState(() => _error = _errorMessage(e));
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> _showSetup() async {
     final action = await Navigator.of(context).push<SetupAction>(
       MaterialPageRoute(
@@ -592,6 +657,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             children: [
               _header(wide),
               ?_firstRunBanner(),
+              ?_sendingPauseBanner(),
               if (_workspace != null)
                 Align(
                   alignment: Alignment.centerLeft,
@@ -671,11 +737,15 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     if (mounted) setState(() => _editingNoteId = null);
   }
 
-  Future<void> _openConnection() => Navigator.of(context).push<void>(
-    MaterialPageRoute(
-      builder: (_) => ConnectionScreen(connection: _connection),
-    ),
-  );
+  Future<void> _openConnection() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ConnectionScreen(connection: _connection),
+      ),
+    );
+    // A key connected there ends a pause and sends what is waiting.
+    _sendWaiting();
+  }
 
   Widget _header(bool wide) => Container(
     padding: EdgeInsets.symmetric(horizontal: wide ? 24 : 16, vertical: 16),
@@ -1527,17 +1597,30 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                 ],
               ),
               if (_workspace!.organizeStatus(note.id) case final status?)
-                Text(
-                  [
-                    '整理：${status.label}',
-                    if (_workspace!.organizeMessage(note.id) case final m
-                        when m.isNotEmpty)
-                      m,
-                  ].join(' · '),
-                  style: TextStyle(
-                    color: status == OrganizeStatus.failed ? oxide : ash,
-                    fontSize: 12,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        [
+                          '整理：${status.label}',
+                          if (_workspace!.organizeMessage(note.id) case final m
+                              when m.isNotEmpty)
+                            m,
+                        ].join(' · '),
+                        style: TextStyle(
+                          color: status == OrganizeStatus.failed ? oxide : ash,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    if (status == OrganizeStatus.failed)
+                      TextButton(
+                        onPressed: _saving
+                            ? null
+                            : () => _retryOrganize(note.id),
+                        child: const Text('重试'),
+                      ),
+                  ],
                 ),
               const SizedBox(height: 8),
               NoteSyncSummary(note: note, todoSync: _workspace!.todoSync),

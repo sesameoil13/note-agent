@@ -16,7 +16,7 @@ void main() {
     'imported audio shows its 整理 status, and a failed one offers 重试',
     (tester) async {
       await HttpOverrides.runWithHttpOverrides(() async {
-        final f = AiFixture()..audioStatuses.add(503);
+        final f = AiFixture()..audioStatuses.add(400);
         late WorkspaceAudioSource source;
         await tester.runAsync(() async {
           await f.start(devices: 1);

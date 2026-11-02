@@ -177,6 +177,11 @@ class WorkspaceConnection {
   WorkspaceConnectionState _state = const WorkspaceConnectionState();
   WorkspaceConnectionState get state => _state;
 
+  /// How often a key was connected (and checked) since this started; a
+  /// rejected key's pause ends when this grows.
+  int get keyConnections => _keyConnections;
+  int _keyConnections = 0;
+
   /// The Bailian key, or null when none (or only an old OpenRouter key) is kept.
   String? get _aiKey =>
       _credentials['aiProvider'] == aiProvider &&
@@ -226,6 +231,7 @@ class WorkspaceConnection {
       await _keyCheck.verify(key);
       final next = {..._credentials, 'aiKey': key, 'aiProvider': aiProvider};
       await _commit(next);
+      _keyConnections++;
       _state = const WorkspaceConnectionState(
         hasKey: true,
         connectionVerified: true,

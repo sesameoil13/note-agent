@@ -117,7 +117,8 @@ void main() {
     'a part that arrived is not sent again when the capture is retried',
     () async {
       f.partTranscripts.addAll(['第一段内容。', '第二段内容。']);
-      f.audioStatuses.addAll([200, 503]);
+      // Not temporary, so it isn't retried automatically.
+      f.audioStatuses.addAll([200, 400]);
       await f.start();
       final w = f.workspaces.first;
       final source = await importWave(300, 'retry');
@@ -144,7 +145,7 @@ void main() {
   );
 
   test('a transcript that arrived is kept when organizing fails, and a retry only organizes', () async {
-    f.modelStatuses.add(503);
+    f.modelStatuses.add(400);
     await f.start();
     final w = f.workspaces.first;
     final source = await importWave(4, 'organize-fails');
