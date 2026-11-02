@@ -40,7 +40,175 @@ extension _VaultEdits on NoteWorkspace {
         /* Unavailable or concurrently changing; read again next time. */
       }
     }
+    // After renames are claimed: what is left may be another device's note.
+    changed.addAll(await _adoptArrivedNotes());
     return changed;
+  }
+
+  /// Notes another paired device captured and organized, delivered into this
+  /// vault by Sync. They are shown here but never queued for 整理: only the
+  /// capturing device sends (ADR 0004). The note id comes from its source
+  /// link; an organized to-do keeps its action ids (`<id>-action-<n>`), so
+  /// to-do states received for it apply. A note whose source text has not
+  /// arrived yet, or that this device trashed or purged, is left alone.
+  Future<List<String>> _adoptArrivedNotes() async {
+    final adopted = <String>[];
+    final owned = {
+      for (final n in notes) vaultStorage.relativePath(n.notePath),
+    };
+    final link = RegExp(
+      r'\]\((?:\.\./)*attachments/note-agent/([^/()\s]+)\.txt\)',
+    );
+    final List<String> paths;
+    try {
+      paths = await vaultStorage.listNotePaths();
+    } on FileSystemException {
+      return adopted; // The vault is unavailable; read again next time.
+    }
+    for (final path in paths) {
+      if (owned.contains(path)) continue;
+      try {
+        final text = await vaultStorage.readText(path);
+        final ids = {for (final m in link.allMatches(text)) m[1]!};
+        if (ids.length != 1) continue;
+        final id = ids.single;
+        if (_database.select('SELECT 1 FROM notes WHERE id=?', [
+              id,
+            ]).isNotEmpty ||
+            const ['trashed', 'purged'].contains(_noteMark(id)?['mark'])) {
+          continue;
+        }
+        final sourcePath = 'attachments/note-agent/$id.txt';
+        if (!await vaultStorage.exists(sourcePath)) continue;
+        if (await _adoptArrivedNote(id, path, text, sourcePath)) {
+          adopted.add(id);
+        }
+      } on FileSystemException {
+        /* Still arriving; read again next time. */
+      }
+    }
+    return adopted;
+  }
+
+  Future<bool> _adoptArrivedNote(
+    String id,
+    String path,
+    String text,
+    String sourcePath,
+  ) async {
+    final position = text.indexOf(_anchor);
+    if (position < 0 || position != text.lastIndexOf(_anchor)) return false;
+    final mtime = await vaultStorage.modifiedTime(path) ?? _clock();
+    final arrived = _arrivedHead(
+      id,
+      text.substring(0, position),
+      await vaultStorage.readText(sourcePath),
+    );
+    if (arrived == null) return false;
+    final recorded = RegExp(
+      r'\n记录：(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) · 修改：',
+    ).firstMatch(text);
+    final createdAt = recorded == null
+        ? mtime
+        : DateTime(
+            int.parse(recorded[1]!),
+            int.parse(recorded[2]!),
+            int.parse(recorded[3]!),
+            int.parse(recorded[4]!),
+            int.parse(recorded[5]!),
+            int.parse(recorded[6]!),
+          );
+    _database.execute(
+      'INSERT INTO notes (id, vault, title, body, created_at, modified_at, note_path, source_path, status, presentation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        id,
+        vaultStorage.identity,
+        p.posix.basenameWithoutExtension(path.replaceAll('\\', '/')),
+        arrived.body,
+        createdAt.toIso8601String(),
+        mtime.toIso8601String(),
+        vaultStorage.reference(path),
+        vaultStorage.reference(sourcePath),
+        NoteStatus.localSaved.name,
+        jsonEncode(arrived.presentation.toJson()),
+      ],
+    );
+    return true;
+  }
+
+  /// Body and presentation of another device's note as written by its App.
+  /// Actions get the ids the capturing device's 整理 gave them.
+  ({String body, NotePresentation presentation})? _arrivedHead(
+    String id,
+    String head,
+    String? original,
+  ) {
+    final kind = head.startsWith('## 待办\n\n')
+        ? NoteKind.todo
+        : NoteKind.ordinary;
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    final parsed = _parseHead(
+      WorkspaceNote(
+        id: id,
+        title: '',
+        text: '',
+        createdAt: epoch,
+        modifiedAt: epoch,
+        notePath: '',
+        sourcePath: '',
+        status: NoteStatus.localSaved,
+        presentation: NotePresentation(kind: kind),
+      ),
+      head,
+    );
+    if (parsed == null) return null;
+    final pending = [
+      for (final line in head.split('\n'))
+        if (line.startsWith('- [')) line.trimRight().endsWith(_pendingMarker),
+    ];
+    return (
+      body: parsed.body,
+      presentation: NotePresentation(
+        kind: kind,
+        original: original,
+        actions: List.unmodifiable([
+          for (var i = 0; i < parsed.actions.length; i++)
+            WorkspaceAction(
+              id: '$id-action-$i',
+              text: parsed.actions[i].text,
+              decision: pending[i]
+                  ? ActionDecision.pending
+                  : ActionDecision.confirmed,
+              reason: pending[i] ? 'unclearAction' : 'none',
+              timeExpression: parsed.actions[i].timeExpression,
+              timeStatus: parsed.actions[i].timeStatus,
+              completed: parsed.actions[i].completed,
+            ),
+        ]),
+      ),
+    );
+  }
+
+  /// Another device organized a capture that arrived here before its 整理
+  /// (so it changed kind): take the organized version as it is.
+  bool _readArrivedOrganization(
+    WorkspaceNote note,
+    String head,
+    DateTime mtime,
+  ) {
+    final arrived = _arrivedHead(note.id, head, note.presentation.original);
+    if (arrived == null || arrived.presentation.kind == note.kind) return false;
+    _database.execute(
+      'UPDATE notes SET body=?,modified_at=?,presentation=? WHERE id=? AND vault=?',
+      [
+        arrived.body,
+        mtime.toIso8601String(),
+        jsonEncode(arrived.presentation.toJson()),
+        note.id,
+        vaultStorage.identity,
+      ],
+    );
+    return true;
   }
 
   /// An App write recorded but not yet acknowledged must finish through its
@@ -118,6 +286,11 @@ extension _VaultEdits on NoteWorkspace {
         theirs > ours || theirs == ours && head.compareTo(expected) > 0;
     final parsed = _parseHead(note, head);
     // Completion is independent of which content version wins.
+    // Only a note that arrived from another device (none of its 整理 runs
+    // here) takes a change of kind from the vault.
+    if (parsed == null && externalWins && _organizeJob(note.id) == null) {
+      return _readArrivedOrganization(note, head, mtime);
+    }
     final ticked = parsed == null ? false : _applyTicks(note, parsed, mtime);
     if (!externalWins || parsed == null) {
       if (!externalWins) {

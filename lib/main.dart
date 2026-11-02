@@ -1560,25 +1560,28 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                   child: const Text('修正类型与行动'),
                 ),
               ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton(
-                  onPressed: _saving || note.status != NoteStatus.localSaved
-                      ? null
-                      : () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => ReorganizeScreen(
-                                workspace: _workspace!,
-                                noteId: note.id,
+              if (_workspace!.audioSources.any(
+                (s) => s.outputNoteId == note.id,
+              ))
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _saving || note.status != NoteStatus.localSaved
+                        ? null
+                        : () async {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => TranscriptCorrectionScreen(
+                                  workspace: _workspace!,
+                                  noteId: note.id,
+                                ),
                               ),
-                            ),
-                          );
-                          if (mounted) setState(() {});
-                        },
-                  child: const Text('更正转写与重新整理'),
+                            );
+                            if (mounted) setState(() {});
+                          },
+                    child: const Text('更正转写'),
+                  ),
                 ),
-              ),
               Wrap(
                 spacing: 8,
                 children: [

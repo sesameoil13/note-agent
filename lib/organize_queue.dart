@@ -41,9 +41,8 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     );
   }
 
-  WorkspaceTextJob? _organizeJob(String noteId) => textJobs
-      .where((j) => j.noteId == noteId && !j.reorganization)
-      .firstOrNull;
+  WorkspaceTextJob? _organizeJob(String noteId) =>
+      textJobs.where((j) => j.noteId == noteId).firstOrNull;
 
   OrganizeStatus? _organizeStatus(String noteId) {
     final job = _organizeJob(noteId);
@@ -235,7 +234,8 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
   }
 
   /// Old estimate/confirm jobs of every capture that never got a result
-  /// are dropped without being sent; their notes and originals stay.
+  /// are dropped without being sent; their notes and originals stay. Old
+  /// re-organizations are removed: a capture is organized only once.
   Future<void> _dropUnfinishedBudgetJobs() async {
     // Also jobs of notes in the 回收站, which return with a restore.
     for (final row in _database.select(
@@ -244,9 +244,13 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     )) {
       final id = row['id'] as String;
       final payload = _textPayload(id);
+      if (payload['reorganize'] == true) {
+        // An applied one already changed its note; a preview never will.
+        _database.execute('DELETE FROM text_jobs WHERE id=?', [id]);
+        continue;
+      }
       // Including the organizing step of an old recording job.
       if (payload['automatic'] == true ||
-          payload['reorganize'] == true ||
           payload['result'] is Map ||
           payload['dropped'] == true) {
         continue;

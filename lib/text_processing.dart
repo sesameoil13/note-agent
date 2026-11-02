@@ -1,13 +1,8 @@
 part of 'note_workspace.dart';
 
-/// A model result still to be written to its note. A re-organization is
-/// only written after the user approved its preview.
+/// A model result still to be written to its note.
 bool _awaitsApply(Map<String, dynamic> payload) =>
-    payload['result'] is Map &&
-    payload['applyPhase'] != 'applied' &&
-    (payload['reorganize'] != true ||
-        payload['applyPhase'] == 'approved' ||
-        payload['applyPhase'] == 'bodyApplied');
+    payload['result'] is Map && payload['applyPhase'] != 'applied';
 
 extension _WorkspaceTextProcessing on NoteWorkspace {
   List<WorkspaceTextJob> _textJobs() => List.unmodifiable(
@@ -56,7 +51,6 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
                 : costs.fold<int>(0, (a, b) => a + b),
             inputTokens: tokens('prompt_tokens'),
             outputTokens: tokens('completion_tokens'),
-            reorganization: p['reorganize'] == true,
           );
         }),
   );
@@ -105,78 +99,6 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
         body: {'limitCnyMicros': micros},
       ),
     );
-  }
-
-  Future<void> _reserveTextJob(
-    String id,
-    String noteId,
-    Map<String, dynamic> payload, {
-    bool refreshed = false,
-  }) async {
-    try {
-      if (payload['quote'] == null) {
-        final quoted = await connection.requestSharedBudget(
-          '/v1/budget/quote',
-          body: {'provider': aiProvider},
-        );
-        payload['quote'] = quoted['quote'];
-      }
-      final q = (payload['quote'] as Map).cast<String, dynamic>();
-      final attempt = '$id-0';
-      payload['associationCandidates'] ??= await _associationCandidates(
-        noteId,
-        payload['original'] as String,
-      );
-      payload['request'] = textModelPayload(
-        noteId,
-        payload['original'] as String,
-        q,
-        associationCandidates: (payload['associationCandidates'] as List)
-            .map((c) => (c as Map).cast<String, dynamic>())
-            .toList(),
-      );
-      payload['attempts'] = [attempt];
-      await _saveText(id, TextProcessingStatus.queued, payload);
-      Map<String, dynamic> reserved;
-      try {
-        reserved = await connection.requestSharedBudget(
-          '/v1/budget/reserve',
-          body: {
-            'attemptId': attempt,
-            'operationId': id,
-            'inputBytes': utf8.encode(jsonEncode(payload['request'])).length,
-            'quoteId': q['id'],
-          },
-        );
-      } on ConnectionFailure catch (e) {
-        if (e.code != 'quote_expired' || refreshed) rethrow;
-        payload.remove('quote');
-        return await _reserveTextJob(id, noteId, payload, refreshed: true);
-      }
-      _readTextBudget((reserved['budget'] as Map).cast<String, dynamic>());
-      final state = (reserved['attempt'] as Map)['state'];
-      payload['estimatedCnyMicros'] =
-          (reserved['attempt'] as Map)['reserve_cny'];
-      await _saveText(
-        id,
-        state == 'reserved'
-            ? TextProcessingStatus.prepared
-            : TextProcessingStatus.costPending,
-        payload,
-        error: state == 'reserved' ? null : '已存在发送或结束记录，不会自动重新发送。',
-      );
-    } on ConnectionFailure catch (e) {
-      payload['failureKind'] = e.code ?? 'unknown';
-      await _saveText(
-        id,
-        TextProcessingStatus.failed,
-        payload,
-        error: e.code == 'budget_exceeded'
-            ? '预计费用超过共享剩余额度，已暂停；本机原文保留。'
-            : e.message,
-      );
-      await refreshBudget();
-    }
   }
 
   Future<WorkspaceTextJob> _cancelText(String id) async {
@@ -253,222 +175,6 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       [status.name, jsonEncode(payload), error, id],
     );
   }, accepted: true);
-  Future<WorkspaceTextJob> _sendText(
-    String jobId,
-    String noteId, {
-    int maxRetries = 3,
-  }) async {
-    final job = textJobs.firstWhere((j) => j.id == jobId);
-    if (job.status != TextProcessingStatus.prepared) return job;
-    final payload = _textPayload(job.id);
-    // Estimated before the switch to Bailian (ADR 0003): its request is in
-    // OpenRouter's format, so it is released rather than sent.
-    if ((payload['quote'] as Map?)?['currency'] != 'CNY') {
-      final cancelled = await _cancelText(jobId);
-      if (cancelled.status != TextProcessingStatus.cancelled) return cancelled;
-      await _saveText(
-        jobId,
-        TextProcessingStatus.cancelled,
-        _textPayload(jobId),
-        error: 'AI 服务已改为阿里云百炼，切换前的预估已释放；原文保留，请重新预估。',
-      );
-      return textJobs.firstWhere((j) => j.id == jobId);
-    }
-    payload['autoRetries'] = 0;
-    for (var retry = 0; retry <= maxRetries; retry++) {
-      final attempt = (payload['attempts'] as List).last as String;
-      payload['autoRetries'] = retry;
-      payload.remove('validationError');
-      payload.remove('failureKind');
-      await _saveText(job.id, TextProcessingStatus.sending, payload);
-      try {
-        final reply = await connection.sendReservedText(
-          attempt,
-          (payload['request'] as Map).cast<String, dynamic>(),
-        );
-        payload['reply'] = reply.data;
-        payload['receipts'] = {
-          ...?payload['receipts'] as Map?,
-          attempt: {
-            'generationId': reply.generationId,
-            'settle': reply.settleBody,
-            'settled': false,
-          },
-        };
-        try {
-          payload['result'] = reply.validated(
-            noteId,
-            original: payload['original'] as String,
-            candidateIds: ((payload['associationCandidates'] as List?) ?? [])
-                .map((c) => c['noteId'] as String)
-                .toSet(),
-          );
-        } on ConnectionFailure catch (e) {
-          payload['validationError'] = e.message;
-        }
-        await _saveText(job.id, TextProcessingStatus.costPending, payload);
-        final receipt = reply.settleBody;
-        if (receipt != null) {
-          final settled = await connection.requestSharedBudget(
-            '/v1/budget/attempt/$attempt/settle',
-            body: receipt,
-          );
-          (payload['receipts'] as Map)[attempt]['cnyMicros'] =
-              (settled['attempt'] as Map)['actual_cny'];
-          _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
-          payload['settled'] =
-              (payload['receipts'] as Map).length ==
-                  (payload['attempts'] as List).length &&
-              (payload['receipts'] as Map).entries.every(
-                (entry) =>
-                    entry.key == attempt ||
-                    (entry.value as Map)['settled'] == true,
-              );
-          (payload['receipts'] as Map)[attempt]['settled'] = true;
-          await _saveText(job.id, TextProcessingStatus.costPending, payload);
-        }
-        if (payload['validationError'] is String) {
-          throw ConnectionFailure(payload['validationError'] as String);
-        }
-        if (payload['reorganize'] == true) {
-          // A re-organization is only a preview until the user applies it.
-          payload['applyPhase'] = 'preview';
-          await _saveText(
-            job.id,
-            payload['settled'] == true
-                ? TextProcessingStatus.completed
-                : TextProcessingStatus.costPending,
-            payload,
-            error: '再整理预览待确认，尚未应用。',
-          );
-          break;
-        }
-        await _saveText(job.id, TextProcessingStatus.costPending, payload);
-        await _applyText(job.id, payload);
-        break;
-      } on ConnectionFailure catch (e) {
-        payload['failureKind'] =
-            e.code ??
-            (payload['validationError'] is String
-                ? 'invalidResult'
-                : 'unknown');
-        await _saveText(
-          job.id,
-          payload['result'] is Map
-              ? TextProcessingStatus.costPending
-              : TextProcessingStatus.review,
-          payload,
-          error: e.message,
-        );
-        await refreshBudget();
-        break;
-      } on TextNetworkFailure catch (e) {
-        payload['failureKind'] =
-            e.code ?? (e.recoverable ? 'recoverable' : 'outcomeUnknown');
-        await connection
-            .requestSharedBudget(
-              '/v1/budget/attempt/$attempt/uncertain',
-              body: {},
-            )
-            .catchError((_) => <String, dynamic>{});
-        await _saveText(
-          job.id,
-          TextProcessingStatus.costPending,
-          payload,
-          error: e.message,
-        );
-        await refreshBudget();
-        if (!e.recoverable || retry == maxRetries) break;
-        // A prior send may already have incurred a charge. Its hold is never
-        // recycled into a retry: every attempt needs another atomic admission.
-        await Future<void>.delayed(Duration(seconds: 1 << retry));
-        try {
-          await _reserveNextText(job.id, noteId, payload);
-          continue;
-        } on ConnectionFailure catch (failure) {
-          payload['failureKind'] = failure.code ?? 'unknown';
-          await _saveText(
-            job.id,
-            TextProcessingStatus.costPending,
-            payload,
-            error: failure.code == 'budget_exceeded'
-                ? '重试需要另行预留，剩余额度不足，已暂停；原文保留。'
-                : failure.message,
-          );
-          await refreshBudget();
-          break;
-        }
-      } catch (_) {
-        payload['failureKind'] = 'outcomeUnknown';
-        await _saveText(
-          job.id,
-          TextProcessingStatus.costPending,
-          payload,
-          error: '处理未能确认，原文与费用预留保留，请核对。',
-        );
-        await refreshBudget();
-        break;
-      }
-    }
-    return textJobs.firstWhere((j) => j.id == job.id);
-  }
-
-  Future<void> _reserveNextText(
-    String id,
-    String noteId,
-    Map<String, dynamic> payload, {
-    bool refreshed = false,
-  }) async {
-    final pending = payload['pendingReservation'];
-    if (pending == null) {
-      final quoted = await connection.requestSharedBudget(
-        '/v1/budget/quote',
-        body: {'provider': aiProvider},
-      );
-      payload['quote'] = quoted['quote'];
-      payload['associationCandidates'] ??= await _associationCandidates(
-        noteId,
-        payload['original'] as String,
-      );
-      payload['request'] = textModelPayload(
-        noteId,
-        payload['original'] as String,
-        (payload['quote'] as Map).cast<String, dynamic>(),
-        associationCandidates: (payload['associationCandidates'] as List)
-            .map((c) => (c as Map).cast<String, dynamic>())
-            .toList(),
-      );
-      payload['pendingReservation'] =
-          '$id-${(payload['attempts'] as List).length}';
-      await _saveText(id, TextProcessingStatus.costPending, payload);
-    }
-    final next = payload['pendingReservation'] as String;
-    late Map<String, dynamic> admitted;
-    try {
-      admitted = await connection.requestSharedBudget(
-        '/v1/budget/reserve',
-        body: {
-          'attemptId': next,
-          'operationId': id,
-          'quoteId': (payload['quote'] as Map)['id'],
-          'inputBytes': utf8.encode(jsonEncode(payload['request'])).length,
-        },
-      );
-    } on ConnectionFailure catch (e) {
-      if (e.code != 'quote_expired' || refreshed) rethrow;
-      // quote_expired is returned only after confirming no existing attempt.
-      // Reuse the stable next id, never create a second unknown reservation.
-      payload.remove('pendingReservation');
-      return await _reserveNextText(id, noteId, payload, refreshed: true);
-    }
-    _readTextBudget((admitted['budget'] as Map).cast<String, dynamic>());
-    if ((admitted['attempt'] as Map)['state'] != 'reserved') {
-      throw const ConnectionFailure('此重试已发送，不能自动重发；预留保留。');
-    }
-    (payload['attempts'] as List).add(next);
-    payload.remove('pendingReservation');
-    await _saveText(id, TextProcessingStatus.prepared, payload);
-  }
 
   Future<void> _applyText(
     String id,
@@ -498,8 +204,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       ]);
       return;
     }
-    if (payload['reorganize'] != true &&
-        notes.firstWhere((n) => n.id == noteId).presentation.userDecided) {
+    if (notes.firstWhere((n) => n.id == noteId).presentation.userDecided) {
       payload['applyPhase'] = 'applied';
       final pending = notes
           .firstWhere((n) => n.id == noteId)
@@ -560,14 +265,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           status: NoteStatus.localSaved,
           document: note.document,
           attachments: note.attachments,
-          presentation: _resultPresentation(
-            result,
-            noteId,
-            note.originalText,
-            // A re-organization creates new action identities, so earlier
-            // reminders are replaced rather than inheriting another action.
-            actionPrefix: payload['reorganize'] == true ? 'r$id' : null,
-          ),
+          presentation: _resultPresentation(result, noteId, note.originalText),
         );
         // Associations, attachment entries and extraction limitations may have
         // been edited independently. Compare only the known content prefix,
@@ -638,8 +336,8 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           ],
         );
         _attachments.noteContentsChanged(noteId, plan['after'] as String);
-        // Re-organizing gives actions new identities; paired devices must
-        // drop the old ones rather than keep reminding about them.
+        // Actions the result no longer has are dropped on paired devices
+        // too, rather than kept reminding about.
         if (plan['presentation'] case final Map presentation) {
           final kept = {
             for (final a in presentation['actions'] as List) (a as Map)['id'],

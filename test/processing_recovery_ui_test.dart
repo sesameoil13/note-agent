@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/processing_recovery_screen.dart';
 
-import 'audio_queue_test.dart' show wave;
 import 'support/budget_fixture.dart';
 import 'support/organize_now.dart';
 
@@ -66,59 +65,6 @@ void main() {
         );
         expect(find.text('没有需要恢复的处理。'), findsOneWidget);
         expect(f.modelRequests, hasLength(2));
-        await tester.pumpWidget(const SizedBox());
-      }, _LoopbackHttpOverrides());
-    },
-  );
-
-  testWidgets(
-    'a transcript is corrected and a re-organization previewed before it is applied',
-    (tester) async {
-      await HttpOverrides.runWithHttpOverrides(() async {
-        final f = BudgetFixture();
-        await tester.runAsync(() async {
-          await f.start();
-          final w = f.workspaces.first;
-          await w.importAudio(
-            original: await File('${f.root.path}/a.wav').writeAsBytes(wave()),
-            submissionId: 'ui-reorganize',
-          );
-          await w.sendWaitingNow();
-        });
-        addTearDown(() => tester.runAsync(f.close));
-        tester.view.physicalSize = const Size(360, 800);
-        tester.view.devicePixelRatio = 1;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-        final w = f.workspaces.first;
-        final note = w.notes.single;
-        await tester.pumpWidget(
-          MaterialApp(
-            home: ReorganizeScreen(workspace: w, noteId: note.id),
-          ),
-        );
-        await tester.enterText(
-          find.byKey(const ValueKey('transcript-correction')),
-          '更正后的完整转写。',
-        );
-        await _tap(tester, find.text('保存转写更正（不调用模型）'));
-        await _until(tester, () => w.notes.single.originalText == '更正后的完整转写。');
-        await _tap(tester, find.text('预估重新整理（不调用模型）'));
-        await _until(
-          tester,
-          () => find.text('发送并生成预览（可能计费）').evaluate().isNotEmpty,
-        );
-        expect(f.modelRequests, hasLength(1));
-        f.modelResult = {'kind': 'ordinary', 'title': '更正后', 'body': '预览正文。'};
-        await _tap(tester, find.text('发送并生成预览（可能计费）'));
-        await _until(tester, () => w.reorganizationPreviews.isNotEmpty);
-        expect(find.text('预览正文。'), findsOneWidget);
-        expect(w.notes.single.text, note.text);
-        await _tap(tester, find.text('应用此预览'));
-        await _until(tester, () => w.notes.single.text == '预览正文。');
-        expect(f.modelRequests, hasLength(2));
-        expect(f.audioRequests, 1);
-        expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox());
       }, _LoopbackHttpOverrides());
     },

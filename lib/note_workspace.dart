@@ -49,7 +49,7 @@ part 'todo_sync.dart';
 part 'recycle_bin.dart';
 part 'vault_edits.dart';
 part 'processing_recovery.dart';
-part 'reorganization.dart';
+part 'transcript_correction.dart';
 
 /// The `action_states` / reminder-plan key of one action of one note. Note
 /// ids never contain ':', so the first ':' separates the two.
@@ -578,52 +578,6 @@ class NoteWorkspace {
   /// a transcript changed elsewhere is never overwritten.
   Future<WorkspaceNote> correctTranscript(String noteId, String text) =>
       _mutate(() => _correctTranscript(noteId, text));
-
-  /// Estimates and reserves a re-organization of [noteId] from its current
-  /// complete source (for audio: the possibly corrected transcript). No model
-  /// is called until [previewReorganization].
-  Future<WorkspaceTextJob> prepareReorganization(String noteId) async {
-    final job = await _mutate(() => _prepareReorganization(noteId));
-    final payload = _textPayload(job.id);
-    await _trackText(_reserveTextJob(job.id, noteId, payload));
-    return textJobs.firstWhere((j) => j.id == job.id);
-  }
-
-  /// Sends a prepared re-organization (may be charged) and keeps the
-  /// validated result as a preview; the note is not changed.
-  Future<WorkspaceReorganizationPreview> previewReorganization(String jobId) {
-    final job = textJobs.firstWhere((j) => j.id == jobId);
-    return _runTextAction(job.noteId, () async {
-      await _runReorganizationPreview(jobId);
-      return textJobs.firstWhere((j) => j.id == jobId);
-    }).then(
-      (_) =>
-          _reorganizationPreview(jobId) ??
-          (throw StateError('未取得可用的整理结果，原文保留。')),
-    );
-  }
-
-  List<WorkspaceReorganizationPreview> get reorganizationPreviews =>
-      List.unmodifiable(_reorganizationPreviews());
-
-  /// Applies a preview if the note has not changed since its base content.
-  Future<WorkspaceNote> applyReorganization(String jobId) {
-    // Jobs of a note in the 回收站 are hidden until it is restored.
-    final job = textJobs.where((j) => j.id == jobId).firstOrNull;
-    if (job == null) return Future.error(StateError('没有可应用的整理预览。'));
-    return _runTextAction(job.noteId, () async {
-      await _applyReorganization(jobId);
-      return textJobs.firstWhere((j) => j.id == jobId);
-    }).then((_) => notes.firstWhere((n) => n.id == job.noteId));
-  }
-
-  Future<void> discardReorganization(String jobId) {
-    final job = textJobs.firstWhere((j) => j.id == jobId);
-    return _runTextAction(job.noteId, () async {
-      await _discardReorganization(jobId);
-      return textJobs.firstWhere((j) => j.id == jobId);
-    });
-  }
 
   late final WorkspaceRecordings _recordings;
   late final WorkspaceSetup _setup;

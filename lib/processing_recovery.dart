@@ -17,9 +17,6 @@ enum ProcessingRecovery {
   /// A paid stage's charge must be reconciled before the next stage starts.
   reconcileCost,
 
-  /// The complete transcript is kept; only organization is estimated again.
-  reorganizeOnly,
-
   /// The original was never completely retained; the file must be chosen again.
   reselectOriginal,
 }
@@ -63,7 +60,7 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
         notes.where((n) => n.id == noteId).firstOrNull?.title ?? fallback;
     for (final job in textJobs) {
       final p = _textPayload(job.id);
-      if (p['audioPipeline'] is String || p['reorganize'] == true) continue;
+      if (p['audioPipeline'] is String) continue;
       final kind = p['failureKind'] as String?;
       final recovery = switch (job.status) {
         TextProcessingStatus.failed => ProcessingRecovery.retry,

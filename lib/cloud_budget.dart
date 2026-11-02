@@ -65,11 +65,8 @@ class WorkspaceTextJob {
     this.knownCostCnyMicros,
     this.inputTokens,
     this.outputTokens,
-    this.reorganization = false,
   });
 
-  /// A user-requested re-organization whose result is previewed first.
-  final bool reorganization;
   final String id, noteId, message;
   final TextProcessingStatus status;
   final int attemptCount, estimatedCnyMicros;
