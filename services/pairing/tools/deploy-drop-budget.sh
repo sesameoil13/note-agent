@@ -31,12 +31,15 @@ source "$CLOUD_ENV"
 export PATH="$HOME/.local/node-global/bin:$PATH"
 
 echo "== 1. Isolated copy of services/pairing at $REV"
+SHA=$(git -C "$REPO" rev-parse --verify "$REV^{commit}")
 if [[ ! -d "$PAIRING" ]]; then
-  git -C "$REPO" cat-file -e "$REV^{commit}"
-  git -C "$REPO" archive "$REV" services/pairing | tar -x -C "$OUT"
+  git -C "$REPO" archive "$SHA" services/pairing | tar -x -C "$OUT"
   sed -i '' "s/database_id = \"00000000-0000-0000-0000-000000000000\"/database_id = \"$DB_ID\"/" "$PAIRING/wrangler.toml"
   ln -s "${REPO:A}/services/pairing/node_modules" "$PAIRING/node_modules"
+  print "$SHA" > "$OUT/release-commit"
 fi
+# A directory prepared for another commit is never reused.
+[[ "$(cat "$OUT/release-commit" 2>/dev/null)" == "$SHA" ]] || { echo "$OUT was prepared for another commit; use a new release directory."; exit 1; }
 grep -q "database_id = \"$DB_ID\"" "$PAIRING/wrangler.toml"
 [[ -f "$PAIRING/migrations/0006_drop_budget.sql" ]] || { echo "No migration 0006 at $REV."; exit 1; }
 if grep -rq "/v1/budget" "$PAIRING/src"; then echo "Budget routes still in $REV."; exit 1; fi
@@ -71,7 +74,8 @@ wr d1 migrations apply "$DB" --remote
 
 echo "== 5. Verify"
 curl -fsS "$ENDPOINT/v1/health"; echo
-code=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/v1/budget")
+code=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/v1/budget" || true)
 echo "GET /v1/budget -> HTTP $code (expect 404: the budget is gone)"
 wr d1 migrations list "$DB" --remote
+[[ "$code" == 404 ]] || { echo "Verification failed: the budget endpoint did not answer 404."; exit 1; }
 echo "Done. Keep $BACKUP until the release is accepted."

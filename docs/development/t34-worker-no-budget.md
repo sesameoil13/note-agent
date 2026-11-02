@@ -25,8 +25,8 @@ zsh services/pairing/tools/deploy-drop-budget.sh <commit> "../cloud-release-no-b
 
 The script:
 
-1. Extracts `services/pairing` at `<commit>` into the release directory, sets the real D1 id, and
-   stops unless that copy has migration 0006, no `/v1/budget` route and no `[vars]` (so the deploy
+1. Extracts `services/pairing` at `<commit>` into the release directory (a directory prepared for
+   another commit is refused), sets the real D1 id, and stops unless that copy has migration 0006, no `/v1/budget` route and no `[vars]` (so the deploy
    also removes the old `BAILIAN_PRICES` variable).
 2. Builds a local dry run (`wrangler deploy --dry-run`). `--prepare-only` stops here.
 3. Read-only checks: Wrangler account, `/v1/health`, remote migration list.
@@ -35,13 +35,21 @@ The script:
 5. Asks, then deploys the Worker. The new Worker never reads the budget tables, so it goes before
    the migration: a failed deploy leaves the database as it was.
 6. Asks, then applies migration 0006 to the remote database.
-7. Verifies `/v1/health`, that `GET /v1/budget` returns 404, and the migration list.
+7. Verifies `/v1/health`, the migration list, and that `GET /v1/budget` returns 404; anything
+   else ends the script with an error.
 
 Answering anything but `y` stops the script without further changes.
 
-To undo the migration, restore the dropped tables from the backup with
-`wrangler d1 execute note-agent-pairing --remote --file <the CREATE TABLE and INSERT INTO lines for budget_* from backup-before-0006.sql>`,
-then redeploy the previous Worker commit.
+To undo, redeploy the previous Worker commit and restore the dropped tables from the backup:
+
+```sh
+# Statements span lines (CREATE TABLE budget_attempts), so split on ";\n", not on lines.
+node -e 'const s=require("fs").readFileSync(process.argv[1],"utf8").split(/;\n/);console.log(s.filter(x=>/^(PRAGMA|CREATE (UNIQUE )?(TABLE|INDEX) "?budget_|INSERT INTO "?budget_)/.test(x)).join(";\n")+";")' backup-before-0006.sql > restore-budget.sql
+wrangler d1 execute note-agent-pairing --remote --file restore-budget.sql
+```
+
+Check `restore-budget.sql` before running it; the `d1_migrations` row for 0006 stays, so a
+later `migrations apply` won't drop the tables again.
 
 ## Tests
 
@@ -50,4 +58,7 @@ then redeploy the previous Worker commit.
   migration 0006 leaves only the pairing and to-do tables and the owner device still works.
 - `pairing.test.mjs`, `todos.test.mjs` and `merge-cases.test.mjs` are unchanged.
 - The deploy script was checked with `zsh -n` and run with Wrangler and curl stubbed; it has not
-  been run against Cloudflare.
+  been run against Cloudflare. Its answers were driven through a terminal: `y y` runs everything,
+  `y n` deploys and stops before the migration, and without a terminal it stops before deploying.
+  The restore extraction was checked against the T33 backup (`backup-before-0005.sql`) loaded
+  into a local SQLite file.
