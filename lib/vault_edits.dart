@@ -175,17 +175,7 @@ extension _VaultEdits on NoteWorkspace {
         original: original,
         actions: List.unmodifiable([
           for (var i = 0; i < parsed.actions.length; i++)
-            WorkspaceAction(
-              id: '$id-action-$i',
-              text: parsed.actions[i].text,
-              decision: pending[i]
-                  ? ActionDecision.pending
-                  : ActionDecision.confirmed,
-              reason: pending[i] ? 'unclearAction' : 'none',
-              timeExpression: parsed.actions[i].timeExpression,
-              timeStatus: parsed.actions[i].timeStatus,
-              completed: parsed.actions[i].completed,
-            ),
+            _withDecision(parsed.actions[i], pending[i], id: '$id-action-$i'),
         ]),
       ),
     );
@@ -584,11 +574,12 @@ extension _VaultEdits on NoteWorkspace {
   }
 }
 
-WorkspaceAction _withDecision(WorkspaceAction a, bool pending) =>
-    pending == !a.actionConfirmed
+/// [a] with the confirmation its to-do line shows, and [id] if given.
+WorkspaceAction _withDecision(WorkspaceAction a, bool pending, {String? id}) =>
+    pending == !a.actionConfirmed && (id == null || id == a.id)
     ? a
     : WorkspaceAction(
-        id: a.id,
+        id: id ?? a.id,
         text: a.text,
         decision: pending ? ActionDecision.pending : ActionDecision.confirmed,
         reason: pending ? 'unclearAction' : 'none',

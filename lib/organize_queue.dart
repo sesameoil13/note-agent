@@ -29,6 +29,9 @@ enum OrganizePause {
   final String action;
 }
 
+/// Why a job an older version left unfinished was not sent (#35).
+const _droppedOnUpgrade = '升级后不再发送旧版本未完成的任务';
+
 /// Gaps before the automatic retries of a temporary failure (#39).
 const _organizeRetryGaps = [
   Duration(minutes: 1),
@@ -356,7 +359,7 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
         id,
         TextProcessingStatus.cancelled,
         payload,
-        error: '升级后不再发送旧版本未完成的任务；原文保留。',
+        error: '$_droppedOnUpgrade；原文保留。',
       );
     }
   }

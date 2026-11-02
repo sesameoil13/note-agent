@@ -7,6 +7,10 @@ List<Map<String, dynamic>> _parts(Map<String, dynamic> p) => [
     (part as Map).cast<String, dynamic>(),
 ];
 
+/// The most UTF-8 bytes of a recording's qwen-plus request; association
+/// candidates are dropped first, the transcript is never truncated.
+const _maximumAudioTextRequestBytes = 20000;
+
 extension _WorkspaceAudioProcessing on NoteWorkspace {
   Future<List<int>> _verifiedAudio(
     WorkspaceAudioSource source, {
@@ -87,12 +91,14 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       associationCandidates: candidates,
     );
     var encoded = request();
-    while (utf8.encode(jsonEncode(encoded)).length > 20000 &&
+    while (utf8.encode(jsonEncode(encoded)).length >
+            _maximumAudioTextRequestBytes &&
         candidates.isNotEmpty) {
       candidates.removeLast();
       encoded = request();
     }
-    if (utf8.encode(jsonEncode(encoded)).length > 20000) {
+    if (utf8.encode(jsonEncode(encoded)).length >
+        _maximumAudioTextRequestBytes) {
       throw const ConnectionFailure('完整转写超过整理上限，原音与完整转写保留；未发送或截断。');
     }
     payload['associationCandidates'] = candidates;
@@ -171,7 +177,12 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       await _mutate(() async {
         _database.execute(
           'UPDATE audio_jobs SET status=?,error=? WHERE source_id=? AND vault=?',
-          ['cancelled', '升级后不再发送旧版本未完成的任务；原音与已有转写保留。', id, vaultStorage.identity],
+          [
+            'cancelled',
+            '$_droppedOnUpgrade；原音与已有转写保留。',
+            id,
+            vaultStorage.identity,
+          ],
         );
       }, accepted: true);
     }

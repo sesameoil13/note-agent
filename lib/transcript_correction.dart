@@ -1,17 +1,26 @@
 part of 'note_workspace.dart';
 
+/// The most UTF-8 bytes a corrected complete transcript may have.
+const _maximumTranscriptBytes = 4000000;
+
 /// A transcript corrected in the App is a local edit only: it is written to
 /// the vault and synced like any edit, and never sent to AI (GLOSSARY 整理).
 extension _WorkspaceTranscriptCorrection on NoteWorkspace {
   /// The App-corrected complete transcript, once written to the vault.
   String? _correctedSource(String noteId) {
+    final p = _correction(noteId);
+    return p?['phase'] == 'applied' ? p!['text'] as String : null;
+  }
+
+  Map<String, dynamic>? _correction(String noteId) {
     final rows = _database.select(
       'SELECT payload FROM source_corrections WHERE note_id=? AND vault=?',
       [noteId, vaultStorage.identity],
     );
-    if (rows.isEmpty) return null;
-    final p = jsonDecode(rows.single['payload'] as String) as Map;
-    return p['phase'] == 'applied' ? p['text'] as String : null;
+    return rows.isEmpty
+        ? null
+        : (jsonDecode(rows.single['payload'] as String) as Map)
+              .cast<String, dynamic>();
   }
 
   Future<WorkspaceNote> _correctTranscript(String noteId, String text) async {
@@ -19,7 +28,7 @@ extension _WorkspaceTranscriptCorrection on NoteWorkspace {
     if (_audioQueue.sources.every((s) => s.outputNoteId != noteId)) {
       throw StateError('只有录音笔记的完整转写可在此更正。');
     }
-    if (text.trim().isEmpty || utf8.encode(text).length > 4000000) {
+    if (text.trim().isEmpty || utf8.encode(text).length > _maximumTranscriptBytes) {
       throw ArgumentError('更正后的转写不能为空或超过上限。');
     }
     if (note.status != NoteStatus.localSaved) {
@@ -35,14 +44,7 @@ extension _WorkspaceTranscriptCorrection on NoteWorkspace {
     if (before != note.originalText) {
       throw StateError('完整转写已在其他位置修改；未覆盖较新的内容，请先核对。');
     }
-    final rows = _database.select(
-      'SELECT payload FROM source_corrections WHERE note_id=? AND vault=?',
-      [noteId, vaultStorage.identity],
-    );
-    final previous = rows.isEmpty
-        ? null
-        : (jsonDecode(rows.single['payload'] as String) as Map)
-              .cast<String, dynamic>();
+    final previous = _correction(noteId);
     final payload = <String, dynamic>{
       // The first machine transcript is kept locally for audit and comparison.
       'machine': previous?['machine'] ?? before,
@@ -61,14 +63,8 @@ extension _WorkspaceTranscriptCorrection on NoteWorkspace {
   }
 
   Future<void> _finishCorrection(String noteId) async {
-    final rows = _database.select(
-      'SELECT payload FROM source_corrections WHERE note_id=? AND vault=?',
-      [noteId, vaultStorage.identity],
-    );
-    if (rows.isEmpty) return;
-    final p = (jsonDecode(rows.single['payload'] as String) as Map)
-        .cast<String, dynamic>();
-    if (p['phase'] == 'applied') return;
+    final p = _correction(noteId);
+    if (p == null || p['phase'] == 'applied') return;
     final note = notes.firstWhere((n) => n.id == noteId);
     try {
       await vaultStorage.replaceText(
