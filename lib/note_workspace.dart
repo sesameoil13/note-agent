@@ -444,6 +444,9 @@ class NoteWorkspace {
   /// The key connections seen when the current key pause began.
   int? _keyConnectionsAtPause;
 
+  /// Captures that got as far as being sent (a balance try counts only those).
+  int _organizeSendsStarted = 0;
+
   /// Null for a note this device did not capture, or one never organized.
   OrganizeStatus? organizeStatus(String noteId) => _organizeStatus(noteId);
 

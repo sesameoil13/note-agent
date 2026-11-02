@@ -190,14 +190,22 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
       final id = next['id'] as String;
       tried.add(id);
       if (balanceTry) {
-        // Counted from now, also if the app closes before the reply.
-        _database.execute(
-          'UPDATE organize_pause SET tried_at=? WHERE vault=?',
-          [_clock().toIso8601String(), vaultStorage.identity],
-        );
+        final started = _organizeSendsStarted;
         await _sendOrganize(id, next['note_id'] as String);
-        // Another 402 renews the pause; any other outcome keeps it too.
-        if (_textPayload(id)['result'] is! Map) return;
+        // Not ready to send yet (e.g. a document still being extracted):
+        // the try goes to the next due capture.
+        if (_organizeSendsStarted == started) continue;
+        if (_textPayload(id)['result'] is! Map) {
+          // Another 402 renews the pause; any other outcome keeps it too,
+          // and the next try waits its 30 minutes.
+          if (_sendingPause() == OrganizePause.balance) {
+            _database.execute(
+              'UPDATE organize_pause SET tried_at=? WHERE vault=?',
+              [_clock().toIso8601String(), vaultStorage.identity],
+            );
+          }
+          return;
+        }
         _setSendingPause(null);
         balanceTry = false;
         continue;
@@ -246,6 +254,7 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
       return true;
     }
     try {
+      _organizeSendsStarted++;
       // What was captured, never a later edit (GLOSSARY 整理).
       final original =
           payload['original'] as String? ??

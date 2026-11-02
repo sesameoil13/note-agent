@@ -176,6 +176,38 @@ void main() {
     expect(reopened.organizeStatus(second.id), OrganizeStatus.organized);
   });
 
+  test('a balance try skips an older capture that is not ready to send', () async {
+    await f.start(devices: 1);
+    var w = f.workspaces.first;
+    final audio = await w.importAudio(
+      original: await File('${f.root.path}/memo.wav').writeAsBytes(wave()),
+      submissionId: 'not-ready',
+    );
+    final text = await w.captureText(title: '想法', text: '余额不足时收集的想法。');
+    await f.reopen(
+      0,
+      whileClosed: (local) {
+        // Its check has to run again, so it can't be sent yet.
+        final db = sqlite3.open('${local.path}/workspace.sqlite3');
+        db.execute(
+          "UPDATE audio_queue SET metadata=NULL,stage='inspectionFailedRetryable'",
+        );
+        db.close();
+      },
+    );
+    w = f.workspaces.first;
+    f.modelStatuses.add(402);
+    await w.sendWaitingNow();
+    expect(w.sendingPause, OrganizePause.balance);
+
+    await later(w, const Duration(minutes: 30));
+
+    expect(w.sendingPause, isNull);
+    expect(w.organizeStatus(text.id), OrganizeStatus.organized);
+    expect(w.organizeStatus(audio.outputNoteId), OrganizeStatus.waiting);
+    expect(f.audioRequests, isEmpty);
+  });
+
   test('a capture waiting to retry after a temporary failure does not hold back newer ones', () async {
     f.modelStatuses.add(503);
     await f.start(devices: 1);
