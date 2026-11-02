@@ -26,7 +26,8 @@ Decision: [ADR 0003](../adr/0003-bailian-instead-of-openrouter.md). Probe result
   budget attempt per part; a part's transcript and receipt are saved before the next part goes.
   The transcript is assembled as soon as every part has arrived, even if settling fails. A retry
   (or a new estimate after a cancelled retry) keeps finished parts and sends only the rest.
-- **Worker** (`services/pairing/src/budget.mjs`): quotes with `provider: "bailian-cn"` come from
+- **Worker** (`services/pairing/src/budget.mjs`, removed in T34.7, see
+  [t34-worker-no-budget.md](t34-worker-no-budget.md)): quotes with `provider: "bailian-cn"` come from
   `BAILIAN_PRICES`, frozen onto each quote; attempts settle from `usage` (tokens or seconds).
   Parts are bound by index (`chunk`, up to 8), at most 290 s and 7 MB each. Quotes without a
   provider still use OpenRouter, so older apps keep working during the switch. Migration
@@ -41,6 +42,9 @@ Decision: [ADR 0003](../adr/0003-bailian-instead-of-openrouter.md). Probe result
   recording) is adopted into the job.
 
 ## Deploying
+
+Superseded: T34.7 removes the budget, `BAILIAN_PRICES` and migration `0005`'s table
+([t34-worker-no-budget.md](t34-worker-no-budget.md)). Kept as the record of the T33 release.
 
 1. In the Bailian console (Beijing), read the per-second price of `qwen3-asr-flash` and the
    per-token prices of `qwen-plus`.

@@ -1,4 +1,3 @@
-import { budgetRequest } from "./budget.mjs";
 import { todoRequest } from "./todos.mjs";
 const response = (data, status = 200) =>
   Response.json(data, {
@@ -105,16 +104,6 @@ export default {
       if (url.pathname === "/v1/health" && request.method === "GET")
         return response({ service: "note-agent-pairing", version: 1 });
       await limit(request, env, now, "requests", 120);
-      if (url.pathname.startsWith("/v1/budget")) {
-        const own = await device(request, env);
-        return await budgetRequest(request, env, {
-          own,
-          now,
-          body,
-          fail,
-          response,
-        });
-      }
       if (url.pathname.startsWith("/v1/todos")) {
         const own = await device(request, env);
         return await todoRequest(request, env, {
