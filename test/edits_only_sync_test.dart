@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 import 'package:path/path.dart' as p;
+import 'package:sqlite3/sqlite3.dart';
 
 import 'audio_queue_test.dart' show wave;
 import 'support/ai_fixture.dart';
@@ -292,5 +293,123 @@ void main() {
     expect(action.id, pending.id);
     expect(action.actionConfirmed, isTrue);
     expect(f.modelRequests, hasLength(1));
+  });
+  test('a transcript corrected together with a confirmed action reaches a paired device with both', () async {
+    f.modelResult = {
+      'manifestVersion': 3,
+      'kind': 'todo',
+      'title': '会议记录',
+      'body': '可能要整理会议记录。',
+      'actions': [
+        {
+          'text': '整理会议记录',
+          'reason': 'unclearAction',
+          'timeExpression': '',
+          'timeStatus': 'absent',
+        },
+      ],
+      'associations': [],
+      'newTopics': [],
+    };
+    final a = f.workspaces.first;
+    await a.importAudio(
+      original: await File('${f.root.path}/a.wav').writeAsBytes(wave()),
+      submissionId: 'corrected-and-confirmed',
+    );
+    await a.sendWaitingNow();
+    await syncVault(0, 1);
+    final b = f.workspaces[1];
+    await b.readVaultEdits();
+    expect(b.notes.single.actions.single.actionConfirmed, isFalse);
+
+    final note = a.notes.single, pending = note.actions.single;
+    f.now = f.now.add(const Duration(minutes: 2));
+    await a.correctTranscript(note.id, '明天下午三点整理会议记录。');
+    await a.resolveNoteActions(
+      note.id,
+      kind: NoteKind.todo,
+      actions: [
+        WorkspaceAction(
+          id: pending.id,
+          text: pending.text,
+          decision: ActionDecision.confirmed,
+          reason: 'none',
+        ),
+      ],
+    );
+    await syncVault(0, 1);
+    expect(await b.readVaultEdits(), [note.id]);
+
+    final arrived = b.notes.single;
+    expect(arrived.originalText, '明天下午三点整理会议记录。');
+    expect(arrived.actions.single.actionConfirmed, isTrue);
+    expect(f.modelRequests, hasLength(1));
+  });
+
+  test('a to-do line added in Obsidian on a paired device waits for confirmation there and schedules nothing', () async {
+    f.modelResult = {
+      'manifestVersion': 3,
+      'kind': 'todo',
+      'title': '买电池',
+      'body': '明天买电池。',
+      'actions': [
+        {
+          'text': '买电池',
+          'reason': 'none',
+          'timeExpression': '明天上午十点',
+          'timeStatus': 'explicit',
+        },
+      ],
+      'associations': [],
+      'newTopics': [],
+    };
+    final a = f.workspaces.first;
+    final captured = await a.captureText(title: '安排', text: '明天上午十点买电池。');
+    await a.sendWaitingNow();
+    await syncVault(0, 1);
+    final b = f.workspaces[1];
+    await b.readVaultEdits();
+    final reminders = b.reminders.length;
+
+    await editInObsidian(
+      b.notes.single,
+      '\n\n## 摘要',
+      '\n- [ ] 给物业打电话 ⏰ 明天上午九点\n\n## 摘要',
+    );
+    expect(await b.readVaultEdits(), [captured.id]);
+
+    final actions = b.notes.single.actions;
+    expect(actions.map((x) => x.text), ['买电池', '给物业打电话']);
+    expect(actions.first.actionConfirmed, isTrue);
+    expect(actions.last.actionConfirmed, isFalse);
+    expect(b.reminders.where((r) => r.actionId == actions.last.id), isEmpty);
+    expect(b.reminders, hasLength(reminders));
+  });
+
+  test('a note captured before automatic 整理 never takes a change of kind from the vault', () async {
+    final a = f.workspaces.first;
+    final old = await a.captureText(title: '旧想法', text: '周末去公园散步。');
+    await f.reopen(
+      0,
+      whileClosed: (local) {
+        // The older version queued nothing for a capture.
+        final db = sqlite3.open('${local.path}/workspace.sqlite3');
+        db.execute('DELETE FROM text_jobs');
+        db.close();
+      },
+    );
+    final w = f.workspaces.first;
+    final note = w.notes.single;
+    expect(w.organizeStatus(old.id), isNull);
+
+    await editInObsidian(
+      note,
+      '## 正文\n\n周末去公园散步。',
+      '## 待办\n\n- [ ] 去公园\n\n## 摘要\n\n周末去公园散步。',
+    );
+    await w.readVaultEdits();
+
+    expect(w.notes.single.kind, NoteKind.ordinary);
+    expect(w.notes.single.actions, isEmpty);
   });
 }

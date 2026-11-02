@@ -35,7 +35,10 @@ extension _VaultEdits on NoteWorkspace {
         continue;
       }
       try {
-        if (await _readNoteEdit(note) | await _readArrivedSource(note)) {
+        final edited = await _readNoteEdit(note);
+        // Read the note again: an edit just imported changed what it shows.
+        final current = notes.firstWhere((n) => n.id == note.id);
+        if (await _readArrivedSource(current) || edited) {
           changed.add(note.id);
         }
       } on FileSystemException {
@@ -121,7 +124,7 @@ extension _VaultEdits on NoteWorkspace {
             int.parse(recorded[6]!),
           );
     _database.execute(
-      'INSERT INTO notes (id, vault, title, body, created_at, modified_at, note_path, source_path, status, presentation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO notes (id, vault, title, body, created_at, modified_at, note_path, source_path, status, presentation, arrived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
       [
         id,
         vaultStorage.identity,
@@ -194,11 +197,19 @@ extension _VaultEdits on NoteWorkspace {
       if (line.startsWith('- [')) line.trimRight().endsWith(_pendingMarker),
   ];
 
+  /// Whether [noteId] was adopted from another device's vault files (see
+  /// [_adoptArrivedNotes]). Notes captured here, including those from
+  /// versions before automatic 整理 that have no organize job, never are.
+  bool _arrivedFromAnotherDevice(String noteId) => _database.select(
+    'SELECT 1 FROM notes WHERE id=? AND vault=? AND arrived=1',
+    [noteId, vaultStorage.identity],
+  ).isNotEmpty;
+
   /// The source text of a note that arrived from another device follows its
   /// synced source file, e.g. a transcript corrected on the recording device.
   Future<bool> _readArrivedSource(WorkspaceNote note) async {
     final cached = note.presentation.original;
-    if (cached == null || _organizeJob(note.id) != null) return false;
+    if (cached == null || !_arrivedFromAnotherDevice(note.id)) return false;
     final path = vaultStorage.relativePath(note.sourcePath);
     if (!await vaultStorage.exists(path)) return false;
     final text = await vaultStorage.readText(path);
@@ -317,7 +328,7 @@ extension _VaultEdits on NoteWorkspace {
     final ours = note.modifiedAt.millisecondsSinceEpoch ~/ 1000;
     final externalWins =
         theirs > ours || theirs == ours && head.compareTo(expected) > 0;
-    final arrived = _organizeJob(note.id) == null;
+    final arrived = _arrivedFromAnotherDevice(note.id);
     var parsed = _parseHead(note, head);
     // Only a note that arrived from another device (none of its 整理 runs
     // here) takes a change of kind, or of an action's confirmation, from the
@@ -326,10 +337,15 @@ extension _VaultEdits on NoteWorkspace {
       return _readArrivedOrganization(note, head, mtime);
     }
     if (parsed != null && externalWins && arrived) {
+      // Only actions it already had: a line added in Obsidian waits for
+      // confirmation, as [_parseHead] decided, marker or not.
       final pending = _pendingLines(head);
+      final known = {for (final a in note.actions) a.id};
       parsed = _ParsedHead(parsed.body, [
         for (var i = 0; i < parsed.actions.length; i++)
-          _withDecision(parsed.actions[i], pending[i]),
+          known.contains(parsed.actions[i].id)
+              ? _withDecision(parsed.actions[i], pending[i])
+              : parsed.actions[i],
       ]);
     }
     // Completion is independent of which content version wins.

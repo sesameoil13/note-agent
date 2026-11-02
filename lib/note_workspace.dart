@@ -866,6 +866,14 @@ class NoteWorkspace {
         .any((row) => row['name'] == 'naming_request')) {
       database.execute('ALTER TABLE notes ADD COLUMN naming_request TEXT');
     }
+    if (!database
+        .select('PRAGMA table_info(notes)')
+        .any((row) => row['name'] == 'arrived')) {
+      // 1 for a note adopted from another paired device's vault files.
+      database.execute(
+        'ALTER TABLE notes ADD COLUMN arrived INTEGER NOT NULL DEFAULT 0',
+      );
+    }
     database.execute('''CREATE TABLE IF NOT EXISTS note_renames (
       note_id TEXT PRIMARY KEY,
       vault TEXT NOT NULL,
