@@ -94,6 +94,25 @@ void main() {
     });
   }
 
+  test('a key reconnected while the paused vault was closed resumes sending when it reopens', () async {
+    f.modelStatuses.add(401);
+    await f.start(devices: 1);
+    final w = f.workspaces.first;
+    final note = await w.captureText(title: '想法', text: 'Key 被拒时收集的想法。');
+    await w.sendWaitingNow();
+    expect(w.sendingPause, OrganizePause.key);
+
+    await f.reopen(0);
+    final reopened = f.workspaces.first;
+    // Connected before the first send after reopening, e.g. from another
+    // vault the app had open meanwhile.
+    await reopened.connection.connectAi('sk-ai-fixture-only-key');
+    await reopened.sendWaitingNow();
+
+    expect(reopened.sendingPause, isNull);
+    expect(reopened.organizeStatus(note.id), OrganizeStatus.organized);
+  });
+
   test('an empty balance (402) pauses all sending until the next try after a top-up', () async {
     f.modelStatuses.add(402);
     await f.start(devices: 1);

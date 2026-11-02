@@ -108,10 +108,11 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
   /// queued while the run is under way.
   Future<void> _sendWaiting() async {
     if (_sendingPause() != null) {
-      // Connecting a key ends either pause; after reopening, a key
-      // connected since then does.
-      final since = _keyConnectionsAtPause ??= connection.keyConnections;
-      if (connection.keyConnections <= since) return;
+      // Connecting a key ends either pause. For a pause saved before this
+      // workspace opened, any key connected since the app started counts,
+      // even before this vault was opened; at worst one more request is
+      // rejected and the pause returns.
+      if (connection.keyConnections <= (_keyConnectionsAtPause ?? 0)) return;
       _setSendingPause(null);
     }
     // Captures made before a key is connected keep waiting.
