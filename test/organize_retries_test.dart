@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
+import 'package:sqlite3/sqlite3.dart';
 
 import 'audio_queue_test.dart' show wave;
 import 'support/ai_fixture.dart';
@@ -200,6 +201,33 @@ void main() {
       OrganizeStatus.organized,
     );
     expect(f.workspaces.first.notes.single.text, '整理后的普通想法。');
+  });
+
+  test('an app killed while sending again and again counts each restart as a try, then shows 失败', () async {
+    await f.start(devices: 1);
+    final note = await f.workspaces.first.captureText(
+      title: '想法',
+      text: '发送时 App 一直被杀掉的想法。',
+    );
+    // Stands in for the app being killed while the request was out.
+    void killedWhileSending(Directory local) {
+      final db = sqlite3.open('${local.path}/workspace.sqlite3');
+      db.execute("UPDATE text_jobs SET status='sending'");
+      db.close();
+    }
+
+    for (var restart = 1; restart <= 3; restart++) {
+      await f.reopen(0, whileClosed: killedWhileSending);
+      expect(
+        f.workspaces.first.organizeStatus(note.id),
+        OrganizeStatus.waiting,
+      );
+    }
+    await f.reopen(0, whileClosed: killedWhileSending);
+    final w = f.workspaces.first;
+    expect(w.organizeStatus(note.id), OrganizeStatus.failed);
+    await later(w, const Duration(hours: 2));
+    expect(f.modelRequests, isEmpty);
   });
 
   test('audio retries and pauses the same way as text', () async {

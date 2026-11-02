@@ -284,8 +284,24 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       }
       if (job.status == TextProcessingStatus.sending &&
           payload['automatic'] == true) {
-        // Interrupted before a result arrived: it waits to be sent again.
-        await _saveText(job.id, TextProcessingStatus.waiting, payload);
+        // Interrupted before a result arrived (e.g. the app was killed while
+        // the request was out). The restart counts as a try, so a crash loop
+        // ends in 失败 instead of sending forever. A reply Bailian sent but
+        // this device never saved is lost: without an idempotent request a
+        // retry may organize (and bill) the capture a second time.
+        final retries = payload['autoRetries'] as int? ?? 0;
+        payload.remove('request');
+        if (retries < _organizeRetryGaps.length) {
+          payload['autoRetries'] = retries + 1;
+          await _saveText(job.id, TextProcessingStatus.waiting, payload);
+        } else {
+          await _saveText(
+            job.id,
+            TextProcessingStatus.failed,
+            payload,
+            error: '发送时 App 多次被关闭，已停止自动发送。',
+          );
+        }
       }
     }
   }
