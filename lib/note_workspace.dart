@@ -436,6 +436,19 @@ class NoteWorkspace {
     );
   }
 
+  /// Why all sending is paused, or null when it isn't (#39).
+  OrganizePause? get sendingPause => _sendingPause();
+
+  /// The next try after a top-up: ends a balance pause and sends what is
+  /// waiting. A rejected key's pause ends only when a key is connected.
+  Future<void> resumeSending() {
+    if (_sendingPause() == OrganizePause.balance) _setSendingPause(null);
+    return sendWaitingNow();
+  }
+
+  /// The key connections seen when the current key pause began.
+  int? _keyConnectionsAtPause;
+
   /// Null for a note this device did not capture, or one never organized.
   OrganizeStatus? organizeStatus(String noteId) => _organizeStatus(noteId);
 
@@ -517,7 +530,11 @@ class NoteWorkspace {
       return Future.error(StateError('只有整理失败的收集可以重试。'));
     }
     return _runTextAction(job.noteId, () async {
-      await _saveText(id, TextProcessingStatus.waiting, _textPayload(id));
+      // A new round: one send plus up to 3 automatic retries.
+      final payload = _textPayload(id)
+        ..remove('autoRetries')
+        ..remove('retryAt');
+      await _saveText(id, TextProcessingStatus.waiting, payload);
       // Sent by the single queue run, never alongside it; a run under way
       // picks it up before it ends.
       await sendWaitingNow();
@@ -980,6 +997,9 @@ class NoteWorkspace {
     );
     database.execute(
       'CREATE TABLE IF NOT EXISTS note_disposals(vault TEXT NOT NULL,note_id TEXT NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',
+    );
+    database.execute(
+      'CREATE TABLE IF NOT EXISTS organize_pause(vault TEXT PRIMARY KEY,kind TEXT NOT NULL)',
     );
     database.execute(
       'CREATE TABLE IF NOT EXISTS note_marks(vault TEXT NOT NULL,note_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',

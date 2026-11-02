@@ -280,6 +280,10 @@ class TextModelReply {
   }
 }
 
+/// Timeouts, rate limits and Bailian server errors pass by themselves.
+bool _temporaryStatus(int status) =>
+    [408, 429, 500, 502, 503, 504].contains(status);
+
 class TextNetworkFailure implements Exception {
   const TextNetworkFailure(
     this.message, {
@@ -350,32 +354,26 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
       }
       if (response.statusCode != 200) {
         throw TextNetworkFailure(
-          '模型服务暂时不可用，原文与费用预留保留。',
-          recoverable: [
-            408,
-            429,
-            500,
-            502,
-            503,
-            504,
-          ].contains(response.statusCode),
+          '模型服务暂时不可用，原文保留。',
+          recoverable: _temporaryStatus(response.statusCode),
         );
       }
       final decoded = jsonDecode(utf8.decode(bytes));
       if (decoded is! Map<String, dynamic>) {
-        throw const TextNetworkFailure('模型响应格式异常，费用待核对。');
+        throw const TextNetworkFailure('模型响应格式异常，原文保留。');
       }
       return TextModelReply(decoded);
     } on TextNetworkFailure {
       rethrow;
     } on TimeoutException {
-      throw const TextNetworkFailure('模型请求超时，可能已计费，预留未释放。', recoverable: true);
+      throw const TextNetworkFailure('模型请求超时，原文保留。', recoverable: true);
     } on HandshakeException {
-      throw const TextNetworkFailure('安全连接失败，原文与费用预留保留。', recoverable: true);
+      throw const TextNetworkFailure('安全连接失败，原文保留。', recoverable: true);
     } on SocketException {
-      throw const TextNetworkFailure('网络中断，可能已计费，预留未释放。', recoverable: true);
+      throw const TextNetworkFailure('网络中断，原文保留。', recoverable: true);
     } catch (_) {
-      throw const TextNetworkFailure('模型响应未能确认，费用预留保留。');
+      // E.g. the connection closed while the reply was arriving.
+      throw const TextNetworkFailure('模型响应中断，原文保留。', recoverable: true);
     } finally {
       client.close(force: true);
     }

@@ -33,6 +33,9 @@ class AiFixture {
   /// Every path the Worker was asked for, e.g. `/v1/pairing/...`.
   final workerPaths = <String>[];
 
+  /// True while Bailian can't be reached; nothing is recorded meanwhile.
+  bool offline = false;
+
   /// qwen-plus requests, oldest first.
   final modelRequests = <Map<String, dynamic>>[];
 
@@ -120,6 +123,11 @@ class AiFixture {
       return;
     }
     if (r.uri.path == '/chat/completions') {
+      if (offline) {
+        // Stands in for no network: the connection drops with no reply.
+        (await r.response.detachSocket(writeHeaders: false)).destroy();
+        return;
+      }
       final request =
           jsonDecode(await utf8.decoder.bind(r).join()) as Map<String, dynamic>;
       if (request['model'] == 'qwen3-asr-flash') {

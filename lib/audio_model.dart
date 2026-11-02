@@ -75,6 +75,7 @@ extension WorkspaceAudioNetwork on WorkspaceConnection {
             402 => 'balance',
             _ => null,
           },
+          recoverable: _temporaryStatus(response.statusCode),
         );
       }
       final decoded = jsonDecode(utf8.decode(body));
