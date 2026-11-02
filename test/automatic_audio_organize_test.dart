@@ -480,6 +480,34 @@ void main() {
     expect(await File(note.sourcePath).readAsString(), f.transcript);
     expect(budgetPaths(), isEmpty);
   });
+
+  test('an original the vault does not take yet does not hold back 整理, and its source link is fixed once it is written', () async {
+    await f.start(devices: 1);
+    final storage = _BinaryFailureVault(Directory('${f.root.path}/vault0'));
+    await f.reopen(0, vaultStorage: storage);
+    final w = f.workspaces.first;
+    final source = await w.importAudio(
+      original: await File('${f.root.path}/source.wav').writeAsBytes(wave()),
+      submissionId: 'source',
+    );
+    expect(source.publicationStatus, AudioPublicationStatus.failed);
+
+    await w.sendWaitingNow();
+    final note = w.notes.single;
+    expect(w.organizeStatus(note.id), OrganizeStatus.organized);
+    expect(note.status, NoteStatus.localSaved);
+    expect(await File(note.notePath).readAsString(), contains('笔记库写入'));
+
+    storage.fail = false;
+    await w.retryAudioSourceExport(source.id);
+    expect(
+      w.audioSources.single.publicationStatus,
+      AudioPublicationStatus.published,
+    );
+    expect(await File(source.sourcePath).readAsBytes(), wave());
+    expect(await File(note.notePath).readAsString(), contains('[source.wav]'));
+    expect(w.notes.single.id, note.id);
+  });
 }
 
 /// Records a float WAV, which the platform check accepts (as macOS does)
@@ -545,4 +573,18 @@ class _WaveRecorder implements AudioPlatform {
   @override
   Future<AudioPlaybackSnapshot> playbackSnapshot() async =>
       const AudioPlaybackSnapshot(isPlaying: false, position: Duration.zero);
+}
+
+class _BinaryFailureVault extends DirectoryVaultStorage {
+  _BinaryFailureVault(super.directory);
+  bool fail = true;
+  @override
+  Future<void> publishFile(
+    String relativePath,
+    File original,
+    String operationId,
+  ) async {
+    if (fail) throw const FileSystemException('原件笔记库写入未确认');
+    return super.publishFile(relativePath, original, operationId);
+  }
 }

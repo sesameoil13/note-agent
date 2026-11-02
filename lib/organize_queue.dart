@@ -16,11 +16,17 @@ enum OrganizeStatus {
 
 /// Why all automatic 整理 is paused: neither is retried automatically.
 enum OrganizePause {
-  key('百炼拒绝了 Key，自动发送已暂停。请在“连接与设备”中重新连接阿里云百炼 Key，之后会自动继续。'),
-  balance('阿里云账户余额不足，自动发送已暂停。请在阿里云控制台充值后点“继续发送”。');
+  key(
+    '百炼拒绝了 Key，自动发送已暂停。请在“连接与设备”中重新连接阿里云百炼 Key，之后会自动继续。',
+    '重新连接',
+  ),
+  balance('阿里云账户余额不足，自动发送已暂停。请在阿里云控制台充值后点“继续发送”。', '继续发送');
 
-  const OrganizePause(this.message);
+  const OrganizePause(this.message, this.action);
   final String message;
+
+  /// The label of the banner's button.
+  final String action;
 }
 
 /// Gaps before the automatic retries of a temporary failure (#39).

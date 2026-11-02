@@ -148,10 +148,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
           'UPDATE audio_queue SET transcript=? WHERE id=? AND vault=?',
           [transcript, id, vaultStorage.identity],
         );
-        await _materializeAudioNote(
-          source,
-          AudioOrganizedNote(title: '录音转写', text: transcript),
-        );
+        await _materializeAudioNote(source, title: '录音转写', text: transcript);
       }, accepted: true);
 
   /// Old estimate/confirm audio jobs are dropped without being sent; the

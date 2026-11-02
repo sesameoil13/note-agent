@@ -5,7 +5,6 @@ import 'note_workspace.dart';
 /// What a failed item is waiting for, shown as its status.
 String processingRecoveryStatus(WorkspaceProcessingFailure f) =>
     switch (f.recovery) {
-      ProcessingRecovery.automaticRetryScheduled => '等待自动重试',
       ProcessingRecovery.retry => OrganizeStatus.failed.label,
       ProcessingRecovery.reselectOriginal => '需重新选择原件',
     };
@@ -68,8 +67,6 @@ class _ProcessingFailuresScreenState extends State<ProcessingFailuresScreen> {
             if (f.message.isNotEmpty) Text(f.message),
             if (f.automaticRetriesUsed > 0)
               Text('已自动重试 ${f.automaticRetriesUsed} 次'),
-            if (f.nextAutomaticRetryAt != null)
-              Text('下次自动重试：${formatNoteTime(f.nextAutomaticRetryAt!)}'),
             if (f.recovery == ProcessingRecovery.retry)
               Align(
                 alignment: Alignment.centerLeft,

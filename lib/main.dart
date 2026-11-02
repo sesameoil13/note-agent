@@ -235,11 +235,16 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   }
 
   /// Sends what is waiting for 整理, then shows the new statuses.
-  void _sendWaiting() {
+  void _sendWaiting() => _send((w) => w.sendWaitingNow());
+
+  /// The next try after a top-up.
+  void _resumeSending() => _send((w) => w.resumeSending());
+
+  void _send(Future<void> Function(NoteWorkspace) send) {
     final workspace = _workspace;
     if (workspace == null) return;
     unawaited(
-      workspace.sendWaitingNow().then(
+      send(workspace).then(
         (_) {
           if (mounted && workspace == _workspace) setState(() {});
         },
@@ -268,7 +273,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _resumeAudioQueue();
       unawaited(_takeNotificationNavigation());
       final workspace = _workspace;
       if (workspace == null) {
@@ -289,16 +293,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         );
       }
     }
-  }
-
-  void _resumeAudioQueue() {
-    final workspace = _workspace;
-    if (workspace == null) return;
-    unawaited(
-      workspace.resumePendingAudioProcessing().catchError((Object error) {
-        if (mounted) setState(() => _error = _errorMessage(error));
-      }),
-    );
   }
 
   Future<void> _restore() async {
@@ -449,28 +443,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                     OrganizePause.key => _openConnection,
                     OrganizePause.balance => _resumeSending,
                   },
-            child: Text(switch (pause) {
-              OrganizePause.key => '重新连接',
-              OrganizePause.balance => '继续发送',
-            }),
+            child: Text(pause.action),
           ),
         ],
-      ),
-    );
-  }
-
-  /// The next try after a top-up.
-  void _resumeSending() {
-    final workspace = _workspace;
-    if (workspace == null) return;
-    unawaited(
-      workspace.resumeSending().then(
-        (_) {
-          if (mounted && workspace == _workspace) setState(() {});
-        },
-        onError: (Object _) {
-          /* Captures keep waiting and are sent on a later call. */
-        },
       ),
     );
   }
@@ -543,7 +518,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     _composing = true;
     _recordingPage = workspace.recordingAvailable;
     if (old != widget.initialWorkspace) await old?.close();
-    _resumeAudioQueue();
     _sendWaiting();
   }
 

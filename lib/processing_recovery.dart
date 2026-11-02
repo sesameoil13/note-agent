@@ -5,9 +5,6 @@ enum ProcessingFailureSource { text, audio, document }
 /// The next step for a failed item. None of them re-runs a stage whose
 /// result was already saved.
 enum ProcessingRecovery {
-  /// A bounded automatic retry is still scheduled; nothing to do yet.
-  automaticRetryScheduled,
-
   /// 重试: the item is tried again.
   retry,
 
@@ -24,14 +21,12 @@ class WorkspaceProcessingFailure {
     required this.recovery,
     this.noteId,
     this.automaticRetriesUsed = 0,
-    this.nextAutomaticRetryAt,
   });
   final String id, title, message;
   final ProcessingFailureSource source;
   final ProcessingRecovery recovery;
   final String? noteId;
   final int automaticRetriesUsed;
-  final DateTime? nextAutomaticRetryAt;
 }
 
 extension _WorkspaceProcessingRecovery on NoteWorkspace {
@@ -86,11 +81,7 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
           message: source.processingReason ?? '原件尚未完整保存，请重新选择文件。',
           recovery: !source.originalSaved
               ? ProcessingRecovery.reselectOriginal
-              : source.nextAttemptAt != null
-              ? ProcessingRecovery.automaticRetryScheduled
               : ProcessingRecovery.retry,
-          automaticRetriesUsed: source.automaticRetries,
-          nextAutomaticRetryAt: source.nextAttemptAt,
         ),
       );
     }
@@ -140,7 +131,7 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
         if (failure.recovery == ProcessingRecovery.reselectOriginal) {
           throw StateError('原件尚未完整保存，请重新选择同一录音文件导入。');
         }
-        await retryAudioProcessing(key);
+        await retryAudioCheck(key);
       case ProcessingFailureSource.document:
         await retryDocumentExtraction(key, original: original);
     }

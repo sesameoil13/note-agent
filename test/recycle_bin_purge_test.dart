@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'audio_queue_test.dart' show wave;
+import 'support/ai_fixture.dart';
 import 'support/pending_notification_fixture.dart';
 
 /// T26: bulk restore and 永久清除 through the NoteWorkspace seam, against a
@@ -124,18 +125,14 @@ void main() {
   });
 
   test('purging a recorded note removes its App-private audio original but keeps another recording\'s', () async {
-    final w = await NoteWorkspace.open(
-      localDirectory: Directory('${root.path}/local'),
-      vaultDirectory: Directory('${root.path}/vault'),
-      clock: () => now,
-      notifications: port,
-      audioProcessor: _OrganizingProcessor(),
-    );
-    addTearDown(w.close);
+    final f = AiFixture();
+    await f.start(devices: 1);
+    addTearDown(f.close);
+    final w = f.workspaces.first;
     final recording = File('${root.path}/voice.wav')..writeAsBytesSync(wave());
     final first = await w.importAudio(original: recording, submissionId: 'r1');
     final second = await w.importAudio(original: recording, submissionId: 'r2');
-    await w.resumePendingAudioProcessing();
+    await w.sendWaitingNow();
     expect(
       w.notes.map((n) => n.id),
       containsAll([first.outputNoteId, second.outputNoteId]),
@@ -236,17 +233,4 @@ void main() {
       expect(w.todoSync.awaitingNote, isEmpty);
     },
   );
-}
-
-class _OrganizingProcessor implements AudioProcessor {
-  @override
-  bool get canReplayInterruptedRequests => true;
-  @override
-  Future<AudioTranscript> transcribe(AudioProcessingRequest request) async =>
-      const AudioTranscript('录音原话');
-  @override
-  Future<AudioOrganizedNote> organize(
-    AudioProcessingRequest request,
-    AudioTranscript transcript,
-  ) async => const AudioOrganizedNote(title: '录音', text: '录音整理');
 }

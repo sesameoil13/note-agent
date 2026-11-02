@@ -27,8 +27,7 @@ import 'sync_policy.dart';
 import 'recordings.dart';
 import 'audio_queue.dart';
 import 'audio_split.dart';
-export 'audio_queue.dart'
-    hide WorkspaceAudioQueue, AudioQueueCommit, AudioNoteMaterializer;
+export 'audio_queue.dart' hide WorkspaceAudioQueue;
 import 'document_extraction.dart';
 import 'pdf_extractor.dart';
 import 'word_extractor.dart';
@@ -626,7 +625,6 @@ class NoteWorkspace {
     required String submissionId,
   }) => _mutate(() async {
     final result = await _audioQueue.import(original, submissionId);
-    if (_audioQueue.processor == null) _audioQueue.markDisconnected();
     _queueAudio(result.id);
     return _audioQueue.source(result.id);
   });
@@ -698,21 +696,21 @@ class NoteWorkspace {
     }
   });
 
-  Future<void> resumePendingAudioProcessing() =>
-      _audioQueue.run(_mutate, _materializeAudioNote);
+  /// Checks again audio whose check failed for a reason that may pass on a
+  /// second try; once it passes, its 整理 is sent like any capture.
+  Future<void> retryAudioCheck(String id) =>
+      _mutate(() => _audioQueue.retry(id));
 
-  Future<void> retryAudioProcessing(String id) async {
-    await _mutate(() => _audioQueue.retry(id));
-    await resumePendingAudioProcessing();
-  }
-
+  /// Creates the note of a recording or imported audio, with [text] (its
+  /// transcript) as the body until 整理 replaces it.
   Future<void> _materializeAudioNote(
-    WorkspaceAudioSource source,
-    AudioOrganizedNote output,
-  ) async {
+    WorkspaceAudioSource source, {
+    required String title,
+    required String text,
+  }) async {
     final id = source.outputNoteId;
     if (!notes.any((note) => note.id == id)) {
-      final title = _safeTitle(output.title);
+      title = _safeTitle(title);
       _database.execute(
         '''INSERT INTO notes
         (id,vault,title,body,created_at,modified_at,note_path,source_path,status,naming_request)
@@ -721,7 +719,7 @@ class NoteWorkspace {
           id,
           vaultStorage.identity,
           title,
-          output.text,
+          text,
           source.createdAt.toIso8601String(),
           _clock().toIso8601String(),
           vaultStorage.reference('$title.md'),
@@ -748,10 +746,7 @@ class NoteWorkspace {
     );
     final note = await _retryNoteExport(id);
     if (note.status != NoteStatus.localSaved) {
-      throw const AudioProcessingFailure(
-        AudioProcessingFailureKind.recoverable,
-        '转写与整理已保留，笔记库写入未完成。',
-      );
+      throw const FileSystemException('转写已保留，笔记库写入未完成。');
     }
   }
 
@@ -824,7 +819,6 @@ class NoteWorkspace {
     WorkspaceConnection? connection,
     AudioPlatform? audioPlatform,
     AudioSourceInspector? audioInspector,
-    AudioProcessor? audioProcessor,
     NotificationPort? notifications,
   }) async {
     if (vaultStorage == null) {
@@ -974,10 +968,8 @@ class NoteWorkspace {
               : PcmWaveInspector()),
       workspace._clock,
       workspace._createId,
-      audioProcessor,
     );
     await workspace._audioQueue.recover();
-    if (audioProcessor == null) workspace._audioQueue.markDisconnected();
     await workspace._recordings.recover();
     for (final recording in workspace.recordings.where(
       (r) =>
@@ -1555,7 +1547,6 @@ class NoteWorkspace {
   Future<void> close() {
     if (_closeFuture != null) return _closeFuture!;
     _closing = true;
-    _audioQueue.stop();
     for (final extractor in _activeDocuments.values) {
       extractor.cancel();
     }

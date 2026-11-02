@@ -105,7 +105,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
   String get _audioSignature => widget.workspace.audioSources
       .map(
         (s) =>
-            '${s.id}:${s.processingStatus}:${s.stage}:${s.processingReason}:${s.publicationStatus}:${widget.workspace.organizeStatus(s.outputNoteId)}',
+            '${s.id}:${s.processingStatus}:${s.processingReason}:${s.publicationStatus}:${widget.workspace.organizeStatus(s.outputNoteId)}',
       )
       .join('|');
 
@@ -127,19 +127,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
     } finally {
       if (selected != null) await _platform.releaseSourceFile(selected);
     }
-    _startProcessing();
   });
-
-  void _startProcessing([String? sourceId]) {
-    final work = sourceId == null
-        ? widget.workspace.resumePendingAudioProcessing()
-        : widget.workspace.retryAudioProcessing(sourceId);
-    unawaited(
-      work.catchError((Object error) {
-        if (mounted) setState(() => _error = _message(error));
-      }),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -391,45 +379,37 @@ class _RecordingPanelState extends State<RecordingPanel> {
   }
 
   /// Audio not yet checked, refused at its check, or kept from before 整理.
-  Widget _checking(WorkspaceAudioSource source) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        switch (source.processingStatus) {
-          AudioProcessingStatus.pending => '待处理',
-          AudioProcessingStatus.processing =>
-            source.stage == 'transcribe'
-                ? '处理中 · 转写'
-                : source.stage == 'organize'
-                ? '处理中 · 整理'
-                : '处理中 · 写入笔记',
-          AudioProcessingStatus.failed => '失败',
-          AudioProcessingStatus.completed => '处理完成',
-        },
-        style: TextStyle(
-          color: source.processingStatus == AudioProcessingStatus.failed
-              ? const Color(0xFFFF4A18)
-              : const Color(0xFF767C82),
-        ),
-      ),
-      if (source.processingReason != null)
-        SelectableText(
-          source.processingReason!,
-          style: const TextStyle(fontSize: 12),
-        ),
-      if (source.nextAttemptAt != null)
+  /// Transcription and 整理 show as the 整理 status instead.
+  Widget _checking(WorkspaceAudioSource source) {
+    final failed = source.processingStatus == AudioProcessingStatus.failed;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         Text(
-          '稍后重试：${formatNoteTime(source.nextAttemptAt!)} · 自动重试 ${source.automaticRetries}/3',
-          style: const TextStyle(fontSize: 12),
+          failed
+              ? '失败'
+              : source.metadata == null
+              ? '检查中'
+              : '升级前收集，未自动整理',
+          style: TextStyle(
+            color: failed ? const Color(0xFFFF4A18) : const Color(0xFF767C82),
+          ),
         ),
-      if (source.processingStatus == AudioProcessingStatus.failed &&
-          source.canRetryProcessing)
-        TextButton(
-          onPressed: _busy ? null : () => _startProcessing(source.id),
-          child: const Text('重试处理'),
-        ),
-    ],
-  );
+        if (failed && source.processingReason != null)
+          SelectableText(
+            source.processingReason!,
+            style: const TextStyle(fontSize: 12),
+          ),
+        if (failed && source.canRetryCheck)
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () => _act(() => widget.workspace.retryAudioCheck(source.id)),
+            child: const Text('重新检查'),
+          ),
+      ],
+    );
+  }
 
   Widget _importedSource(WorkspaceAudioSource source) {
     final metadata = source.metadata;
