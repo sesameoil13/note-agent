@@ -70,9 +70,9 @@ class WorkspaceAudioSource {
       (metadata != null || stage == 'inspectionFailedRetryable');
 }
 
-/// No processor is installed in production yet. A future paid adapter must
-/// reserve/settle budget itself, classify ambiguous outcomes, and must not
-/// declare interrupted paid requests safe to replay without reconciliation.
+/// No processor is installed in production yet. A future adapter must
+/// classify ambiguous outcomes and must not declare interrupted requests
+/// safe to replay.
 abstract interface class AudioProcessor {
   bool get canReplayInterruptedRequests;
   Future<AudioTranscript> transcribe(AudioProcessingRequest request);
@@ -109,7 +109,6 @@ enum AudioProcessingFailureKind {
   recoverable,
   credentials,
   balance,
-  budget,
   outcomeUnknown,
   unsupported,
   invalidResult,
@@ -531,7 +530,7 @@ class WorkspaceAudioQueue {
                   ? AudioProcessingStatus.failed
                   : AudioProcessingStatus.pending)
               .name,
-          uncertain ? '上次请求结果未确认；请核对服务与预算后手动重试。' : '上次处理意外中断，等待恢复。',
+          uncertain ? '上次请求结果未确认；请稍后重试。' : '上次处理意外中断，等待恢复。',
           uncertain ? AudioProcessingFailureKind.outcomeUnknown.name : null,
           item.id,
         ],

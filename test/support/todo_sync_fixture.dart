@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:note_agent/connection.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'budget_fixture.dart' show BudgetMemoryStore;
+import 'ai_fixture.dart' show AiMemoryStore;
 import 'pending_notification_fixture.dart';
 
 /// Two paired devices with separate vaults, local SQLite and notification
@@ -21,7 +21,7 @@ class TodoSyncFixture {
   DateTime now = DateTime(2026, 10, 21, 8);
   final workspaces = <NoteWorkspace>[];
   final ports = <PendingNotifications>[];
-  final _stores = <BudgetMemoryStore>[];
+  final _stores = <AiMemoryStore>[];
   final _counters = <int>[];
 
   Future<void> start({int devices = 2}) async {
@@ -43,7 +43,7 @@ class TodoSyncFixture {
     _proxy = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _proxy.listen(_forward);
     for (var i = 0; i < devices; i++) {
-      _stores.add(BudgetMemoryStore());
+      _stores.add(AiMemoryStore());
       ports.add(PendingNotifications());
       _counters.add(0);
       await Directory('${root.path}/vault$i').create();

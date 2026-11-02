@@ -340,7 +340,7 @@ class _FirstRunFlowState extends State<FirstRunFlow> {
     return _page(
       title: '连接 AI',
       body:
-          '${hasKey ? 'Key 已保存。再输入首次启用码，登记这台设备为原设备。' : '粘贴阿里云百炼（北京地域）的 API Key，并输入首次启用码。Key 在百炼控制台 → API-KEY 创建；检测不调用收费模型。'}'
+          '${hasKey ? 'Key 已保存。再输入首次启用码，登记这台设备为原设备。' : '粘贴阿里云百炼（北京地域）的 API Key，并输入首次启用码。Key 在百炼控制台 → API-KEY 创建；检测不发送笔记内容。'}'
           '\n首次启用码是部署配对服务时生成的一次性码，只用于登记第一台设备；其余设备通过配对加入，不需要它。'
           '${_alreadyEnrolled ? '\n这个配对服务已经有第一台设备。若这台不是第一台，请改为配对加入。' : ''}',
       fields: [

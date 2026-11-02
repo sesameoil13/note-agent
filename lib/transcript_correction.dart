@@ -26,14 +26,9 @@ extension _WorkspaceTranscriptCorrection on NoteWorkspace {
       throw StateError('请先完成笔记库写入，再更正转写。');
     }
     if (textJobs.any(
-      (j) =>
-          j.noteId == noteId &&
-          [
-            TextProcessingStatus.prepared,
-            TextProcessingStatus.sending,
-          ].contains(j.status),
+      (j) => j.noteId == noteId && j.status == TextProcessingStatus.sending,
     )) {
-      throw StateError('整理任务已预留或正在发送；请先完成或取消，再更正转写。');
+      throw StateError('正在整理这条录音；请等整理完成后再更正转写。');
     }
     final path = vaultStorage.relativePath(note.sourcePath);
     final before = await vaultStorage.readText(path);

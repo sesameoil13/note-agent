@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/connection.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart' show BudgetMemoryStore;
+import 'support/ai_fixture.dart' show AiMemoryStore;
 
 void main() {
   test(
@@ -47,7 +47,7 @@ void main() {
       );
       addTearDown(() => temporary.delete(recursive: true));
       final vault = await Directory('${temporary.path}/vault').create();
-      final store = BudgetMemoryStore();
+      final store = AiMemoryStore();
       final workspace = await NoteWorkspace.open(
         localDirectory: Directory('${temporary.path}/local'),
         vaultDirectory: vault,

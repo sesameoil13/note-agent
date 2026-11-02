@@ -2,20 +2,14 @@ part of 'note_workspace.dart';
 
 enum ProcessingFailureSource { text, audio, document }
 
-/// The next safe step for a failed item. None of them re-runs a stage whose
-/// result was already saved, and none releases a possibly charged hold.
+/// The next step for a failed item. None of them re-runs a stage whose
+/// result was already saved.
 enum ProcessingRecovery {
   /// A bounded automatic retry is still scheduled; nothing to do yet.
   automaticRetryScheduled,
 
-  /// Manual retry: a fresh, separately admitted attempt (may be charged).
+  /// 重试: the item is tried again.
   retry,
-
-  /// A new attempt is estimated and reserved; recovering again sends it.
-  confirmPrepared,
-
-  /// A paid stage's charge must be reconciled before the next stage starts.
-  reconcileCost,
 
   /// The original was never completely retained; the file must be chosen again.
   reselectOriginal,
@@ -31,27 +25,14 @@ class WorkspaceProcessingFailure {
     this.noteId,
     this.automaticRetriesUsed = 0,
     this.nextAutomaticRetryAt,
-    this.needsAccountAction = false,
-    this.estimatedCnyMicros = 0,
   });
   final String id, title, message;
   final ProcessingFailureSource source;
   final ProcessingRecovery recovery;
   final String? noteId;
-  final int automaticRetriesUsed, estimatedCnyMicros;
+  final int automaticRetriesUsed;
   final DateTime? nextAutomaticRetryAt;
-
-  /// Credentials, balance or budget: never retried automatically. The user
-  /// fixes the account first; a later manual retry is still allowed.
-  final bool needsAccountAction;
 }
-
-const _accountFailureKinds = {
-  'credentials',
-  'balance',
-  'budget',
-  'budget_exceeded',
-};
 
 extension _WorkspaceProcessingRecovery on NoteWorkspace {
   List<WorkspaceProcessingFailure> _processingFailures() {
@@ -61,19 +42,11 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
     for (final job in textJobs) {
       final p = _textPayload(job.id);
       if (p['audioPipeline'] is String) continue;
-      final kind = p['failureKind'] as String?;
-      final recovery = switch (job.status) {
-        TextProcessingStatus.failed => ProcessingRecovery.retry,
-        TextProcessingStatus.costPending when job.canRetry =>
-          ProcessingRecovery.retry,
-        TextProcessingStatus.review
-            when p['result'] == null && p['validationError'] is String =>
-          ProcessingRecovery.retry,
-        TextProcessingStatus.prepared when kind != null =>
-          ProcessingRecovery.confirmPrepared,
-        _ => null,
-      };
-      if (recovery == null) continue;
+      // Only automatic 整理 is retried; an old estimate/confirm job never is.
+      if (job.status != TextProcessingStatus.failed ||
+          p['automatic'] != true) {
+        continue;
+      }
       final audio = _audioQueue.sources
           .where((s) => s.id == p['audio'])
           .firstOrNull;
@@ -84,10 +57,8 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
           noteId: job.noteId,
           title: titleOf(job.noteId, audio?.originalName ?? '文字笔记'),
           message: job.message,
-          recovery: recovery,
+          recovery: ProcessingRecovery.retry,
           automaticRetriesUsed: p['autoRetries'] as int? ?? 0,
-          needsAccountAction: _accountFailureKinds.contains(kind),
-          estimatedCnyMicros: job.estimatedCnyMicros,
         ),
       );
     }
@@ -120,7 +91,6 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
               : ProcessingRecovery.retry,
           automaticRetriesUsed: source.automaticRetries,
           nextAutomaticRetryAt: source.nextAttemptAt,
-          needsAccountAction: _accountFailureKinds.contains(source.failureKind),
         ),
       );
     }
@@ -174,105 +144,5 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
       case ProcessingFailureSource.document:
         await retryDocumentExtraction(key, original: original);
     }
-  }
-
-  /// (attempt, label, text job or null) of requests that may have been billed
-  /// and have no receipt, for the failure [failureId].
-  List<(String, String, String?)> _chargeCandidates(String failureId) {
-    final key = failureId.substring(failureId.indexOf(':') + 1);
-    final out = <(String, String, String?)>[];
-    void text(String jobId, String label) {
-      final p = _textPayload(jobId);
-      // Before the switch: the cost is checked with OpenRouter instead.
-      if ((p['quote'] as Map?)?['currency'] != 'CNY') return;
-      final receipts = (p['receipts'] as Map?) ?? const {};
-      for (final attempt in (p['attempts'] as List).cast<String>()) {
-        final r = receipts[attempt] as Map?;
-        if (r != null &&
-            (r['settled'] == true ||
-                r['released'] == true ||
-                r['settle'] is Map)) {
-          continue;
-        }
-        out.add((attempt, label, jobId));
-      }
-    }
-
-    if (failureId.startsWith('text:')) {
-      text(key, '整理');
-    }
-    return out;
-  }
-
-  Future<List<UnconfirmedCharge>> _unconfirmedCharges(String failureId) async {
-    final out = <UnconfirmedCharge>[];
-    var adopted = false;
-    for (final candidate in _chargeCandidates(failureId)) {
-      final (attempt, label, _) = candidate;
-      try {
-        final r = await connection.requestSharedBudget(
-          '/v1/budget/attempt/$attempt',
-        );
-        final a = r['attempt'] as Map;
-        // Only what the shared ledger still holds as possibly billed.
-        if (['sent', 'uncertain'].contains(a['state'])) {
-          out.add(UnconfirmedCharge(attempt, label, a['reserve_cny'] as int));
-        } else if (a['state'] == 'settled') {
-          // Settled already (e.g. a recorded charge whose reply was lost).
-          await _adoptSettledCharge(failureId, candidate, a['actual_cny']);
-          adopted = true;
-        }
-      } on ConnectionFailure catch (e) {
-        if (e.code != 'attempt_missing') rethrow;
-      }
-    }
-    if (adopted) await _reconcileCharges(failureId);
-    return out;
-  }
-
-  /// Notes a settlement the shared ledger holds in the local job.
-  Future<void> _adoptSettledCharge(
-    String failureId,
-    (String, String, String?) candidate,
-    Object? actual,
-  ) async {
-    final (attemptId, _, textJob) = candidate;
-    if (textJob == null) return;
-    final p = _textPayload(textJob);
-    p['receipts'] = {
-      ...?p['receipts'] as Map?,
-      attemptId: {'settled': true, 'confirmed': true, 'cnyMicros': actual},
-    };
-    await _saveText(
-      textJob,
-      textJobs.firstWhere((j) => j.id == textJob).status,
-      p,
-    );
-  }
-
-  Future<void> _reconcileCharges(String failureId) async {
-    await _reconcileText(failureId.substring(failureId.indexOf(':') + 1));
-  }
-
-  Future<void> _recordConfirmedCharge(
-    String failureId,
-    String attemptId,
-    int cnyMicros,
-  ) async {
-    final candidate = _chargeCandidates(failureId)
-        .where((c) => c.$1 == attemptId)
-        .firstOrNull;
-    if (candidate == null) throw StateError('此请求无需核对，或已核对。');
-    final r = await connection.requestSharedBudget(
-      '/v1/budget/attempt/$attemptId/settle',
-      body: {'confirmedCnyMicros': cnyMicros},
-    );
-    _readTextBudget((r['budget'] as Map).cast<String, dynamic>());
-    await _adoptSettledCharge(
-      failureId,
-      candidate,
-      (r['attempt'] as Map)['actual_cny'],
-    );
-    await _reconcileCharges(failureId);
   }
 }

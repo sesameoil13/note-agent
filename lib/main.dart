@@ -17,7 +17,6 @@ import 'document_panel.dart';
 import 'setup_screen.dart';
 import 'first_run.dart';
 import 'first_run_flow.dart';
-import 'budget_panel.dart';
 import 'processing_recovery_screen.dart';
 import 'action_confirmation_screen.dart';
 import 'reminder_screen.dart';
@@ -728,15 +727,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     ),
   );
 
-  Future<void> _openBudget() async {
-    final workspace = _workspace;
-    if (workspace == null) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (_) => BudgetPanel(workspace: workspace)),
-    );
-    if (mounted) setState(() => _editingNoteId = null);
-  }
-
   Future<void> _openConnection() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
@@ -775,12 +765,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           const Text('笔记工作区', style: TextStyle(color: ash)),
         ],
         const Spacer(),
-        if (_workspace != null && wide)
-          AccessibleIconButton(
-            onPressed: _saving ? null : _openBudget,
-            label: 'AI 与共享预算',
-            icon: const Icon(Icons.account_balance_wallet_outlined),
-          ),
         if (_workspace != null && _workspace!.processingFailures.isNotEmpty)
           AccessibleIconButton(
             onPressed: _saving || _loading
@@ -845,8 +829,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             enabled: !_saving && !_loading,
             onSelected: (action) async {
               switch (action) {
-                case 'budget':
-                  await _openBudget();
                 case 'setup':
                   await _showSetup();
                 case 'connection':
@@ -854,8 +836,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
               }
             },
             itemBuilder: (_) => [
-              if (_workspace != null)
-                const PopupMenuItem(value: 'budget', child: Text('AI 与共享预算')),
               const PopupMenuItem(value: 'setup', child: Text('设置')),
               const PopupMenuItem(value: 'connection', child: Text('连接与设备')),
             ],

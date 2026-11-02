@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/main.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 
 import 'support/async_settle.dart';
 import 'support/organize_now.dart';
@@ -15,7 +15,7 @@ void main() {
   testWidgets(
     'phone user can see a topic reason and confirm or ignore from the shared pending list',
     (tester) async {
-      final f = BudgetFixture();
+      final f = AiFixture();
       final w = (await tester.runAsync(
         () => HttpOverrides.runWithHttpOverrides(() async {
           await f.start();

@@ -154,7 +154,7 @@ class _ActionConfirmationScreenState extends State<ActionConfirmationScreen> {
         setState(() {
           error = e is ArgumentError
               ? '${e.message}'
-              : '修正尚未保存，原文及原笔记保留。请核对内容后重试；不会调用模型或释放未知费用。';
+              : '修正尚未保存，原文及原笔记保留。请核对内容后重试；不会调用模型。';
           busy = false;
         });
       }

@@ -174,7 +174,7 @@ extension _WorkspaceAudioProcessing on NoteWorkspace {
       await _mutate(() async {
         _database.execute(
           'UPDATE audio_jobs SET status=?,error=? WHERE source_id=? AND vault=?',
-          ['cancelled', '升级后不再发送旧的预估任务；原音与已有转写保留。', id, vaultStorage.identity],
+          ['cancelled', '升级后不再发送旧版本未完成的任务；原音与已有转写保留。', id, vaultStorage.identity],
         );
       }, accepted: true);
     }

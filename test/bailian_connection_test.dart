@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/connection.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart' show BudgetMemoryStore;
+import 'support/ai_fixture.dart' show AiMemoryStore;
 
 /// A stand-in for Bailian's OpenAI-compatible endpoint on this Mac. Listing
 /// models is the free key check (issue #34, Q2).
@@ -39,7 +39,7 @@ Future<HttpServer> fakeBailian({required String acceptedKey}) async {
   return server;
 }
 
-WorkspaceConnection connectionFor(HttpServer server, BudgetMemoryStore store) {
+WorkspaceConnection connectionFor(HttpServer server, AiMemoryStore store) {
   final base = Uri.parse('http://127.0.0.1:${server.port}/compatible-mode/v1/');
   return WorkspaceConnection(
     secureStore: store,
@@ -57,7 +57,7 @@ void main() {
         acceptedKey: 'sk-bailian-valid-test-key-0000',
       );
       addTearDown(() => server.close(force: true));
-      final store = BudgetMemoryStore();
+      final store = AiMemoryStore();
       final connection = connectionFor(server, store);
 
       await connection.connectAi('sk-bailian-valid-test-key-0000');
@@ -81,7 +81,7 @@ void main() {
       acceptedKey: 'sk-bailian-valid-test-key-0000',
     );
     addTearDown(() => server.close(force: true));
-    final store = BudgetMemoryStore();
+    final store = AiMemoryStore();
     final connection = connectionFor(server, store);
 
     await expectLater(
@@ -103,7 +103,7 @@ void main() {
       acceptedKey: 'sk-bailian-valid-test-key-0000',
     );
     addTearDown(() => server.close(force: true));
-    final store = BudgetMemoryStore()
+    final store = AiMemoryStore()
       ..value = jsonEncode({
         'openRouterKey': 'sk-or-v1-old-key-from-before-the-switch',
         'device': {'id': 'mac-1', 'role': 'owner', 'name': 'Mac'},
@@ -127,13 +127,13 @@ void main() {
     () {
       expect(
         () => WorkspaceConnection(
-          secureStore: BudgetMemoryStore(),
+          secureStore: AiMemoryStore(),
           textApiBase: Uri.parse('https://example.com/compatible-mode/v1/'),
         ),
         throwsArgumentError,
       );
       expect(
-        WorkspaceConnection(secureStore: BudgetMemoryStore()).textApiBase,
+        WorkspaceConnection(secureStore: AiMemoryStore()).textApiBase,
         Uri.parse('https://dashscope.aliyuncs.com/compatible-mode/v1/'),
       );
     },
@@ -173,7 +173,7 @@ void main() {
 
     Future<NoteWorkspace> device(
       String name,
-      BudgetMemoryStore store, {
+      AiMemoryStore store, {
       int configVersion = 2,
     }) async {
       final base = Uri.parse(
@@ -216,8 +216,8 @@ void main() {
     test(
       'the paired device receives the Bailian key, tagged with its provider',
       () async {
-        final phoneStore = BudgetMemoryStore();
-        final owner = await device('mac', BudgetMemoryStore());
+        final phoneStore = AiMemoryStore();
+        final owner = await device('mac', AiMemoryStore());
         final phone = await device('phone', phoneStore);
         addTearDown(() async {
           await owner.close();
@@ -235,8 +235,8 @@ void main() {
     );
 
     test('an original device on the old version is refused before anything is saved', () async {
-      final phoneStore = BudgetMemoryStore();
-      final owner = await device('mac', BudgetMemoryStore(), configVersion: 1);
+      final phoneStore = AiMemoryStore();
+      final owner = await device('mac', AiMemoryStore(), configVersion: 1);
       final phone = await device('phone', phoneStore);
       addTearDown(() async {
         await owner.close();

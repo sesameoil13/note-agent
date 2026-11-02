@@ -16,8 +16,8 @@ import 'backup_check.dart';
 export 'workspace_setup.dart' hide WorkspaceSetup;
 export 'backup_check.dart' hide compareVaultBackup;
 import 'connection.dart';
-import 'cloud_budget.dart';
-export 'cloud_budget.dart';
+import 'text_jobs.dart';
+export 'text_jobs.dart';
 import 'attachments.dart';
 import 'note_links.dart';
 import 'todo_merge.dart';
@@ -82,7 +82,7 @@ enum NoteSyncStatus { notPublished, unverified, attachmentBlocked }
 enum TaskStatusSync { notConnected, pending, offline, synced }
 
 /// Whether the retained input is ready for the shared, explicitly confirmed
-/// text-model pipeline. No quote, reservation or model call happens here.
+/// text-model pipeline. No model call happens here.
 class ProcessingReadiness {
   const ProcessingReadiness(this.canPrepare, this.message);
   final bool canPrepare;
@@ -420,10 +420,6 @@ class NoteWorkspace {
     }
   }
 
-  WorkspaceBudgetState _budget = const WorkspaceBudgetState();
-  WorkspaceBudgetState get budget => _budget;
-  Future<void> refreshBudget() => _refreshTextBudget();
-  Future<void> setMonthlyBudgetLimit(int micros) => _setTextBudget(micros);
   Future<void>? _sendingWaiting;
 
   /// Sends the captures waiting for 整理, oldest first. The App calls this
@@ -455,9 +451,6 @@ class NoteWorkspace {
   /// Why a capture failed, or why its result was not written; empty if none.
   String organizeMessage(String noteId) => _organizeJob(noteId)?.message ?? '';
 
-  /// Cancels an unsent job started from the correction screen.
-  Future<WorkspaceTextJob> cancelTextProcessing(String id) =>
-      _trackText(_cancelText(id));
   List<WorkspaceTextJob> get textJobs => _textJobs();
   ProcessingReadiness textProcessingReadiness(String noteId) {
     final note = notes.firstWhere((n) => n.id == noteId);
@@ -484,7 +477,7 @@ class NoteWorkspace {
         result.markdown.trim().isEmpty) {
       return const ProcessingReadiness(
         false,
-        '没有可整理的提取文字。扫描页与图片尚未识别，原件保留；不会发送占位文字或预留费用。',
+        '没有可整理的提取文字。扫描页与图片尚未识别，原件保留；不会发送占位文字。',
       );
     }
     return ProcessingReadiness(
@@ -505,8 +498,7 @@ class NoteWorkspace {
     ),
   );
 
-  /// Explicit local user decision. This never requests a model or changes a
-  /// paid attempt, receipt or unknown shared-budget hold.
+  /// Explicit local user decision. This never requests a model.
   Future<WorkspaceNote> resolveNoteActions(
     String noteId, {
     required NoteKind kind,
@@ -517,8 +509,6 @@ class NoteWorkspace {
   );
   Future<void> retryNoteActionSave(String noteId) =>
       _mutate(() => _finishActionChange(noteId));
-  Future<WorkspaceTextJob> reconcileTextProcessing(String id) =>
-      _trackText(_reconcileText(id));
   final Map<String, Future<WorkspaceTextJob>> _processingText = {};
   final Set<Future<void>> _textOperations = {};
 
@@ -567,26 +557,12 @@ class NoteWorkspace {
   }
 
   /// Failed audio, document and text processing that can be recovered in the
-  /// App. Items needing only cost reconciliation of an applied result stay in
-  /// the budget panel instead.
+  /// App.
   List<WorkspaceProcessingFailure> get processingFailures =>
       _processingFailures();
 
   /// Performs the next safe step for [id]. [original] is only used to choose
   /// a document again when its original was never completely retained.
-  /// Requests of a job whose cost is still unknown. [key] is `text:<job id>`
-  /// or `audio:<source id>`, the same form as a processing failure's id.
-  Future<List<UnconfirmedCharge>> unconfirmedCharges(String key) =>
-      _unconfirmedCharges(key);
-
-  /// Records the charge the user checked in the Bailian console for one of
-  /// [unconfirmedCharges], settling its hold; zero when it was not billed.
-  Future<void> recordConfirmedCharge(
-    String key,
-    String attemptId,
-    int cnyMicros,
-  ) => _trackText(_recordConfirmedCharge(key, attemptId, cnyMicros));
-
   Future<void> recoverProcessingFailure(String id, {File? original}) =>
       _recoverFailure(id, original);
 
@@ -1023,7 +999,7 @@ class NoteWorkspace {
     await workspace._recoverActionCompletion();
     await workspace._recoverAssociationChanges();
     await workspace._recoverCorrections();
-    await workspace._dropUnfinishedBudgetJobs();
+    await workspace._dropOldEstimateJobs();
     await workspace._recoverText();
     await workspace._dropUnfinishedAudioJobs();
     // Audio saved before the app closed may not have been queued yet.
@@ -1822,22 +1798,17 @@ $source
     }).whenComplete(() => _retryingDocuments.remove(noteId));
   }
 
-  /// Re-extraction must never mutate an input already reserved or sent to AI.
-  /// A cancelled, provably unsent attempt may safely obtain a new local input.
+  /// Re-extraction must never change an input already sent to AI. A capture
+  /// still waiting, or an old job dropped unsent on upgrade, may safely
+  /// obtain a new local input.
   bool canRetryDocumentExtraction(String noteId) {
     for (final job in textJobs.where((j) => j.noteId == noteId)) {
       // Not sent yet: it is built from the extraction when it is sent.
       if (job.status == TextProcessingStatus.waiting) continue;
       final payload = _textPayload(job.id);
-      final receipts = payload['receipts'] as Map? ?? {};
       if (job.status != TextProcessingStatus.cancelled ||
           payload['reply'] != null ||
-          payload['result'] != null ||
-          (payload['attempts'] as List).any(
-            (attempt) =>
-                receipts[attempt] is! Map ||
-                receipts[attempt]['released'] != true,
-          )) {
+          payload['result'] != null) {
         return false;
       }
     }

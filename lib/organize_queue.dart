@@ -31,8 +31,8 @@ const _organizeRetryGaps = [
 ];
 
 /// Automatic 整理 of every capture (ADR 0004): each is queued once on the
-/// device that captured it and sent straight to Bailian, with no estimate,
-/// confirmation or budget request. Audio is transcribed first.
+/// device that captured it and sent straight to Bailian. Audio is
+/// transcribed first.
 extension _WorkspaceOrganizeQueue on NoteWorkspace {
   /// Queues [noteId] for 整理. Only the capturing device calls this, so a
   /// note that arrives from another device is never sent from here.
@@ -243,8 +243,6 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
             .map((c) => c['noteId'] as String)
             .toSet(),
       );
-      // Nothing to settle: _applyText then marks the job completed.
-      payload['settled'] = true;
       await _saveText(id, TextProcessingStatus.sending, payload);
       await _applyText(id, payload);
       if (audio != null) {
@@ -319,8 +317,9 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
 
   /// Old estimate/confirm jobs of every capture that never got a result
   /// are dropped without being sent; their notes and originals stay. Old
-  /// re-organizations are removed: a capture is organized only once.
-  Future<void> _dropUnfinishedBudgetJobs() async {
+  /// re-organizations are removed: a capture is organized only once. What
+  /// the old version kept for cost (quotes, holds, receipts) is ignored.
+  Future<void> _dropOldEstimateJobs() async {
     // Also jobs of notes in the 回收站, which return with a restore.
     for (final row in _database.select(
       'SELECT id FROM text_jobs WHERE vault=?',
@@ -333,10 +332,23 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
         _database.execute('DELETE FROM text_jobs WHERE id=?', [id]);
         continue;
       }
+      final status = _database.select(
+        'SELECT status FROM text_jobs WHERE id=?',
+        [id],
+      ).single['status'];
       // Including the organizing step of an old recording job.
       if (payload['automatic'] == true ||
           payload['result'] is Map ||
           payload['dropped'] == true) {
+        // A result whose cost the old version still had to confirm is done.
+        if (!TextProcessingStatus.values.any((s) => s.name == status)) {
+          _database.execute('UPDATE text_jobs SET status=? WHERE id=?', [
+            payload['result'] is Map
+                ? TextProcessingStatus.completed.name
+                : TextProcessingStatus.cancelled.name,
+            id,
+          ]);
+        }
         continue;
       }
       payload['dropped'] = true;
@@ -344,7 +356,7 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
         id,
         TextProcessingStatus.cancelled,
         payload,
-        error: '升级后不再发送旧的预估任务；原文保留。',
+        error: '升级后不再发送旧版本未完成的任务；原文保留。',
       );
     }
   }

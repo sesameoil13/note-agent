@@ -178,4 +178,65 @@ void main() {
     expect(await File(organizedPath).readAsString(), before);
     expect(f.workerPaths.where((p) => p.startsWith('/v1/budget')), isEmpty);
   });
+
+  test('budget state saved by the old version is ignored on open', () async {
+    final w = f.workspaces.first;
+    final organized = await w.captureText(title: '已整理', text: '旧版本整理过的想法。');
+    await w.sendWaitingNow();
+    final organizedText = w.notes.firstWhere((n) => n.id == organized.id).text;
+    final held = await w.captureText(title: '已发送', text: '旧版本发送前的想法。');
+    final queued = await w.captureText(title: '排队中', text: '排队中的旧想法。');
+    await f.reopen(
+      0,
+      whileClosed: (local) {
+        // The old app's cost states: a result whose charge was never
+        // confirmed, a reserved attempt and a queued estimate.
+        final db = sqlite3.open('${local.path}/workspace.sqlite3');
+        for (final row in db.select(
+          'SELECT id,note_id,payload FROM text_jobs',
+        )) {
+          final payload = jsonDecode(row['payload'] as String) as Map
+            ..remove('automatic')
+            ..remove('settled');
+          final attempt = '${row['id']}-0';
+          payload['attempts'] = [attempt];
+          payload['estimatedCnyMicros'] = 1200;
+          payload['quote'] = {'id': 'q-old', 'currency': 'CNY'};
+          payload['receipts'] = {
+            attempt: {'settled': false},
+          };
+          final status = row['note_id'] == organized.id
+              ? 'costPending'
+              : row['note_id'] == held.id
+              ? 'prepared'
+              : 'queued';
+          if (status != 'costPending') {
+            payload['original'] =
+                (row['note_id'] == held.id ? held : queued).text;
+          }
+          db.execute('UPDATE text_jobs SET status=?,payload=? WHERE id=?', [
+            status,
+            jsonEncode(payload),
+            row['id'],
+          ]);
+        }
+        db.close();
+      },
+    );
+    final reopened = f.workspaces.first;
+
+    await reopened.sendWaitingNow();
+
+    expect(f.modelRequests, hasLength(1));
+    expect(reopened.organizeStatus(organized.id), OrganizeStatus.organized);
+    expect(
+      reopened.notes.firstWhere((n) => n.id == organized.id).text,
+      organizedText,
+    );
+    expect(reopened.organizeStatus(held.id), isNull);
+    expect(reopened.organizeStatus(queued.id), isNull);
+    expect(reopened.processingFailures, isEmpty);
+    expect(reopened.notes, hasLength(3));
+    expect(f.workerPaths.where((p) => p.startsWith('/v1/budget')), isEmpty);
+  });
 }

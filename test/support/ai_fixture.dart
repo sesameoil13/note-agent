@@ -45,6 +45,32 @@ class AiFixture {
   /// The organized result returned for a request; an ordinary note when null.
   Map<String, dynamic>? modelResult;
 
+  /// Results for particular notes (by sourceId), before [modelResult].
+  final modelResults = <String, Map<String, dynamic>>{};
+
+  /// True to reply with content that isn't valid JSON.
+  bool malformedContent = false;
+
+  /// Organizes [note] into itself: same kind of note, title and body.
+  void keepAsIs(WorkspaceNote note) => modelResults[note.id] = {
+    'manifestVersion': 3,
+    'kind': 'ordinary',
+    'title': note.title,
+    'body': note.text,
+    'actions': [],
+    'associations': [],
+    'newTopics': [],
+  };
+
+  /// qwen-plus requests for the note [noteId].
+  List<Map<String, dynamic>> requestsFor(String noteId) => [
+    for (final r in modelRequests)
+      if ((jsonDecode((r['messages'] as List).last['content'] as String)
+              as Map)['sourceId'] ==
+          noteId)
+        r,
+  ];
+
   /// Runs while a qwen-plus request is held, before the reply is written.
   Future<void> Function()? beforeReply;
 
@@ -183,19 +209,22 @@ class AiFixture {
           {
             'finish_reason': 'stop',
             'message': {
-              'content': jsonEncode({
-                'sourceId': input['sourceId'],
-                ...modelResult ??
-                    {
-                      'manifestVersion': 3,
-                      'kind': 'ordinary',
-                      'title': '记录想法',
-                      'body': '整理后的普通想法。',
-                      'actions': [],
-                      'associations': [],
-                      'newTopics': [],
-                    },
-              }),
+              'content': malformedContent
+                  ? '{broken'
+                  : jsonEncode({
+                      'sourceId': input['sourceId'],
+                      ...modelResults[input['sourceId']] ??
+                          modelResult ??
+                          {
+                            'manifestVersion': 3,
+                            'kind': 'ordinary',
+                            'title': '记录想法',
+                            'body': '整理后的普通想法。',
+                            'actions': [],
+                            'associations': [],
+                            'newTopics': [],
+                          },
+                    }),
             },
           },
         ],
@@ -248,9 +277,13 @@ class AiFixture {
     await r.response.close();
   }
 
-  Future<NoteWorkspace> _open(int i) => NoteWorkspace.open(
+  Future<NoteWorkspace> _open(int i, {VaultStorage? vaultStorage}) =>
+      NoteWorkspace.open(
     localDirectory: Directory('${root.path}/local$i'),
-    vaultDirectory: Directory('${root.path}/vault$i'),
+    vaultDirectory: vaultStorage == null
+        ? Directory('${root.path}/vault$i')
+        : null,
+    vaultStorage: vaultStorage,
     audioPlatform: i == 0 ? recorder : null,
     clock: () => now,
     connection: WorkspaceConnection(
@@ -268,11 +301,12 @@ class AiFixture {
   /// data an older app version saved.
   Future<void> reopen(
     int i, {
+    VaultStorage? vaultStorage,
     void Function(Directory local)? whileClosed,
   }) async {
     await workspaces[i].close();
     whileClosed?.call(Directory('${root.path}/local$i'));
-    workspaces[i] = await _open(i);
+    workspaces[i] = await _open(i, vaultStorage: vaultStorage);
   }
 
   Future<void> close() async {

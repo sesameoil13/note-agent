@@ -4,12 +4,12 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 import 'support/organize_now.dart';
 
 void main() {
   test('semantic model links multiple existing notes and defers a new topic without blocking the original save', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -72,7 +72,7 @@ void main() {
     );
   });
   test('user approves or ignores topics and removes a wrong relation after target rename without a new model call', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -130,7 +130,7 @@ void main() {
   test(
     'unknown identities cannot become links or overwrite the saved original',
     () async {
-      final f = BudgetFixture();
+      final f = AiFixture();
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
@@ -156,7 +156,7 @@ void main() {
   );
 
   test('a failed approved topic publication recovers once and external body edits remain protected', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     var w = f.workspaces.first;
@@ -208,7 +208,7 @@ void main() {
     expect(f.modelRequests.length, 1);
   });
   test('an unavailable vault during automatic linking leaves the workspace usable and recovers without resending', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     var w = f.workspaces.first;

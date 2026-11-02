@@ -106,26 +106,6 @@ Map<String, dynamic> _associationArraySchema(String identity, int maximum) => {
 class TextModelReply {
   const TextModelReply(this.data);
   final Map<String, dynamic> data;
-  String? get generationId =>
-      data['id'] is String ? data['id'] as String : null;
-
-  /// The receipt the Worker settles from: the response id and its token
-  /// usage. Null when either is missing, so the hold stays unconfirmed.
-  Map<String, dynamic>? get settleBody {
-    final id = generationId, usage = data['usage'];
-    if (id == null || !RegExp(r'^[a-zA-Z0-9_-]{8,80}$').hasMatch(id)) {
-      return null;
-    }
-    if (usage is! Map) return null;
-    final input = usage['prompt_tokens'], output = usage['completion_tokens'];
-    if (input is! int || output is! int || input < 0 || output < 0) {
-      return null;
-    }
-    return {
-      'responseId': id,
-      'usage': {'promptTokens': input, 'completionTokens': output},
-    };
-  }
 
   Map<String, dynamic> validated(
     String sourceId, {
@@ -140,7 +120,7 @@ class TextModelReply {
         choices.length != 1 ||
         choices.first is! Map ||
         choices.first['finish_reason'] != 'stop') {
-      throw const ConnectionFailure('模型结果不完整，原文已保留，费用仍按实际记录。');
+      throw const ConnectionFailure('模型结果不完整，原文已保留。');
     }
     final message = choices.first['message'];
     final content = message is Map ? message['content'] : null;
@@ -148,7 +128,7 @@ class TextModelReply {
     try {
       result = content is String ? jsonDecode(content) : null;
     } catch (_) {
-      throw const ConnectionFailure('模型结果格式无法核对，原文保留，费用按实际记录。');
+      throw const ConnectionFailure('模型结果格式无法核对，原文保留。');
     }
     final v3 = result is Map && result['manifestVersion'] == 3;
     final keys = v3
@@ -288,7 +268,6 @@ class TextNetworkFailure implements Exception {
   const TextNetworkFailure(
     this.message, {
     this.recoverable = false,
-    this.generationId,
     this.code,
   });
   final String message;
@@ -296,22 +275,9 @@ class TextNetworkFailure implements Exception {
 
   /// `credentials` or `balance` when the account must be fixed first.
   final String? code;
-  final String? generationId;
 }
 
 extension WorkspaceTextNetwork on WorkspaceConnection {
-  Future<TextModelReply> sendReservedText(
-    String attemptId,
-    Map<String, dynamic> payload,
-  ) async {
-    await _ensureLoaded();
-    if (_aiKey == null) {
-      throw const ConnectionFailure('请先在 App 连接阿里云百炼。', code: 'credentials');
-    }
-    await requestSharedBudget('/v1/budget/attempt/$attemptId/send', body: {});
-    return sendText(payload);
-  }
-
   /// Sends [payload] straight to Bailian with this device's key; nothing
   /// reaches the Worker (ADR 0004).
   Future<TextModelReply> sendText(Map<String, dynamic> payload) async {
@@ -348,7 +314,7 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
       }
       if (response.statusCode == 402) {
         throw const TextNetworkFailure(
-          '阿里云账户余额不足，请在控制台核对；App 不自动充值。',
+          '阿里云账户余额不足，请在阿里云控制台充值。',
           code: 'balance',
         );
       }

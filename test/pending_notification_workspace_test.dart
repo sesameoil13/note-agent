@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
 import 'support/pending_notification_fixture.dart';
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 import 'support/organize_now.dart';
 
 void main() {
@@ -144,7 +144,7 @@ void main() {
   });
 
   test('typed model topics and actions share one burst; local processing updates list without a model resend', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final port = PendingNotifications();
@@ -243,7 +243,7 @@ void main() {
     expect(await w.takePendingConfirmationNavigation(), false);
   });
   test('content without extracted actions still has one typed pending event and stays isolated from another vault', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final port = PendingNotifications();

@@ -345,7 +345,6 @@ void main() {
   for (final kind in [
     AudioProcessingFailureKind.credentials,
     AudioProcessingFailureKind.balance,
-    AudioProcessingFailureKind.budget,
     AudioProcessingFailureKind.outcomeUnknown,
   ]) {
     test(

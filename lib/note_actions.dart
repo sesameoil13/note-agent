@@ -269,9 +269,7 @@ extension _WorkspaceActions on NoteWorkspace {
             jsonEncode(payload),
             (pending
                     ? TextProcessingStatus.review
-                    : payload['settled'] == true
-                    ? TextProcessingStatus.completed
-                    : TextProcessingStatus.costPending)
+                    : TextProcessingStatus.completed)
                 .name,
             pending ? '行动待确认，未启动提醒。' : null,
             row['id'],

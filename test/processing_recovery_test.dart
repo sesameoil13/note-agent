@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 import 'audio_queue_test.dart' show wave;
 import 'support/organize_now.dart';
 
@@ -13,7 +13,7 @@ void main() {
   test(
     'a text failure is listed once and recovers manually into the same note',
     () async {
-      final f = BudgetFixture()..modelStatuses.add(400);
+      final f = AiFixture()..modelStatuses.add(400);
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
@@ -27,7 +27,6 @@ void main() {
       expect(failure.title, '失败恢复');
       expect(failure.recovery, ProcessingRecovery.retry);
       expect(failure.automaticRetriesUsed, 0);
-      expect(failure.needsAccountAction, false);
       await f.reopen(0);
       final reopened = f.workspaces.first;
       expect(reopened.processingFailures.single.id, failure.id);
@@ -41,7 +40,7 @@ void main() {
     },
   );
   test('an invalid model result is listed and a manual retry applies one valid result', () async {
-    final f = BudgetFixture()..malformedContent = true;
+    final f = AiFixture()..malformedContent = true;
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -61,7 +60,7 @@ void main() {
   });
 
   test('a failed document extraction is listed and retried with its retained original', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -83,10 +82,10 @@ void main() {
     expect(w.attachments, hasLength(1));
   });
 
-  Future<(BudgetFixture, NoteWorkspace, WorkspaceAudioSource)> processedAudio({
+  Future<(AiFixture, NoteWorkspace, WorkspaceAudioSource)> processedAudio({
     Map<String, dynamic>? result,
   }) async {
-    final f = BudgetFixture()..modelResult = result;
+    final f = AiFixture()..modelResult = result;
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -109,7 +108,7 @@ void main() {
     expect(await File(note.sourcePath).readAsString(), '明天下午三点整理会议记录。');
     expect(await File(note.notePath).readAsString(), markdown);
     expect(await File(source.originalPath).readAsBytes(), wave());
-    expect(f.audioRequests, 1);
+    expect(f.audioRequests, hasLength(1));
     expect(f.modelRequests, hasLength(1));
     await f.reopen(0);
     final reopened = f.workspaces.first;
@@ -138,7 +137,7 @@ void main() {
   test(
     'duplicate recovery requests send once and never duplicate notes',
     () async {
-      final f = BudgetFixture()..modelStatuses.addAll([400]);
+      final f = AiFixture()..modelStatuses.addAll([400]);
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;

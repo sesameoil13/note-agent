@@ -116,7 +116,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
                 enabled: !_busy,
                 label: connection.state.hasKey ? '替换百炼 API Key' : '百炼 API Key',
                 actionLabel: connection.state.hasKey ? '替换百炼 API Key' : null,
-                helperText: '仅存入本机系统安全存储；连接检测不调用收费模型。',
+                helperText: '仅存入本机系统安全存储；连接检测不发送笔记内容。',
               ),
               const SizedBox(height: 16),
               Wrap(

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 import 'support/organize_now.dart';
 
 Map<String, dynamic> action(
@@ -64,7 +64,7 @@ void main() {
     expect(w.notes.single.kind, NoteKind.todo);
   });
   test('mixed content confirms a clear action while another uncertain action remains gated', () async {
-    final f = BudgetFixture()
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'review',
         'title': '混合行动',
@@ -140,7 +140,7 @@ void main() {
     await root.delete(recursive: true);
   });
   test('local removal and ordinary correction survive later reconciliation without recreating actions', () async {
-    final f = BudgetFixture()
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'todo',
         'title': '采购用品',
@@ -151,19 +151,18 @@ void main() {
     addTearDown(f.close);
     final w = f.workspaces.first;
     final n = await w.captureText(title: '采购', text: '我需要买电池和纸巾。');
-    final j = await w.organizeNow(n.id);
+    await w.organizeNow(n.id);
     final last = w.notes.single.actions.last;
     await w.resolveNoteActions(n.id, kind: NoteKind.todo, actions: [last]);
     expect(w.notes.single.actions.single.id, last.id);
     await w.resolveNoteActions(n.id, kind: NoteKind.ordinary, actions: []);
-    await w.reconcileTextProcessing(j.id);
     await f.reopen(0);
     expect(f.workspaces.first.notes.single.actions, isEmpty);
     expect(f.workspaces.first.notes.single.text, n.text);
     expect(f.modelRequests.length, 1);
   });
-  test('a local type correction during an in-flight paid result cannot be overwritten by that result', () async {
-    final f = BudgetFixture()
+  test('a local type correction during an in-flight result cannot be overwritten by that result', () async {
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'todo',
         'title': '购买电池',
@@ -192,7 +191,7 @@ void main() {
   test(
     'invalid action contracts retain the original and the capture shows 失败',
     () async {
-      final f = BudgetFixture();
+      final f = AiFixture();
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
@@ -230,7 +229,7 @@ void main() {
     },
   );
   test('clear action produces the todo template and retains the complete original across restart', () async {
-    final f = BudgetFixture()
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'todo',
         'title': '购买电池',
@@ -265,7 +264,7 @@ void main() {
     expect(f.modelRequests.length, 1);
   });
   test('quoted, hypothetical, negated and unclear-owner actions wait for a local decision independently of time', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     for (final reason in [
@@ -325,7 +324,7 @@ void main() {
   test(
     'a legacy review can be corrected to ordinary locally without resending',
     () async {
-      final f = BudgetFixture()
+      final f = AiFixture()
         ..modelResult = {
           'kind': 'review',
           'title': '保留观察',

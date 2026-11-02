@@ -10,7 +10,6 @@ import 'package:flutter/services.dart';
 
 import 'first_run.dart';
 part 'pairing.dart';
-part 'budget_connection.dart';
 part 'todo_connection.dart';
 part 'text_model.dart';
 part 'audio_model.dart';
@@ -235,7 +234,7 @@ class WorkspaceConnection {
       _state = const WorkspaceConnectionState(
         hasKey: true,
         connectionVerified: true,
-        message: '阿里云百炼连接成功。Key 已存入系统安全存储；检测未调用收费模型。',
+        message: '阿里云百炼连接成功。Key 已存入系统安全存储。',
       );
     } on ConnectionFailure catch (error) {
       _state = WorkspaceConnectionState(

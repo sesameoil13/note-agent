@@ -4,12 +4,12 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 import 'support/organize_now.dart';
 
 void main() {
   test('a retained Word table goes through the semantic pipeline without replacing its complete source', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -84,7 +84,7 @@ void main() {
     expect(f.requestsFor(note.id), hasLength(1));
   });
   test('mixed Word images stay disclosed while extracted text can form a todo and be corrected locally', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -148,7 +148,7 @@ void main() {
   test(
     'image-only, scanned and failed documents never send placeholder text',
     () async {
-      final f = BudgetFixture();
+      final f = AiFixture();
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
@@ -187,7 +187,7 @@ void main() {
     },
   );
   test('real PDF text and table reach the same pipeline with source pages and raw bytes retained', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -230,7 +230,7 @@ void main() {
     );
   });
   test('a capture can be re-extracted until it is sent, and the extracted text is what is sent', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;
@@ -261,7 +261,7 @@ void main() {
     );
   });
   test('an externally edited document body is never overwritten by an arriving model result', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     final w = f.workspaces.first;

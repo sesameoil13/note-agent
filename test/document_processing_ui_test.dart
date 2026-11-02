@@ -6,7 +6,7 @@ import 'package:note_agent/document_panel.dart';
 import 'package:note_agent/main.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 import 'support/async_settle.dart';
 
 class _LoopbackHttpOverrides extends HttpOverrides {}
@@ -15,7 +15,7 @@ void main() {
   testWidgets(
     'a document organized after extraction keeps its extracted version and original',
     (tester) async {
-      final f = BudgetFixture();
+      final f = AiFixture();
       final w = (await tester.runAsync(
         () => HttpOverrides.runWithHttpOverrides(() async {
           await f.start();
@@ -61,7 +61,7 @@ void main() {
     tester,
   ) async {
     await HttpOverrides.runWithHttpOverrides(() async {
-      final f = BudgetFixture();
+      final f = AiFixture();
       await tester.runAsync(() async {
         await f.start();
         await f.workspaces.first.importDocument(

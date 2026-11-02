@@ -12,136 +12,15 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           "SELECT * FROM text_jobs WHERE vault=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state IN ('deleted','purged'))",
           [vaultStorage.identity, vaultStorage.identity],
         )
-        .map((r) {
-          final p = (jsonDecode(r['payload'] as String) as Map)
-              .cast<String, dynamic>();
-          final receipts =
-              (p['receipts'] as Map?)?.values.whereType<Map>().toList() ??
-              <Map>[];
-          final costs = receipts
-              .map((receipt) => receipt['cnyMicros'])
-              .whereType<int>()
-              .toList();
-          final reply = p['reply'];
-          final usage = reply is Map ? reply['usage'] : null;
-          int? tokens(String key) =>
-              usage is Map && usage[key] is int && (usage[key] as int) >= 0
-              ? usage[key] as int
-              : null;
-          return WorkspaceTextJob(
+        .map(
+          (r) => WorkspaceTextJob(
             id: r['id'] as String,
             noteId: r['note_id'] as String,
-            status: TextProcessingStatus.values.byName(r['status'] as String),
+            status: TextProcessingStatus.read(r['status'] as String),
             message: r['error'] as String? ?? '',
-            canRetry:
-                p['result'] == null &&
-                (r['status'] == TextProcessingStatus.costPending.name ||
-                    (r['status'] == TextProcessingStatus.review.name &&
-                        p['validationError'] is String)),
-            estimatedCnyMicros: p['estimatedCnyMicros'] as int? ?? 0,
-            quoteDescription: _textQuoteDescription(p['quote']),
-            attemptCount: (p['attempts'] as List).length,
-            generationIds: List.unmodifiable(
-              receipts
-                  .map((receipt) => receipt['generationId'])
-                  .whereType<String>(),
-            ),
-            knownCostCnyMicros: costs.isEmpty
-                ? null
-                : costs.fold<int>(0, (a, b) => a + b),
-            inputTokens: tokens('prompt_tokens'),
-            outputTokens: tokens('completion_tokens'),
-          );
-        }),
+          ),
+        ),
   );
-
-  String _textQuoteDescription(dynamic value) {
-    if (value is! Map) return '尚未取得费率';
-    if (value['currency'] == 'CNY') {
-      String perMillion(Object? nano) => '¥${(nano as int) / 1000}/百万 token';
-      return '固定 ${value['model']} · 报价 ${value['id']} · 价格版本 ${value['rateVersion']}\n输入 ${perMillion(value['promptNanoCny'])}；输出 ${perMillion(value['completionNanoCny'])}\n每次预留另含 25% 余量。最多 1024 输出 token。';
-    }
-    // A quote saved before the switch to Bailian (ADR 0003).
-    return '固定 DeepSeek V4.1 Flash · 报价 ${value['id']} · 路由 ${value['provider']}\n输入 \$${(value['promptNano'] as int) / 1000}/百万 token；输出 \$${(value['completionNano'] as int) / 1000}/百万 token\n汇率日期 ${value['fxDate']}；冻结换算 ¥${(value['fxMicros'] as int) / 1000000}/USD（含 10% 汇率余量）；每次预留另含 25% 余量。最多 1024 输出 token。';
-  }
-
-  Future<void> _refreshTextBudget() async {
-    try {
-      _readTextBudget(await connection.requestSharedBudget('/v1/budget'));
-    } on ConnectionFailure catch (e) {
-      _budget = WorkspaceBudgetState(message: '${e.message} 本机保存仍可使用。');
-    }
-  }
-
-  void _readTextBudget(Map<String, dynamic> d) {
-    _budget = WorkspaceBudgetState(
-      monthLabel: d['month'] as String,
-      limitCnyMicros: d['limitCnyMicros'] as int,
-      spentCnyMicros: d['spentCnyMicros'] as int,
-      spentUsdNanos: d['spentUsdNanos'] as int,
-      reservedCnyMicros: d['reservedCnyMicros'] as int,
-      unknownCnyMicros: d['unknownCnyMicros'] as int,
-      connected: true,
-      paused:
-          d['disputed'] == true ||
-          (d['spentCnyMicros'] as int) + (d['reservedCnyMicros'] as int) >=
-              (d['limitCnyMicros'] as int),
-      message: d['disputed'] == true
-          ? '费用存在不一致，暂停新收费任务；本机保存仍可使用。'
-          : '三端共享账本；账户余额需在阿里云控制台查看。',
-    );
-  }
-
-  Future<void> _setTextBudget(int micros) async {
-    _readTextBudget(
-      await connection.requestSharedBudget(
-        '/v1/budget/settings',
-        body: {'limitCnyMicros': micros},
-      ),
-    );
-  }
-
-  Future<WorkspaceTextJob> _cancelText(String id) async {
-    final job = textJobs.firstWhere((j) => j.id == id);
-    if (![
-      TextProcessingStatus.prepared,
-      TextProcessingStatus.queued,
-      TextProcessingStatus.failed,
-    ].contains(job.status)) {
-      throw StateError('已发送任务可能计费，不能作为未发送取消。');
-    }
-    final payload = _textPayload(id);
-    final attempts = payload['attempts'] as List;
-    if (attempts.isNotEmpty) {
-      final reply = await connection.requestSharedBudget(
-        '/v1/budget/attempt/${attempts.last}/release',
-        body: {},
-      );
-      _readTextBudget((reply['budget'] as Map).cast<String, dynamic>());
-      if ((reply['attempt'] as Map)['state'] != 'released') {
-        await _saveText(
-          id,
-          TextProcessingStatus.costPending,
-          payload,
-          error: '任务已发送，费用预留保留，不能取消实际请求。',
-        );
-        return textJobs.firstWhere((j) => j.id == id);
-      }
-    }
-    if (attempts.isNotEmpty) {
-      payload['receipts'] = {
-        ...?payload['receipts'] as Map?,
-        attempts.last: {'settled': true, 'released': true},
-      };
-    }
-    await _saveText(
-      id,
-      TextProcessingStatus.cancelled,
-      payload,
-      error: '已取消未发送任务，原文保留。',
-    );
-    return textJobs.firstWhere((j) => j.id == id);
-  }
 
   Map<String, dynamic> _textPayload(String id) => jsonDecode(
     _database.select('SELECT payload FROM text_jobs WHERE id=?', [
@@ -216,9 +95,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           jsonEncode(payload),
           (pending
                   ? TextProcessingStatus.review
-                  : payload['settled'] == true
-                  ? TextProcessingStatus.completed
-                  : TextProcessingStatus.costPending)
+                  : TextProcessingStatus.completed)
               .name,
           pending ? '行动待确认，未启动提醒。' : null,
           id,
@@ -391,9 +268,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
       [
         (note.presentation.needsConfirmation
                 ? TextProcessingStatus.review
-                : payload['settled'] == true
-                ? TextProcessingStatus.completed
-                : TextProcessingStatus.costPending)
+                : TextProcessingStatus.completed)
             .name,
         jsonEncode(payload),
         id,
@@ -411,140 +286,7 @@ extension _WorkspaceTextProcessing on NoteWorkspace {
           payload['automatic'] == true) {
         // Interrupted before a result arrived: it waits to be sent again.
         await _saveText(job.id, TextProcessingStatus.waiting, payload);
-      } else if (job.status == TextProcessingStatus.sending) {
-        await _saveText(
-          job.id,
-          TextProcessingStatus.costPending,
-          payload,
-          error: '上次请求中断，可能已计费，预留保留；请先核对费用，不自动重发。',
-        );
       }
     }
-  }
-
-  Future<WorkspaceTextJob> _reconcileText(String id) async {
-    final payload = _textPayload(id);
-    final receipts =
-        (payload['receipts'] as Map?)?.cast<String, dynamic>() ??
-        <String, dynamic>{};
-    try {
-      final attempts = <String>{
-        ...(payload['attempts'] as List).cast<String>(),
-        if (payload['pendingReservation'] is String)
-          payload['pendingReservation'] as String,
-      };
-      for (final attempt in attempts) {
-        try {
-          final inspected = await connection.requestSharedBudget(
-            '/v1/budget/attempt/$attempt',
-          );
-          final row = (inspected['attempt'] as Map).cast<String, dynamic>();
-          _readTextBudget((inspected['budget'] as Map).cast<String, dynamic>());
-          if (row['state'] == 'reserved') {
-            final released = await connection.requestSharedBudget(
-              '/v1/budget/attempt/$attempt/release',
-              body: {},
-            );
-            _readTextBudget(
-              (released['budget'] as Map).cast<String, dynamic>(),
-            );
-            if ((released['attempt'] as Map)['state'] != 'released') {
-              throw const ConnectionFailure('发送状态已变化，费用预留保留。');
-            }
-            receipts[attempt] = {'released': true, 'settled': true};
-          } else if (row['state'] == 'released') {
-            receipts[attempt] = {'released': true, 'settled': true};
-          } else if (row['state'] == 'settled') {
-            // Also a charge the user confirmed from the console (no id).
-            receipts[attempt] = {
-              ...?receipts[attempt] as Map?,
-              'generationId': ?row['generation_id'] as String?,
-              'cnyMicros': row['actual_cny'],
-              'settled': true,
-            };
-          } else {
-            receipts.putIfAbsent(attempt, () => {'settled': false});
-          }
-        } on ConnectionFailure catch (e) {
-          if (e.code != 'attempt_missing') rethrow;
-          // A dispatch must first atomically change this persistent admission
-          // from reserved to sent. No attempt means no admitted dispatch.
-          receipts[attempt] = {'released': true, 'settled': true};
-        }
-      }
-      payload['receipts'] = receipts;
-      payload['attempts'] = attempts.toList();
-      payload.remove('pendingReservation');
-      if (receipts.isEmpty ||
-          receipts.values.every(
-            (value) => (value as Map)['released'] == true,
-          )) {
-        await _saveText(
-          id,
-          TextProcessingStatus.cancelled,
-          payload,
-          error: '共享账本已确认未发送，预留已释放；原文保留，可重新预估。',
-        );
-        await refreshBudget();
-        return textJobs.firstWhere((j) => j.id == id);
-      }
-      await _saveText(id, TextProcessingStatus.costPending, payload);
-      for (final entry in receipts.entries) {
-        final receipt = (entry.value as Map).cast<String, dynamic>();
-        // Released, or settled as the shared ledger confirmed above (also an
-        // attempt settled before the switch, with no Bailian receipt).
-        if (receipt['released'] == true || receipt['settled'] == true) continue;
-        // Bailian has no cost lookup by id (issue #34, Q9): only a receipt
-        // saved from the response can settle; otherwise the hold stays.
-        final saved = receipt['settle'];
-        if (saved is! Map) {
-          throw ConnectionFailure(
-            (payload['quote'] as Map?)?['currency'] == 'CNY'
-                ? '本次发送没有可核对的用量；请在阿里云百炼控制台核对，预留不会自动释放。'
-                : '这是切换前的 OpenRouter 请求，请在 OpenRouter 官网核对费用；预留不会自动释放。',
-          );
-        }
-        final settled = await connection.requestSharedBudget(
-          '/v1/budget/attempt/${entry.key}/settle',
-          body: saved.cast<String, dynamic>(),
-        );
-        _readTextBudget((settled['budget'] as Map).cast<String, dynamic>());
-        receipt['cnyMicros'] = (settled['attempt'] as Map)['actual_cny'];
-        receipt['settled'] = true;
-        receipts[entry.key] = receipt;
-        payload['receipts'] = receipts;
-        await _saveText(id, TextProcessingStatus.costPending, payload);
-      }
-      payload['settled'] =
-          receipts.values.every((v) => (v as Map)['settled'] == true) &&
-          receipts.length == (payload['attempts'] as List).length;
-      final noteId = textJobs.firstWhere((j) => j.id == id).noteId;
-      await _saveText(
-        id,
-        payload['validationError'] is String
-            ? TextProcessingStatus.review
-            : notes
-                  .firstWhere((n) => n.id == noteId)
-                  .presentation
-                  .needsConfirmation
-            ? TextProcessingStatus.review
-            : payload['settled'] == true && payload['applyPhase'] == 'applied'
-            ? TextProcessingStatus.completed
-            : TextProcessingStatus.costPending,
-        payload,
-      );
-    } on ConnectionFailure catch (e) {
-      await _saveText(
-        id,
-        TextProcessingStatus.costPending,
-        payload,
-        error: e.message,
-      );
-    }
-    if (_awaitsApply(payload)) {
-      await _applyText(id, payload);
-    }
-    await refreshBudget();
-    return textJobs.firstWhere((j) => j.id == id);
   }
 }
