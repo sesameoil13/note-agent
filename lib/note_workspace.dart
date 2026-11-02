@@ -933,6 +933,12 @@ class NoteWorkspace {
     database.execute(
       'CREATE TABLE IF NOT EXISTS organize_pause(vault TEXT PRIMARY KEY,kind TEXT NOT NULL)',
     );
+    if (!database
+        .select('PRAGMA table_info(organize_pause)')
+        .any((row) => row['name'] == 'tried_at')) {
+      // When the last request of a balance pause was refused.
+      database.execute('ALTER TABLE organize_pause ADD COLUMN tried_at TEXT');
+    }
     database.execute(
       'CREATE TABLE IF NOT EXISTS note_marks(vault TEXT NOT NULL,note_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',
     );

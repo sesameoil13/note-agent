@@ -269,9 +269,14 @@ class TextNetworkFailure implements Exception {
     this.message, {
     this.recoverable = false,
     this.code,
+    this.noReply = false,
   });
   final String message;
   final bool recoverable;
+
+  /// No reply came back (no network, a timeout, a dropped connection), as
+  /// opposed to Bailian answering with an error.
+  final bool noReply;
 
   /// `credentials` or `balance` when the account must be fixed first.
   final String? code;
@@ -332,14 +337,30 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
     } on TextNetworkFailure {
       rethrow;
     } on TimeoutException {
-      throw const TextNetworkFailure('模型请求超时，原文保留。', recoverable: true);
+      throw const TextNetworkFailure(
+        '模型请求超时，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } on HandshakeException {
-      throw const TextNetworkFailure('安全连接失败，原文保留。', recoverable: true);
+      throw const TextNetworkFailure(
+        '安全连接失败，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } on SocketException {
-      throw const TextNetworkFailure('网络中断，原文保留。', recoverable: true);
+      throw const TextNetworkFailure(
+        '网络中断，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } catch (_) {
       // E.g. the connection closed while the reply was arriving.
-      throw const TextNetworkFailure('模型响应中断，原文保留。', recoverable: true);
+      throw const TextNetworkFailure(
+        '模型响应中断，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } finally {
       client.close(force: true);
     }

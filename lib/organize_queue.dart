@@ -20,7 +20,10 @@ enum OrganizePause {
     '百炼拒绝了 Key，自动发送已暂停。请在“连接与设备”中重新连接阿里云百炼 Key，之后会自动继续。',
     '重新连接',
   ),
-  balance('阿里云账户余额不足，自动发送已暂停。请在阿里云控制台充值后点“继续发送”。', '继续发送');
+  balance(
+    '阿里云账户余额不足，自动发送已暂停。请在阿里云控制台充值后点“继续发送”；暂停期间每 30 分钟会自动再试一次。',
+    '继续发送',
+  );
 
   const OrganizePause(this.message, this.action);
   final String message;
@@ -31,6 +34,9 @@ enum OrganizePause {
 
 /// Why a job an older version left unfinished was not sent (#35).
 const _droppedOnUpgrade = '升级后不再发送旧版本未完成的任务';
+
+/// How often one capture is tried while the balance is empty (#39).
+const _balanceTryGap = Duration(minutes: 30);
 
 /// Gaps before the automatic retries of a temporary failure (#39).
 const _organizeRetryGaps = [
@@ -108,21 +114,37 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     }
     _keyConnectionsAtPause = connection.keyConnections;
     _database.execute(
-      'INSERT OR REPLACE INTO organize_pause(vault,kind) VALUES (?,?)',
-      [vaultStorage.identity, pause.name],
+      'INSERT OR REPLACE INTO organize_pause(vault,kind,tried_at) VALUES (?,?,?)',
+      [vaultStorage.identity, pause.name, _clock().toIso8601String()],
     );
+  }
+
+  /// Whether a balance pause's next try is due: [_balanceTryGap] after the
+  /// request that was refused last.
+  bool _balanceTryDue() {
+    final triedAt = DateTime.tryParse(
+      '${_database.select('SELECT tried_at FROM organize_pause WHERE vault=?', [vaultStorage.identity]).firstOrNull?['tried_at'] ?? ''}',
+    );
+    return triedAt == null || !_clock().isBefore(triedAt.add(_balanceTryGap));
   }
 
   /// Sends due captures oldest first, one at a time, including captures
   /// queued while the run is under way.
   Future<void> _sendWaiting() async {
-    if (_sendingPause() != null) {
+    var balanceTry = false;
+    if (_sendingPause() case final pause?) {
       // Connecting a key ends either pause. For a pause saved before this
       // workspace opened, any key connected since the app started counts,
       // even before this vault was opened; at worst one more request is
       // rejected and the pause returns.
-      if (connection.keyConnections <= (_keyConnectionsAtPause ?? 0)) return;
-      _setSendingPause(null);
+      if (connection.keyConnections > (_keyConnectionsAtPause ?? 0)) {
+        _setSendingPause(null);
+      } else if (pause == OrganizePause.balance && _balanceTryDue()) {
+        // The balance may have been topped up without 继续发送.
+        balanceTry = true;
+      } else {
+        return;
+      }
     }
     // Captures made before a key is connected keep waiting.
     if (!connection.state.hasKey) {
@@ -136,14 +158,17 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     // Closing waits for sending, not for the key check above: a secure
     // store that never answers must not keep the workspace open.
     if (_closing) return;
-    await _trackText(_sendDue());
+    await _trackText(_sendDue(balanceTry: balanceTry));
   }
 
-  Future<void> _sendDue() async {
+  /// With [balanceTry], only the oldest due capture is sent first: when it
+  /// gets a result the balance pause ends and the rest follow.
+  Future<void> _sendDue({bool balanceTry = false}) async {
     // Each capture is tried at most once per run; one still waiting after
     // its try (e.g. a document being extracted) waits for the next run.
     final tried = <String>{};
     while (!_closing) {
+      // Oldest due first; one waiting for its retry doesn't hold back others.
       final next = _database
           .select(
             "SELECT id,note_id,payload FROM text_jobs WHERE vault=? AND status=? AND note_id NOT IN (SELECT note_id FROM note_disposals WHERE vault=? AND state IN ('deleted','purged')) ORDER BY rowid",
@@ -154,18 +179,30 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
             ],
           )
           .where((row) => !tried.contains(row['id']))
+          .where((row) {
+            final retryAt = DateTime.tryParse(
+              '${jsonDecode(row['payload'] as String)['retryAt'] ?? ''}',
+            );
+            return retryAt == null || !_clock().isBefore(retryAt);
+          })
           .firstOrNull;
       if (next == null) return;
-      // Oldest first: later captures wait until its retry is due too.
-      final retryAt = DateTime.tryParse(
-        '${jsonDecode(next['payload'] as String)['retryAt'] ?? ''}',
-      );
-      if (retryAt != null && _clock().isBefore(retryAt)) return;
-      tried.add(next['id'] as String);
-      if (!await _sendOrganize(
-        next['id'] as String,
-        next['note_id'] as String,
-      )) {
+      final id = next['id'] as String;
+      tried.add(id);
+      if (balanceTry) {
+        // Counted from now, also if the app closes before the reply.
+        _database.execute(
+          'UPDATE organize_pause SET tried_at=? WHERE vault=?',
+          [_clock().toIso8601String(), vaultStorage.identity],
+        );
+        await _sendOrganize(id, next['note_id'] as String);
+        // Another 402 renews the pause; any other outcome keeps it too.
+        if (_textPayload(id)['result'] is! Map) return;
+        _setSendingPause(null);
+        balanceTry = false;
+        continue;
+      }
+      if (!await _sendOrganize(id, next['note_id'] as String)) {
         return;
       }
     }
@@ -298,7 +335,9 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
           payload,
           error: '${e.message}稍后自动重试（${retries + 1}/3）。',
         );
-        return false;
+        // With no reply (e.g. no network) later captures would fail the
+        // same way; after an error reply from Bailian they still go out.
+        return !e.noReply;
       }
       await _saveText(
         id,

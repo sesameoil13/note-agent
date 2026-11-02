@@ -102,7 +102,11 @@ extension WorkspaceAudioNetwork on WorkspaceConnection {
     } on ConnectionFailure catch (e) {
       throw TextNetworkFailure(e.message);
     } catch (_) {
-      throw const TextNetworkFailure('转写请求中断，原音保留。', recoverable: true);
+      throw const TextNetworkFailure(
+        '转写请求中断，原音保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } finally {
       client.close(force: true);
     }

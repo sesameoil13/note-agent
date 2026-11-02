@@ -124,7 +124,7 @@ void main() {
     expect(w.sendingPause, OrganizePause.balance);
     expect(w.sendingPause!.message, contains('充值'));
     expect(w.organizeStatus(note.id), OrganizeStatus.waiting);
-    await later(w, const Duration(hours: 3));
+    await later(w, const Duration(minutes: 29));
     expect(f.modelRequests, hasLength(1));
 
     await w.resumeSending();
@@ -138,6 +138,80 @@ void main() {
       (jsonDecode((request['messages'] as List).last['content'] as String)
               as Map)['text']
           as String;
+
+  test('while the balance is empty, the oldest capture is tried again every 30 minutes and a success sends the rest', () async {
+    f.modelStatuses.addAll([402, 402]);
+    await f.start(devices: 1);
+    final w = f.workspaces.first;
+    final first = await w.captureText(title: '先', text: '余额不足时先收集的。');
+    final second = await w.captureText(title: '后', text: '余额不足时后收集的。');
+
+    await w.sendWaitingNow();
+    expect(w.sendingPause, OrganizePause.balance);
+    expect(f.modelRequests, hasLength(1));
+
+    await later(w, const Duration(minutes: 29));
+    expect(f.modelRequests, hasLength(1));
+    await later(w, const Duration(minutes: 1));
+    // Still empty: the pause stays and the try is not counted as a retry.
+    expect(f.modelRequests, hasLength(2));
+    expect(w.sendingPause, OrganizePause.balance);
+    expect(w.organizeMessage(first.id), isNot(contains('/3')));
+
+    // Also after reopening, the next try waits for the full 30 minutes.
+    await f.reopen(0);
+    final reopened = f.workspaces.first;
+    await later(reopened, const Duration(minutes: 29));
+    expect(f.modelRequests, hasLength(2));
+    await later(reopened, const Duration(minutes: 1));
+
+    expect(f.modelRequests.map(sentText), [
+      '余额不足时先收集的。',
+      '余额不足时先收集的。',
+      '余额不足时先收集的。',
+      '余额不足时后收集的。',
+    ]);
+    expect(reopened.sendingPause, isNull);
+    expect(reopened.organizeStatus(first.id), OrganizeStatus.organized);
+    expect(reopened.organizeStatus(second.id), OrganizeStatus.organized);
+  });
+
+  test('a capture waiting to retry after a temporary failure does not hold back newer ones', () async {
+    f.modelStatuses.add(503);
+    await f.start(devices: 1);
+    final w = f.workspaces.first;
+    final first = await w.captureText(title: '先', text: '服务暂时不可用时先收集的。');
+    final second = await w.captureText(title: '后', text: '服务暂时不可用时后收集的。');
+
+    await w.sendWaitingNow();
+    expect(w.organizeStatus(first.id), OrganizeStatus.waiting);
+    expect(w.organizeStatus(second.id), OrganizeStatus.organized);
+
+    final third = await w.captureText(title: '再', text: '等待重试时又收集的。');
+    await later(w, const Duration(seconds: 30));
+    expect(w.organizeStatus(first.id), OrganizeStatus.waiting);
+    expect(w.organizeStatus(third.id), OrganizeStatus.organized);
+
+    await later(w, const Duration(seconds: 30));
+    expect(w.organizeStatus(first.id), OrganizeStatus.organized);
+    expect(f.modelRequests, hasLength(4));
+  });
+
+  test('with no network a round stops at the first capture instead of using up the retries of the others', () async {
+    await f.start(devices: 1);
+    final w = f.workspaces.first;
+    f.offline = true;
+    final first = await w.captureText(title: '先', text: '离线时先收集的。');
+    final second = await w.captureText(title: '后', text: '离线时后收集的。');
+
+    await w.sendWaitingNow();
+    expect(w.organizeMessage(first.id), contains('1/3'));
+    expect(w.organizeMessage(second.id), isEmpty);
+
+    f.offline = false;
+    await later(w, const Duration(minutes: 1));
+    expect(f.modelRequests.map(sentText), ['离线时先收集的。', '离线时后收集的。']);
+  });
 
   test('captures made with no network are sent oldest first once it returns', () async {
     await f.start(devices: 1);
@@ -246,7 +320,7 @@ void main() {
     expect(f.audioRequests, hasLength(2));
     expect(w.sendingPause, OrganizePause.balance);
 
-    await later(w, const Duration(hours: 1));
+    await later(w, const Duration(minutes: 29));
     expect(f.audioRequests, hasLength(2));
     await w.resumeSending();
 
