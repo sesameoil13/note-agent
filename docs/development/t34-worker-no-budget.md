@@ -19,9 +19,14 @@ pairing and to-do sync only.
 Deploy together with the Mac, Android and Windows release. From the repo, with the commit pushed:
 
 ```sh
+export NOTE_AGENT_D1_ID=<id of note-agent-pairing, from `wrangler d1 list`>
+export NOTE_AGENT_CLOUD_ENV=<script that selects the isolated Wrangler login>
 zsh services/pairing/tools/deploy-drop-budget.sh <commit> "../cloud-release-no-budget" --prepare-only
 zsh services/pairing/tools/deploy-drop-budget.sh <commit> "../cloud-release-no-budget"
 ```
+
+Both variables are required; the script stops with an error before doing anything if either is
+missing. `NOTE_AGENT_ENDPOINT` overrides the Worker URL.
 
 The script:
 

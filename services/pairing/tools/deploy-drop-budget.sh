@@ -2,8 +2,12 @@
 # T34.7 (issue #42, ADR 0004): deploy the Worker without the budget and drop the
 # budget tables (migration 0006). Free plan only; nothing is upgraded.
 #
-#   zsh services/pairing/tools/deploy-drop-budget.sh <commit> <release-dir> [--prepare-only]
+#   NOTE_AGENT_D1_ID=<d1-database-id> NOTE_AGENT_CLOUD_ENV=<wrangler-login-env.sh> \
+#     zsh services/pairing/tools/deploy-drop-budget.sh <commit> <release-dir> [--prepare-only]
 #
+# NOTE_AGENT_D1_ID is the id of the remote note-agent-pairing database;
+# NOTE_AGENT_CLOUD_ENV is a script sourced first to select the Wrangler login.
+# Both are required. NOTE_AGENT_ENDPOINT overrides the Worker URL.
 # <commit> is the pushed commit to deploy; <release-dir> is a new directory outside
 # the repo that receives an isolated copy of services/pairing and the backup.
 # The remote database is backed up first. Deploying and dropping the tables each
@@ -15,10 +19,10 @@ REV=${1:?usage: deploy-drop-budget.sh <commit> <release-dir> [--prepare-only]}
 OUT=${2:?usage: deploy-drop-budget.sh <commit> <release-dir> [--prepare-only]}
 MODE=${3:-}
 DB=note-agent-pairing
-DB_ID=${NOTE_AGENT_D1_ID:-82ddc41a-6ad4-4f54-b411-49f5d5a0a3d3}
+DB_ID=${NOTE_AGENT_D1_ID:?set NOTE_AGENT_D1_ID to the remote D1 database id (wrangler d1 list)}
 ENDPOINT=${NOTE_AGENT_ENDPOINT:-https://note-agent-pairing.sesameoil13.workers.dev}
-# The isolated Wrangler login the earlier releases used.
-CLOUD_ENV=${NOTE_AGENT_CLOUD_ENV:-$HOME/Documents/Codex/2026-10-14/new-chat/work/t12-cloud-env.sh}
+CLOUD_ENV=${NOTE_AGENT_CLOUD_ENV:?set NOTE_AGENT_CLOUD_ENV to the script that selects the Wrangler login}
+[[ -r "$CLOUD_ENV" ]] || { echo "NOTE_AGENT_CLOUD_ENV: $CLOUD_ENV is not readable."; exit 1; }
 REPO="${0:A:h}/../../.."
 mkdir -p "$OUT"
 OUT="${OUT:A}"
