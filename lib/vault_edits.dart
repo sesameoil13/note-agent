@@ -35,7 +35,9 @@ extension _VaultEdits on NoteWorkspace {
         continue;
       }
       try {
-        if (await _readNoteEdit(note)) changed.add(note.id);
+        if (await _readNoteEdit(note) | await _readArrivedSource(note)) {
+          changed.add(note.id);
+        }
       } on FileSystemException {
         /* Unavailable or concurrently changing; read again next time. */
       }
@@ -162,10 +164,7 @@ extension _VaultEdits on NoteWorkspace {
       head,
     );
     if (parsed == null) return null;
-    final pending = [
-      for (final line in head.split('\n'))
-        if (line.startsWith('- [')) line.trimRight().endsWith(_pendingMarker),
-    ];
+    final pending = _pendingLines(head);
     return (
       body: parsed.body,
       presentation: NotePresentation(
@@ -187,6 +186,40 @@ extension _VaultEdits on NoteWorkspace {
         ]),
       ),
     );
+  }
+
+  /// Which to-do lines of [head] carry the 待确认 marker, in order.
+  List<bool> _pendingLines(String head) => [
+    for (final line in head.split('\n'))
+      if (line.startsWith('- [')) line.trimRight().endsWith(_pendingMarker),
+  ];
+
+  /// The source text of a note that arrived from another device follows its
+  /// synced source file, e.g. a transcript corrected on the recording device.
+  Future<bool> _readArrivedSource(WorkspaceNote note) async {
+    final cached = note.presentation.original;
+    if (cached == null || _organizeJob(note.id) != null) return false;
+    final path = vaultStorage.relativePath(note.sourcePath);
+    if (!await vaultStorage.exists(path)) return false;
+    final text = await vaultStorage.readText(path);
+    if (text == cached) return false;
+    _database.execute(
+      'UPDATE notes SET presentation=? WHERE id=? AND vault=?',
+      [
+        jsonEncode(
+          NotePresentation(
+            kind: note.presentation.kind,
+            actions: note.presentation.actions,
+            original: text,
+            userDecided: note.presentation.userDecided,
+            timeInNote: note.presentation.timeInNote,
+          ).toJson(),
+        ),
+        note.id,
+        vaultStorage.identity,
+      ],
+    );
+    return true;
   }
 
   /// Another device organized a capture that arrived here before its 整理
@@ -284,13 +317,22 @@ extension _VaultEdits on NoteWorkspace {
     final ours = note.modifiedAt.millisecondsSinceEpoch ~/ 1000;
     final externalWins =
         theirs > ours || theirs == ours && head.compareTo(expected) > 0;
-    final parsed = _parseHead(note, head);
-    // Completion is independent of which content version wins.
+    final arrived = _organizeJob(note.id) == null;
+    var parsed = _parseHead(note, head);
     // Only a note that arrived from another device (none of its 整理 runs
-    // here) takes a change of kind from the vault.
-    if (parsed == null && externalWins && _organizeJob(note.id) == null) {
+    // here) takes a change of kind, or of an action's confirmation, from the
+    // vault: the capturing device decided it.
+    if (parsed == null && externalWins && arrived) {
       return _readArrivedOrganization(note, head, mtime);
     }
+    if (parsed != null && externalWins && arrived) {
+      final pending = _pendingLines(head);
+      parsed = _ParsedHead(parsed.body, [
+        for (var i = 0; i < parsed.actions.length; i++)
+          _withDecision(parsed.actions[i], pending[i]),
+      ]);
+    }
+    // Completion is independent of which content version wins.
     final ticked = parsed == null ? false : _applyTicks(note, parsed, mtime);
     if (!externalWins || parsed == null) {
       if (!externalWins) {
@@ -525,6 +567,19 @@ extension _VaultEdits on NoteWorkspace {
     return _ParsedHead(body, actions);
   }
 }
+
+WorkspaceAction _withDecision(WorkspaceAction a, bool pending) =>
+    pending == !a.actionConfirmed
+    ? a
+    : WorkspaceAction(
+        id: a.id,
+        text: a.text,
+        decision: pending ? ActionDecision.pending : ActionDecision.confirmed,
+        reason: pending ? 'unclearAction' : 'none',
+        timeExpression: a.timeExpression,
+        timeStatus: a.timeStatus,
+        completed: a.completed,
+      );
 
 class _ParsedHead {
   const _ParsedHead(this.body, this.actions);

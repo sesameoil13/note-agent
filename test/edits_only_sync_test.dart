@@ -223,4 +223,74 @@ void main() {
     await b.sendWaitingNow();
     expect(f.modelRequests, hasLength(1));
   });
+
+  test('a transcript corrected on the recording device reaches a paired device that already shows the note', () async {
+    final a = f.workspaces.first;
+    await a.importAudio(
+      original: await File('${f.root.path}/a.wav').writeAsBytes(wave()),
+      submissionId: 'synced-correction',
+    );
+    await a.sendWaitingNow();
+    await syncVault(0, 1);
+    final b = f.workspaces[1];
+    await b.readVaultEdits();
+    expect(b.notes.single.originalText, '明天下午两点整理会议记录。');
+
+    await a.correctTranscript(a.notes.single.id, '明天下午三点整理会议记录。');
+    await syncVault(0, 1);
+    await b.readVaultEdits();
+
+    expect(b.notes.single.originalText, '明天下午三点整理会议记录。');
+    await f.reopen(1);
+    expect(f.workspaces[1].notes.single.originalText, '明天下午三点整理会议记录。');
+    expect(f.modelRequests, hasLength(1));
+  });
+
+  test('an action confirmed on the capturing device is confirmed on a paired device that already shows it', () async {
+    f.modelResult = {
+      'manifestVersion': 3,
+      'kind': 'todo',
+      'title': '联系物业',
+      'body': '可能要联系物业。',
+      'actions': [
+        {
+          'text': '联系物业',
+          'reason': 'unclearAction',
+          'timeExpression': '',
+          'timeStatus': 'absent',
+        },
+      ],
+      'associations': [],
+      'newTopics': [],
+    };
+    final a = f.workspaces.first;
+    final captured = await a.captureText(title: '物业', text: '可能要联系物业。');
+    await a.sendWaitingNow();
+    await syncVault(0, 1);
+    final b = f.workspaces[1];
+    await b.readVaultEdits();
+    expect(b.notes.single.actions.single.actionConfirmed, isFalse);
+
+    final pending = a.notes.single.actions.single;
+    f.now = f.now.add(const Duration(minutes: 2));
+    await a.resolveNoteActions(
+      captured.id,
+      kind: NoteKind.todo,
+      actions: [
+        WorkspaceAction(
+          id: pending.id,
+          text: pending.text,
+          decision: ActionDecision.confirmed,
+          reason: 'none',
+        ),
+      ],
+    );
+    await syncVault(0, 1);
+    expect(await b.readVaultEdits(), [captured.id]);
+
+    final action = b.notes.single.actions.single;
+    expect(action.id, pending.id);
+    expect(action.actionConfirmed, isTrue);
+    expect(f.modelRequests, hasLength(1));
+  });
 }
