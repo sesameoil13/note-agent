@@ -51,7 +51,6 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
           'automatic': true,
           'original': ?original,
           'audio': ?audio,
-          'attempts': <dynamic>[],
         }),
       ],
     );
@@ -64,6 +63,8 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
     final job = _organizeJob(noteId);
     if (job == null) return null;
     final payload = _textPayload(job.id);
+    // The organizing step of a recording job saved by a version before
+    // automatic 整理 (#35); its recording shows its own status.
     if (payload['audioPipeline'] is String) return null;
     // A result was received: the capture is never sent again, even when
     // a later edit kept it from being written (see the job's message).
@@ -227,10 +228,7 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
               .toList(),
         );
       }
-      payload
-        ..remove('reply')
-        ..remove('validationError')
-        ..remove('failureKind');
+      payload.remove('reply');
       await _saveText(id, TextProcessingStatus.sending, payload);
       final reply = await connection.sendText(
         (payload['request'] as Map).cast<String, dynamic>(),
@@ -259,8 +257,6 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
         await _saveText(id, TextProcessingStatus.waiting, payload);
         return false;
       }
-      payload['validationError'] = e.message;
-      payload['failureKind'] = e.code ?? 'invalidResult';
       await _saveText(
         id,
         TextProcessingStatus.failed,
@@ -295,8 +291,6 @@ extension _WorkspaceOrganizeQueue on NoteWorkspace {
         );
         return false;
       }
-      payload['failureKind'] =
-          e.code ?? (e.recoverable ? 'recoverable' : 'outcomeUnknown');
       await _saveText(
         id,
         TextProcessingStatus.failed,

@@ -41,8 +41,8 @@ extension _WorkspaceProcessingRecovery on NoteWorkspace {
         notes.where((n) => n.id == noteId).firstOrNull?.title ?? fallback;
     for (final job in textJobs) {
       final p = _textPayload(job.id);
-      if (p['audioPipeline'] is String) continue;
-      // Only automatic 整理 is retried; an old estimate/confirm job never is.
+      // Only automatic 整理 is retried; an old estimate/confirm job (or the
+      // organizing step of an old recording job) never is.
       if (job.status != TextProcessingStatus.failed ||
           p['automatic'] != true) {
         continue;
