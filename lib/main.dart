@@ -114,6 +114,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   final _search = TextEditingController();
   final _editTitle = TextEditingController();
   String? _editingNoteId;
+
+  /// The note title [_editTitle] was last filled from, so a rename by 整理
+  /// replaces it only while the user hasn't typed a different title.
+  String? _editTitleSource;
   NoteWorkspace? _workspace;
   String? _selectedId;
   String? _error;
@@ -586,7 +590,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         note.id,
         title: _editTitle.text,
       );
-      if (mounted) setState(() => _editTitle.text = renamed.title);
+      if (mounted) {
+        setState(() => _editTitle.text = _editTitleSource = renamed.title);
+      }
     } catch (error) {
       if (mounted) setState(() => _error = _errorMessage(error));
     } finally {
@@ -1473,9 +1479,11 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     final daily = _workspace!.dailyNotes;
     if (selected == null && daily.isEmpty) return _composer();
     final note = selected ?? daily.first;
-    if (_editingNoteId != note.id) {
+    if (_editingNoteId != note.id ||
+        (note.title != _editTitleSource &&
+            _editTitle.text == _editTitleSource)) {
       _editingNoteId = note.id;
-      _editTitle.text = note.title;
+      _editTitle.text = _editTitleSource = note.title;
     }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
