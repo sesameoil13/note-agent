@@ -260,9 +260,6 @@ extension _WorkspaceActions on NoteWorkspace {
         final payload =
             jsonDecode(row['payload'] as String) as Map<String, dynamic>;
         if (payload['result'] is! Map) continue;
-        // An unapplied re-organization preview stays a preview; the newer
-        // user decision makes it stale instead of pretending it was applied.
-        if (['preview', 'discarded'].contains(payload['applyPhase'])) continue;
         payload['applyPhase'] = 'applied';
         final pending = _presentation(jsonEncode(plan['presentation']))
             .needsConfirmation;
@@ -272,9 +269,7 @@ extension _WorkspaceActions on NoteWorkspace {
             jsonEncode(payload),
             (pending
                     ? TextProcessingStatus.review
-                    : payload['settled'] == true
-                    ? TextProcessingStatus.completed
-                    : TextProcessingStatus.costPending)
+                    : TextProcessingStatus.completed)
                 .name,
             pending ? '行动待确认，未启动提醒。' : null,
             row['id'],
@@ -314,12 +309,13 @@ String _actionMarkdown(String value) => value
 String _summaryMarkdown(String value) =>
     value.split('\n').map(_actionMarkdown).join('\n');
 
+/// Actions are numbered `<note id>-action-<n>`, the identities a paired
+/// device gives them when the organized note arrives there by Sync.
 NotePresentation _resultPresentation(
   Map<String, dynamic> result,
   String noteId,
-  String original, {
-  String? actionPrefix,
-}) {
+  String original,
+) {
   final actions = (result['actions'] as List?) ?? [];
   return NotePresentation(
     kind: actions.isEmpty ? NoteKind.ordinary : NoteKind.todo,
@@ -327,9 +323,7 @@ NotePresentation _resultPresentation(
     actions: List.unmodifiable([
       for (var i = 0; i < actions.length; i++)
         WorkspaceAction(
-          id: actionPrefix == null
-              ? '$noteId-action-$i'
-              : '$noteId-$actionPrefix-action-$i',
+          id: '$noteId-action-$i',
           text: actions[i]['text'] as String,
           decision: actions[i]['reason'] == 'none'
               ? ActionDecision.confirmed

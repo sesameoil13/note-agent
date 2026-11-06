@@ -6,7 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 import 'package:note_agent/setup_screen.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 
 import 'package:note_agent/connection.dart';
 
@@ -30,7 +30,7 @@ void main() {
       return NoteWorkspace.open(
         localDirectory: Directory('${root.path}/local'),
         vaultDirectory: await Directory('${root.path}/新库').create(),
-        connection: WorkspaceConnection(secureStore: BudgetMemoryStore()),
+        connection: WorkspaceConnection(secureStore: AiMemoryStore()),
       );
     }))!;
     addTearDown(

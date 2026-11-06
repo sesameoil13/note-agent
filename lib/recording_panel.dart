@@ -105,7 +105,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
   String get _audioSignature => widget.workspace.audioSources
       .map(
         (s) =>
-            '${s.id}:${s.processingStatus}:${s.stage}:${s.processingReason}:${s.publicationStatus}',
+            '${s.id}:${s.processingStatus}:${s.processingReason}:${s.publicationStatus}:${widget.workspace.organizeStatus(s.outputNoteId)}',
       )
       .join('|');
 
@@ -127,19 +127,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
     } finally {
       if (selected != null) await _platform.releaseSourceFile(selected);
     }
-    _startProcessing();
   });
-
-  void _startProcessing([String? sourceId]) {
-    final work = sourceId == null
-        ? widget.workspace.resumePendingAudioProcessing()
-        : widget.workspace.retryAudioProcessing(sourceId);
-    unawaited(
-      work.catchError((Object error) {
-        if (mounted) setState(() => _error = _message(error));
-      }),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -164,7 +152,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
             ),
             const SizedBox(height: 8),
             const Text(
-              '离线也可保存。保留原音频，尚未转写。',
+              '离线也可保存。保留原音频，联网后自动转写并整理。',
               style: TextStyle(color: Color(0xFF767C82), height: 1.5),
             ),
             const SizedBox(height: 24),
@@ -280,15 +268,14 @@ class _RecordingPanelState extends State<RecordingPanel> {
                     ),
                     const SizedBox(height: 16),
                     const Text(
-                      '支持 15 秒至 10 分钟；达到 10 分钟自动结束保存。',
+                      '支持 15 秒至 5 分钟；达到 5 分钟自动结束保存。',
                       style: TextStyle(color: Color(0xFF767C82), fontSize: 12),
                     ),
                     if (Platform.isWindows)
                       const Padding(
                         padding: EdgeInsets.only(top: 8),
                         child: Text(
-                          'Windows 录音约 0.7 MB/分钟；超过约 6 分 50 秒的原音频超出'
-                          '笔记库附件 5 MB 上限，只保存在本机。关闭窗口会结束并保存录音。',
+                          '关闭窗口会结束并保存录音。',
                           style: TextStyle(
                             color: Color(0xFF767C82),
                             fontSize: 12,
@@ -347,45 +334,82 @@ class _RecordingPanelState extends State<RecordingPanel> {
     );
   }
 
-  Widget _processing(WorkspaceAudioSource source) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        switch (source.processingStatus) {
-          AudioProcessingStatus.pending => '待处理',
-          AudioProcessingStatus.processing =>
-            source.stage == 'transcribe'
-                ? '处理中 · 转写'
-                : source.stage == 'organize'
-                ? '处理中 · 整理'
-                : '处理中 · 写入笔记',
-          AudioProcessingStatus.failed => '失败',
-          AudioProcessingStatus.completed => '处理完成',
-        },
-        style: TextStyle(
-          color: source.processingStatus == AudioProcessingStatus.failed
-              ? const Color(0xFFFF4A18)
-              : const Color(0xFF767C82),
-        ),
-      ),
-      if (source.processingReason != null)
-        SelectableText(
-          source.processingReason!,
-          style: const TextStyle(fontSize: 12),
-        ),
-      if (source.nextAttemptAt != null)
+  Widget _processing(WorkspaceAudioSource source) {
+    final status = widget.workspace.organizeStatus(source.outputNoteId);
+    // Until its check succeeds, the check's result and retry are shown.
+    return status == null || source.metadata == null
+        ? _checking(source)
+        : _organizing(source, status);
+  }
+
+  /// Automatic 整理 (ADR 0004): transcribed, then organized, by itself.
+  Widget _organizing(WorkspaceAudioSource source, OrganizeStatus status) {
+    final message = widget.workspace.organizeMessage(source.outputNoteId);
+    final failure = widget.workspace.processingFailures
+        .where(
+          (f) =>
+              f.source == ProcessingFailureSource.text &&
+              f.noteId == source.outputNoteId,
+        )
+        .firstOrNull;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         Text(
-          '稍后重试：${formatNoteTime(source.nextAttemptAt!)} · 自动重试 ${source.automaticRetries}/3',
-          style: const TextStyle(fontSize: 12),
+          '整理：${status.label}',
+          style: TextStyle(
+            color: status == OrganizeStatus.failed
+                ? const Color(0xFFFF4A18)
+                : const Color(0xFF767C82),
+          ),
         ),
-      if (source.processingStatus == AudioProcessingStatus.failed &&
-          source.canRetryProcessing)
-        TextButton(
-          onPressed: _busy ? null : () => _startProcessing(source.id),
-          child: const Text('重试处理'),
+        if (message.isNotEmpty)
+          SelectableText(message, style: const TextStyle(fontSize: 12)),
+        if (failure != null)
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () => _act(
+                    () => widget.workspace.recoverProcessingFailure(failure.id),
+                  ),
+            child: const Text('重试'),
+          ),
+      ],
+    );
+  }
+
+  /// Audio not yet checked, refused at its check, or kept from before 整理.
+  /// Transcription and 整理 show as the 整理 status instead.
+  Widget _checking(WorkspaceAudioSource source) {
+    final failed = source.processingStatus == AudioProcessingStatus.failed;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          failed
+              ? '失败'
+              : source.metadata == null
+              ? '检查中'
+              : '升级前收集，未自动整理',
+          style: TextStyle(
+            color: failed ? const Color(0xFFFF4A18) : const Color(0xFF767C82),
+          ),
         ),
-    ],
-  );
+        if (failed && source.processingReason != null)
+          SelectableText(
+            source.processingReason!,
+            style: const TextStyle(fontSize: 12),
+          ),
+        if (failed && source.canRetryCheck)
+          TextButton(
+            onPressed: _busy
+                ? null
+                : () => _act(() => widget.workspace.retryAudioCheck(source.id)),
+            child: const Text('重新检查'),
+          ),
+      ],
+    );
+  }
 
   Widget _importedSource(WorkspaceAudioSource source) {
     final metadata = source.metadata;
@@ -531,7 +555,7 @@ class _RecordingPanelState extends State<RecordingPanel> {
           Text(switch (recording.status) {
             RecordingStatus.capturing => '录制中 · 原音频尚未完成',
             RecordingStatus.savePending => '原音频已保留 · 待写入笔记库',
-            RecordingStatus.localSaved => '本机原音频已保存 · 尚未转写',
+            RecordingStatus.localSaved => '本机原音频已保存',
             RecordingStatus.exportFailed => '本机原音频已保留 · 笔记库写入未确认',
             RecordingStatus.interrupted => '录音意外中断 · 请回放核对',
             RecordingStatus.failed => '未能开始录音',

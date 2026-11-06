@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'build_info.dart';
 import 'connection.dart';
 import 'connection_screen.dart';
-import 'budget_panel.dart';
 import 'note_workspace.dart';
 import 'workspace_platform.dart';
 
@@ -132,7 +131,6 @@ class _SetupScreenState extends State<SetupScreen> {
   Widget build(BuildContext context) {
     final workspace = widget.workspace;
     final state = workspace?.setup;
-    final budget = workspace?.budget;
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
       body: Center(
@@ -287,34 +285,6 @@ class _SetupScreenState extends State<SetupScreen> {
                   '我已在 Obsidian 完成切换，并核对新库及保留的旧库副本',
                   enabled: state.remoteSlotConsentAt != null,
                 ),
-                const SizedBox(height: 24),
-                const Text(
-                  '5 / 预付与月消耗',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-                ),
-                const Text(
-                  '账户余额：未知，请在阿里云控制台（费用与成本）查看。App 的 Key 不能读取账户余额。充值前核对实际金额、费用，并保持自动充值关闭。App 不自动充值。',
-                ),
-                Text(
-                  budget!.connected
-                      ? '本月预算：¥${(budget.limitCnyMicros / 1000000).toStringAsFixed(2)} · 保守折算消耗：¥${(budget.spentCnyMicros / 1000000).toStringAsFixed(2)}'
-                      : '共享月上限 尚未核对（政策最多 30 元） · 本月实际消耗 未知',
-                ),
-                Text(budget.message),
-                OutlinedButton(
-                  onPressed: _busy
-                      ? null
-                      : () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => BudgetPanel(workspace: workspace),
-                            ),
-                          );
-                          if (mounted) setState(() {});
-                        },
-                  child: const Text('打开 AI 与共享预算'),
-                ),
-                const Text('预付款以美元计价，可跨月使用；人民币月消耗按独立预算控制，预付有余额不代表本月可继续使用。'),
                 const SizedBox(height: 24),
                 TextButton(
                   onPressed: _busy

@@ -106,26 +106,6 @@ Map<String, dynamic> _associationArraySchema(String identity, int maximum) => {
 class TextModelReply {
   const TextModelReply(this.data);
   final Map<String, dynamic> data;
-  String? get generationId =>
-      data['id'] is String ? data['id'] as String : null;
-
-  /// The receipt the Worker settles from: the response id and its token
-  /// usage. Null when either is missing, so the hold stays unconfirmed.
-  Map<String, dynamic>? get settleBody {
-    final id = generationId, usage = data['usage'];
-    if (id == null || !RegExp(r'^[a-zA-Z0-9_-]{8,80}$').hasMatch(id)) {
-      return null;
-    }
-    if (usage is! Map) return null;
-    final input = usage['prompt_tokens'], output = usage['completion_tokens'];
-    if (input is! int || output is! int || input < 0 || output < 0) {
-      return null;
-    }
-    return {
-      'responseId': id,
-      'usage': {'promptTokens': input, 'completionTokens': output},
-    };
-  }
 
   Map<String, dynamic> validated(
     String sourceId, {
@@ -140,7 +120,7 @@ class TextModelReply {
         choices.length != 1 ||
         choices.first is! Map ||
         choices.first['finish_reason'] != 'stop') {
-      throw const ConnectionFailure('模型结果不完整，原文已保留，费用仍按实际记录。');
+      throw const ConnectionFailure('模型结果不完整，原文已保留。');
     }
     final message = choices.first['message'];
     final content = message is Map ? message['content'] : null;
@@ -148,7 +128,7 @@ class TextModelReply {
     try {
       result = content is String ? jsonDecode(content) : null;
     } catch (_) {
-      throw const ConnectionFailure('模型结果格式无法核对，原文保留，费用按实际记录。');
+      throw const ConnectionFailure('模型结果格式无法核对，原文保留。');
     }
     final v3 = result is Map && result['manifestVersion'] == 3;
     final keys = v3
@@ -280,32 +260,37 @@ class TextModelReply {
   }
 }
 
+/// Timeouts, rate limits and Bailian server errors pass by themselves.
+bool _temporaryStatus(int status) =>
+    [408, 429, 500, 502, 503, 504].contains(status);
+
 class TextNetworkFailure implements Exception {
   const TextNetworkFailure(
     this.message, {
     this.recoverable = false,
-    this.generationId,
     this.code,
+    this.noReply = false,
   });
   final String message;
   final bool recoverable;
 
+  /// No reply came back (no network, a timeout, a dropped connection), as
+  /// opposed to Bailian answering with an error.
+  final bool noReply;
+
   /// `credentials` or `balance` when the account must be fixed first.
   final String? code;
-  final String? generationId;
 }
 
 extension WorkspaceTextNetwork on WorkspaceConnection {
-  Future<TextModelReply> sendReservedText(
-    String attemptId,
-    Map<String, dynamic> payload,
-  ) async {
+  /// Sends [payload] straight to Bailian with this device's key; nothing
+  /// reaches the Worker (ADR 0004).
+  Future<TextModelReply> sendText(Map<String, dynamic> payload) async {
     await _ensureLoaded();
     final key = _aiKey;
     if (key == null) {
       throw const ConnectionFailure('请先在 App 连接阿里云百炼。', code: 'credentials');
     }
-    await requestSharedBudget('/v1/budget/attempt/$attemptId/send', body: {});
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
     try {
@@ -334,38 +319,48 @@ extension WorkspaceTextNetwork on WorkspaceConnection {
       }
       if (response.statusCode == 402) {
         throw const TextNetworkFailure(
-          '阿里云账户余额不足，请在控制台核对；App 不自动充值。',
+          '阿里云账户余额不足，请在阿里云控制台充值。',
           code: 'balance',
         );
       }
       if (response.statusCode != 200) {
         throw TextNetworkFailure(
-          '模型服务暂时不可用，原文与费用预留保留。',
-          recoverable: [
-            408,
-            429,
-            500,
-            502,
-            503,
-            504,
-          ].contains(response.statusCode),
+          '模型服务暂时不可用，原文保留。',
+          recoverable: _temporaryStatus(response.statusCode),
         );
       }
       final decoded = jsonDecode(utf8.decode(bytes));
       if (decoded is! Map<String, dynamic>) {
-        throw const TextNetworkFailure('模型响应格式异常，费用待核对。');
+        throw const TextNetworkFailure('模型响应格式异常，原文保留。');
       }
       return TextModelReply(decoded);
     } on TextNetworkFailure {
       rethrow;
     } on TimeoutException {
-      throw const TextNetworkFailure('模型请求超时，可能已计费，预留未释放。', recoverable: true);
+      throw const TextNetworkFailure(
+        '模型请求超时，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } on HandshakeException {
-      throw const TextNetworkFailure('安全连接失败，原文与费用预留保留。', recoverable: true);
+      throw const TextNetworkFailure(
+        '安全连接失败，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } on SocketException {
-      throw const TextNetworkFailure('网络中断，可能已计费，预留未释放。', recoverable: true);
+      throw const TextNetworkFailure(
+        '网络中断，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } catch (_) {
-      throw const TextNetworkFailure('模型响应未能确认，费用预留保留。');
+      // E.g. the connection closed while the reply was arriving.
+      throw const TextNetworkFailure(
+        '模型响应中断，原文保留。',
+        recoverable: true,
+        noReply: true,
+      );
     } finally {
       client.close(force: true);
     }

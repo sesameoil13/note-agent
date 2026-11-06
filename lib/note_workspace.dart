@@ -16,8 +16,8 @@ import 'backup_check.dart';
 export 'workspace_setup.dart' hide WorkspaceSetup;
 export 'backup_check.dart' hide compareVaultBackup;
 import 'connection.dart';
-import 'cloud_budget.dart';
-export 'cloud_budget.dart';
+import 'text_jobs.dart';
+export 'text_jobs.dart';
 import 'attachments.dart';
 import 'note_links.dart';
 import 'todo_merge.dart';
@@ -27,8 +27,7 @@ import 'sync_policy.dart';
 import 'recordings.dart';
 import 'audio_queue.dart';
 import 'audio_split.dart';
-export 'audio_queue.dart'
-    hide WorkspaceAudioQueue, AudioQueueCommit, AudioNoteMaterializer;
+export 'audio_queue.dart' hide WorkspaceAudioQueue;
 import 'document_extraction.dart';
 import 'pdf_extractor.dart';
 import 'word_extractor.dart';
@@ -39,6 +38,7 @@ export 'vault_storage.dart';
 export 'note_files.dart' show NoteFilePublisher, AtomicNoteFilePublisher;
 
 part 'text_processing.dart';
+part 'organize_queue.dart';
 part 'audio_processing.dart';
 part 'note_actions.dart';
 part 'note_reminders.dart';
@@ -48,7 +48,7 @@ part 'todo_sync.dart';
 part 'recycle_bin.dart';
 part 'vault_edits.dart';
 part 'processing_recovery.dart';
-part 'reorganization.dart';
+part 'transcript_correction.dart';
 
 /// The `action_states` / reminder-plan key of one action of one note. Note
 /// ids never contain ':', so the first ':' separates the two.
@@ -81,7 +81,7 @@ enum NoteSyncStatus { notPublished, unverified, attachmentBlocked }
 enum TaskStatusSync { notConnected, pending, offline, synced }
 
 /// Whether the retained input is ready for the shared, explicitly confirmed
-/// text-model pipeline. No quote, reservation or model call happens here.
+/// text-model pipeline. No model call happens here.
 class ProcessingReadiness {
   const ProcessingReadiness(this.canPrepare, this.message);
   final bool canPrepare;
@@ -419,23 +419,40 @@ class NoteWorkspace {
     }
   }
 
-  WorkspaceBudgetState _budget = const WorkspaceBudgetState();
-  WorkspaceBudgetState get budget => _budget;
-  Future<void> refreshBudget() => _refreshTextBudget();
-  Future<void> setMonthlyBudgetLimit(int micros) => _setTextBudget(micros);
-  final Map<String, Future<WorkspaceTextJob>> _preparingText = {};
-  Future<WorkspaceTextJob> prepareTextProcessing(String noteId) {
-    if (_closing) return Future.error(StateError('工作区正在关闭。'));
-    return _preparingText.putIfAbsent(
-      noteId,
-      () => _trackText(_prepareText(noteId)).whenComplete(() {
-        _preparingText.remove(noteId);
-      }),
+  Future<void>? _sendingWaiting;
+
+  /// Sends the captures waiting for 整理, oldest first. The App calls this
+  /// after each capture, at launch and on a timer; a call made while one is
+  /// running joins it.
+  Future<void> sendWaitingNow() {
+    if (_closing) return Future.value();
+    return _sendingWaiting ??= _sendWaiting().whenComplete(
+      () => _sendingWaiting = null,
     );
   }
 
-  Future<WorkspaceTextJob> cancelTextProcessing(String id) =>
-      _trackText(_cancelText(id));
+  /// Why all sending is paused, or null when it isn't (#39).
+  OrganizePause? get sendingPause => _sendingPause();
+
+  /// The next try after a top-up: ends a balance pause and sends what is
+  /// waiting. A rejected key's pause ends only when a key is connected.
+  Future<void> resumeSending() {
+    if (_sendingPause() == OrganizePause.balance) _setSendingPause(null);
+    return sendWaitingNow();
+  }
+
+  /// The key connections seen when the current key pause began.
+  int? _keyConnectionsAtPause;
+
+  /// Captures that got as far as being sent (a balance try counts only those).
+  int _organizeSendsStarted = 0;
+
+  /// Null for a note this device did not capture, or one never organized.
+  OrganizeStatus? organizeStatus(String noteId) => _organizeStatus(noteId);
+
+  /// Why a capture failed, or why its result was not written; empty if none.
+  String organizeMessage(String noteId) => _organizeJob(noteId)?.message ?? '';
+
   List<WorkspaceTextJob> get textJobs => _textJobs();
   ProcessingReadiness textProcessingReadiness(String noteId) {
     final note = notes.firstWhere((n) => n.id == noteId);
@@ -462,7 +479,7 @@ class NoteWorkspace {
         result.markdown.trim().isEmpty) {
       return const ProcessingReadiness(
         false,
-        '没有可整理的提取文字。扫描页与图片尚未识别，原件保留；不会发送占位文字或预留费用。',
+        '没有可整理的提取文字。扫描页与图片尚未识别，原件保留；不会发送占位文字。',
       );
     }
     return ProcessingReadiness(
@@ -483,8 +500,7 @@ class NoteWorkspace {
     ),
   );
 
-  /// Explicit local user decision. This never requests a model or changes a
-  /// paid attempt, receipt or unknown shared-budget hold.
+  /// Explicit local user decision. This never requests a model.
   Future<WorkspaceNote> resolveNoteActions(
     String noteId, {
     required NoteKind kind,
@@ -495,16 +511,27 @@ class NoteWorkspace {
   );
   Future<void> retryNoteActionSave(String noteId) =>
       _mutate(() => _finishActionChange(noteId));
-  Future<WorkspaceTextJob> reconcileTextProcessing(String id) =>
-      _trackText(_reconcileText(id));
   final Map<String, Future<WorkspaceTextJob>> _processingText = {};
   final Set<Future<void>> _textOperations = {};
 
-  Future<WorkspaceTextJob> processTextNote(String noteId) =>
-      _runTextAction(noteId, () => _processText(noteId));
+  /// Sends a failed capture again (重试).
   Future<WorkspaceTextJob> retryTextProcessing(String id) {
     final job = textJobs.firstWhere((j) => j.id == id);
-    return _runTextAction(job.noteId, () => _retryText(id));
+    if (job.status != TextProcessingStatus.failed ||
+        _textPayload(id)['automatic'] != true) {
+      return Future.error(StateError('只有整理失败的收集可以重试。'));
+    }
+    return _runTextAction(job.noteId, () async {
+      // A new round: one send plus up to 3 automatic retries.
+      final payload = _textPayload(id)
+        ..remove('autoRetries')
+        ..remove('retryAt');
+      await _saveText(id, TextProcessingStatus.waiting, payload);
+      // Sent by the single queue run, never alongside it; a run under way
+      // picks it up before it ends.
+      await sendWaitingNow();
+      return textJobs.firstWhere((j) => j.id == id);
+    });
   }
 
   Future<WorkspaceTextJob> _runTextAction(
@@ -532,26 +559,12 @@ class NoteWorkspace {
   }
 
   /// Failed audio, document and text processing that can be recovered in the
-  /// App. Items needing only cost reconciliation of an applied result stay in
-  /// the budget panel instead.
+  /// App.
   List<WorkspaceProcessingFailure> get processingFailures =>
       _processingFailures();
 
   /// Performs the next safe step for [id]. [original] is only used to choose
   /// a document again when its original was never completely retained.
-  /// Requests of a job whose cost is still unknown. [key] is `text:<job id>`
-  /// or `audio:<source id>`, the same form as a processing failure's id.
-  Future<List<UnconfirmedCharge>> unconfirmedCharges(String key) =>
-      _unconfirmedCharges(key);
-
-  /// Records the charge the user checked in the Bailian console for one of
-  /// [unconfirmedCharges], settling its hold; zero when it was not billed.
-  Future<void> recordConfirmedCharge(
-    String key,
-    String attemptId,
-    int cnyMicros,
-  ) => _trackText(_recordConfirmedCharge(key, attemptId, cnyMicros));
-
   Future<void> recoverProcessingFailure(String id, {File? original}) =>
       _recoverFailure(id, original);
 
@@ -560,52 +573,6 @@ class NoteWorkspace {
   /// a transcript changed elsewhere is never overwritten.
   Future<WorkspaceNote> correctTranscript(String noteId, String text) =>
       _mutate(() => _correctTranscript(noteId, text));
-
-  /// Estimates and reserves a re-organization of [noteId] from its current
-  /// complete source (for audio: the possibly corrected transcript). No model
-  /// is called until [previewReorganization].
-  Future<WorkspaceTextJob> prepareReorganization(String noteId) async {
-    final job = await _mutate(() => _prepareReorganization(noteId));
-    final payload = _textPayload(job.id);
-    await _trackText(_reserveTextJob(job.id, noteId, payload));
-    return textJobs.firstWhere((j) => j.id == job.id);
-  }
-
-  /// Sends a prepared re-organization (may be charged) and keeps the
-  /// validated result as a preview; the note is not changed.
-  Future<WorkspaceReorganizationPreview> previewReorganization(String jobId) {
-    final job = textJobs.firstWhere((j) => j.id == jobId);
-    return _runTextAction(job.noteId, () async {
-      await _runReorganizationPreview(jobId);
-      return textJobs.firstWhere((j) => j.id == jobId);
-    }).then(
-      (_) =>
-          _reorganizationPreview(jobId) ??
-          (throw StateError('未取得可用的整理结果，原文保留。')),
-    );
-  }
-
-  List<WorkspaceReorganizationPreview> get reorganizationPreviews =>
-      List.unmodifiable(_reorganizationPreviews());
-
-  /// Applies a preview if the note has not changed since its base content.
-  Future<WorkspaceNote> applyReorganization(String jobId) {
-    // Jobs of a note in the 回收站 are hidden until it is restored.
-    final job = textJobs.where((j) => j.id == jobId).firstOrNull;
-    if (job == null) return Future.error(StateError('没有可应用的整理预览。'));
-    return _runTextAction(job.noteId, () async {
-      await _applyReorganization(jobId);
-      return textJobs.firstWhere((j) => j.id == jobId);
-    }).then((_) => notes.firstWhere((n) => n.id == job.noteId));
-  }
-
-  Future<void> discardReorganization(String jobId) {
-    final job = textJobs.firstWhere((j) => j.id == jobId);
-    return _runTextAction(job.noteId, () async {
-      await _discardReorganization(jobId);
-      return textJobs.firstWhere((j) => j.id == jobId);
-    });
-  }
 
   late final WorkspaceRecordings _recordings;
   late final WorkspaceSetup _setup;
@@ -654,33 +621,6 @@ class NoteWorkspace {
       : FolderLocation('file', p.split(p.canonicalize(directory.path)));
   late final WorkspaceAudioQueue _audioQueue;
 
-  final Map<String, Future<WorkspaceAudioJob>> _audioOperations = {};
-  List<WorkspaceAudioJob> get audioJobs => _audioJobs();
-  Future<WorkspaceAudioJob> prepareAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _prepareAudio(sourceId));
-  Future<WorkspaceAudioJob> confirmAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _confirmAudio(sourceId));
-  Future<WorkspaceAudioJob> prepareAudioRetry(String sourceId) =>
-      _audioOperation(sourceId, () => _prepareAudio(sourceId, retry: true));
-  Future<WorkspaceAudioJob> prepareAudioOrganization(String sourceId) =>
-      _audioOperation(sourceId, () => _prepareAudioOrganization(sourceId));
-  Future<WorkspaceAudioJob> cancelAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _cancelAudio(sourceId));
-  Future<WorkspaceAudioJob> reconcileAudioProcessing(String sourceId) =>
-      _audioOperation(sourceId, () => _reconcileAudio(sourceId));
-  Future<WorkspaceAudioJob> _audioOperation(
-    String sourceId,
-    Future<WorkspaceAudioJob> Function() action,
-  ) {
-    if (_closing) return Future.error(StateError('工作区正在关闭。'));
-    return _audioOperations.putIfAbsent(
-      sourceId,
-      () => _trackText(action()).whenComplete(() {
-        _audioOperations.remove(sourceId);
-      }),
-    );
-  }
-
   String newAudioSubmissionId() => _randomId();
   List<WorkspaceAudioSource> get audioSources => _audioQueue.sources;
   Future<WorkspaceAudioSource> importAudio({
@@ -688,7 +628,7 @@ class NoteWorkspace {
     required String submissionId,
   }) => _mutate(() async {
     final result = await _audioQueue.import(original, submissionId);
-    if (_audioQueue.processor == null) _audioQueue.markDisconnected();
+    _queueAudio(result.id);
     return _audioQueue.source(result.id);
   });
   late final WorkspaceAttachments _attachments;
@@ -711,13 +651,31 @@ class NoteWorkspace {
   Future<WorkspaceAttachment> retryAttachmentExport(String attachmentId) =>
       _mutate(() => _attachments.export(attachmentId));
 
-  Future<void> _adoptRecording(WorkspaceRecording recording) =>
-      _audioQueue.adoptRecording(
-        id: recording.id,
-        original: File(recording.originalPath),
-        sourcePath: recording.sourcePath,
-        createdAt: recording.createdAt,
-      );
+  Future<void> _adoptRecording(WorkspaceRecording recording) async {
+    if (_audioQueue.sources.any((s) => s.id == recording.id)) return;
+    await _audioQueue.adoptRecording(
+      id: recording.id,
+      original: File(recording.originalPath),
+      sourcePath: recording.sourcePath,
+      createdAt: recording.createdAt,
+    );
+    _queueAudio(recording.id);
+  }
+
+  /// Queues a new recording or imported audio for 整理 once. Audio refused
+  /// at its check (e.g. longer than 5 minutes) is never sent.
+  void _queueAudio(String id) {
+    final source = _audioQueue.source(id);
+    if (source.metadata == null && source.stage == 'inspectionFailed') return;
+    // Any job counts, also one of a note in the 回收站.
+    if (_database.select(
+      'SELECT 1 FROM text_jobs WHERE vault=? AND note_id=?',
+      [vaultStorage.identity, source.outputNoteId],
+    ).isNotEmpty) {
+      return;
+    }
+    _queueOrganize(source.outputNoteId, audio: id);
+  }
 
   bool get audioSourcePlaybackAvailable =>
       _recordings.audio is AudioSourcePlayer;
@@ -741,21 +699,21 @@ class NoteWorkspace {
     }
   });
 
-  Future<void> resumePendingAudioProcessing() =>
-      _audioQueue.run(_mutate, _materializeAudioNote);
+  /// Checks again audio whose check failed for a reason that may pass on a
+  /// second try; once it passes, its 整理 is sent like any capture.
+  Future<void> retryAudioCheck(String id) =>
+      _mutate(() => _audioQueue.retry(id));
 
-  Future<void> retryAudioProcessing(String id) async {
-    await _mutate(() => _audioQueue.retry(id));
-    await resumePendingAudioProcessing();
-  }
-
+  /// Creates the note of a recording or imported audio, with [text] (its
+  /// transcript) as the body until 整理 replaces it.
   Future<void> _materializeAudioNote(
-    WorkspaceAudioSource source,
-    AudioOrganizedNote output,
-  ) async {
+    WorkspaceAudioSource source, {
+    required String title,
+    required String text,
+  }) async {
     final id = source.outputNoteId;
     if (!notes.any((note) => note.id == id)) {
-      final title = _safeTitle(output.title);
+      title = _safeTitle(title);
       _database.execute(
         '''INSERT INTO notes
         (id,vault,title,body,created_at,modified_at,note_path,source_path,status,naming_request)
@@ -764,7 +722,7 @@ class NoteWorkspace {
           id,
           vaultStorage.identity,
           title,
-          output.text,
+          text,
           source.createdAt.toIso8601String(),
           _clock().toIso8601String(),
           vaultStorage.reference('$title.md'),
@@ -791,10 +749,7 @@ class NoteWorkspace {
     );
     final note = await _retryNoteExport(id);
     if (note.status != NoteStatus.localSaved) {
-      throw const AudioProcessingFailure(
-        AudioProcessingFailureKind.recoverable,
-        '转写与整理已保留，笔记库写入未完成。',
-      );
+      throw const FileSystemException('转写已保留，笔记库写入未完成。');
     }
   }
 
@@ -867,7 +822,6 @@ class NoteWorkspace {
     WorkspaceConnection? connection,
     AudioPlatform? audioPlatform,
     AudioSourceInspector? audioInspector,
-    AudioProcessor? audioProcessor,
     NotificationPort? notifications,
   }) async {
     if (vaultStorage == null) {
@@ -908,6 +862,14 @@ class NoteWorkspace {
         .select('PRAGMA table_info(notes)')
         .any((row) => row['name'] == 'naming_request')) {
       database.execute('ALTER TABLE notes ADD COLUMN naming_request TEXT');
+    }
+    if (!database
+        .select('PRAGMA table_info(notes)')
+        .any((row) => row['name'] == 'arrived')) {
+      // 1 for a note adopted from another paired device's vault files.
+      database.execute(
+        'ALTER TABLE notes ADD COLUMN arrived INTEGER NOT NULL DEFAULT 0',
+      );
     }
     database.execute('''CREATE TABLE IF NOT EXISTS note_renames (
       note_id TEXT PRIMARY KEY,
@@ -972,6 +934,15 @@ class NoteWorkspace {
       'CREATE TABLE IF NOT EXISTS note_disposals(vault TEXT NOT NULL,note_id TEXT NOT NULL,state TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',
     );
     database.execute(
+      'CREATE TABLE IF NOT EXISTS organize_pause(vault TEXT PRIMARY KEY,kind TEXT NOT NULL)',
+    );
+    if (!database
+        .select('PRAGMA table_info(organize_pause)')
+        .any((row) => row['name'] == 'tried_at')) {
+      // When the last request of a balance pause was refused.
+      database.execute('ALTER TABLE organize_pause ADD COLUMN tried_at TEXT');
+    }
+    database.execute(
       'CREATE TABLE IF NOT EXISTS note_marks(vault TEXT NOT NULL,note_id TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(vault,note_id))',
     );
     workspace._notifications =
@@ -1006,10 +977,8 @@ class NoteWorkspace {
               : PcmWaveInspector()),
       workspace._clock,
       workspace._createId,
-      audioProcessor,
     );
     await workspace._audioQueue.recover();
-    if (audioProcessor == null) workspace._audioQueue.markDisconnected();
     await workspace._recordings.recover();
     for (final recording in workspace.recordings.where(
       (r) =>
@@ -1039,8 +1008,13 @@ class NoteWorkspace {
     await workspace._recoverActionCompletion();
     await workspace._recoverAssociationChanges();
     await workspace._recoverCorrections();
+    await workspace._dropOldEstimateJobs();
     await workspace._recoverText();
-    await workspace._recoverAudioJobs();
+    await workspace._dropUnfinishedAudioJobs();
+    // Audio saved before the app closed may not have been queued yet.
+    for (final id in workspace._audioQueue.checkedAutomaticIds()) {
+      workspace._queueAudio(id);
+    }
     await workspace._readVaultEdits();
     await workspace._reconcileReminders();
     await workspace._reconcilePendingConfirmations();
@@ -1111,6 +1085,7 @@ class NoteWorkspace {
     );
   }
 
+  /// Saves typed or pasted text and queues it for automatic 整理.
   Future<WorkspaceNote> captureText({
     required String title,
     required String text,
@@ -1120,6 +1095,7 @@ class NoteWorkspace {
       title: title,
       text: text,
       semanticTitleCandidates: semanticTitleCandidates,
+      organize: true,
     ),
   );
 
@@ -1128,6 +1104,7 @@ class NoteWorkspace {
     required String text,
     List<String> semanticTitleCandidates = const [],
     String? noteId,
+    bool organize = false,
   }) async {
     if (text.trim().isEmpty) throw ArgumentError('请输入要保存的文字。');
     final safeTitle = _safeTitle(title);
@@ -1164,6 +1141,7 @@ class NoteWorkspace {
         }),
       ],
     );
+    if (organize) _queueOrganize(id, original: text);
     return _retryNoteExport(id);
   }
 
@@ -1578,7 +1556,6 @@ class NoteWorkspace {
   Future<void> close() {
     if (_closeFuture != null) return _closeFuture!;
     _closing = true;
-    _audioQueue.stop();
     for (final extractor in _activeDocuments.values) {
       extractor.cancel();
     }
@@ -1740,6 +1717,8 @@ $source
               DocumentImportStatus.savingOriginal.name,
             ],
           );
+          // Sent once its text is extracted and saved.
+          _queueOrganize(id);
           _database.execute('COMMIT');
         } catch (_) {
           _database.execute('ROLLBACK');
@@ -1827,21 +1806,17 @@ $source
     }).whenComplete(() => _retryingDocuments.remove(noteId));
   }
 
-  /// Re-extraction must never mutate an input already reserved or sent to AI.
-  /// A cancelled, provably unsent attempt may safely obtain a new local input.
+  /// Re-extraction must never change an input already sent to AI. A capture
+  /// still waiting, or an old job dropped unsent on upgrade, may safely
+  /// obtain a new local input.
   bool canRetryDocumentExtraction(String noteId) {
-    if (_preparingText.containsKey(noteId)) return false;
     for (final job in textJobs.where((j) => j.noteId == noteId)) {
+      // Not sent yet: it is built from the extraction when it is sent.
+      if (job.status == TextProcessingStatus.waiting) continue;
       final payload = _textPayload(job.id);
-      final receipts = payload['receipts'] as Map? ?? {};
       if (job.status != TextProcessingStatus.cancelled ||
           payload['reply'] != null ||
-          payload['result'] != null ||
-          (payload['attempts'] as List).any(
-            (attempt) =>
-                receipts[attempt] is! Map ||
-                receipts[attempt]['released'] != true,
-          )) {
+          payload['result'] != null) {
         return false;
       }
     }

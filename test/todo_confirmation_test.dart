@@ -3,7 +3,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
+import 'support/organize_now.dart';
 
 Map<String, dynamic> action(
   String text, {
@@ -63,7 +64,7 @@ void main() {
     expect(w.notes.single.kind, NoteKind.todo);
   });
   test('mixed content confirms a clear action while another uncertain action remains gated', () async {
-    final f = BudgetFixture()
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'review',
         'title': '混合行动',
@@ -74,7 +75,7 @@ void main() {
     addTearDown(f.close);
     final w = f.workspaces.first;
     final n = await w.captureText(title: '混合内容', text: '我需要买电池，也许可以买个新遥控器。');
-    await w.processTextNote(n.id);
+    await w.organizeNow(n.id);
     expect(w.notes.single.kind, NoteKind.todo);
     expect(w.notes.single.actions.first.actionConfirmed, isTrue);
     expect(w.notes.single.actions.last.actionConfirmed, isFalse);
@@ -133,12 +134,13 @@ void main() {
     await w.close();
     w = await NoteWorkspace.open(localDirectory: local, vaultStorage: storage);
     expect(w.notes.single.actions.length, 1);
-    expect(w.textJobs, isEmpty);
+    // A local correction is never sent for 整理.
+    expect(w.organizeStatus(n.id), OrganizeStatus.waiting);
     await w.close();
     await root.delete(recursive: true);
   });
   test('local removal and ordinary correction survive later reconciliation without recreating actions', () async {
-    final f = BudgetFixture()
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'todo',
         'title': '采购用品',
@@ -149,19 +151,18 @@ void main() {
     addTearDown(f.close);
     final w = f.workspaces.first;
     final n = await w.captureText(title: '采购', text: '我需要买电池和纸巾。');
-    final j = await w.processTextNote(n.id);
+    await w.organizeNow(n.id);
     final last = w.notes.single.actions.last;
     await w.resolveNoteActions(n.id, kind: NoteKind.todo, actions: [last]);
     expect(w.notes.single.actions.single.id, last.id);
     await w.resolveNoteActions(n.id, kind: NoteKind.ordinary, actions: []);
-    await w.reconcileTextProcessing(j.id);
     await f.reopen(0);
     expect(f.workspaces.first.notes.single.actions, isEmpty);
     expect(f.workspaces.first.notes.single.text, n.text);
     expect(f.modelRequests.length, 1);
   });
-  test('a local type correction during an in-flight paid result cannot be overwritten by that result', () async {
-    final f = BudgetFixture()
+  test('a local type correction during an in-flight result cannot be overwritten by that result', () async {
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'todo',
         'title': '购买电池',
@@ -180,54 +181,55 @@ void main() {
         body: '我已经自行修正了这条普通记录。',
       );
     };
-    await w.processTextNote(n.id);
+    await w.organizeNow(n.id);
     expect(w.notes.single.text, '我已经自行修正了这条普通记录。');
     expect(w.notes.single.kind, NoteKind.ordinary);
-    expect(w.budget.spentCnyMicros, greaterThan(0));
-    expect(w.budget.reservedCnyMicros, 0);
     await f.reopen(0);
     expect(f.workspaces.first.notes.single.text, '我已经自行修正了这条普通记录。');
     expect(f.modelRequests.length, 1);
   });
-  test('invalid action contracts retain the original and account for the paid response', () async {
-    final f = BudgetFixture();
-    await f.start();
-    addTearDown(f.close);
-    final w = f.workspaces.first;
-    final invalid = [
-      {
-        'kind': 'todo',
-        'sourceId': 'wrong-source',
-        'actions': [action('买电池')],
-      },
-      {
-        'kind': 'ordinary',
-        'actions': [action('买电池')],
-      },
-      {
-        'kind': 'todo',
-        'actions': [action('买电池', reason: 'invented')],
-      },
-      {
-        'kind': 'todo',
-        'actions': [action('买电池', time: '后天七点', timeStatus: 'explicit')],
-      },
-      {'kind': 'todo', 'actions': List.generate(21, (_) => action('买电池'))},
-    ];
-    for (var i = 0; i < invalid.length; i++) {
-      f.modelResult = {'title': '核对原文', 'body': '不能应用无效结果。', ...invalid[i]};
-      final n = await w.captureText(title: '格式核对$i', text: '我需要买电池。');
-      final original = await File(n.notePath).readAsString();
-      final j = await w.processTextNote(n.id);
-      expect(j.status, TextProcessingStatus.review);
-      expect(w.notes.firstWhere((x) => x.id == n.id).actions, isEmpty);
-      expect(await File(n.notePath).readAsString(), original);
-      expect(j.knownCostCnyMicros, 74);
-    }
-    expect(f.modelRequests.length, invalid.length);
-  });
+  test(
+    'invalid action contracts retain the original and the capture shows 失败',
+    () async {
+      final f = AiFixture();
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final invalid = [
+        {
+          'kind': 'todo',
+          'sourceId': 'wrong-source',
+          'actions': [action('买电池')],
+        },
+        {
+          'kind': 'ordinary',
+          'actions': [action('买电池')],
+        },
+        {
+          'kind': 'todo',
+          'actions': [action('买电池', reason: 'invented')],
+        },
+        {
+          'kind': 'todo',
+          'actions': [action('买电池', time: '后天七点', timeStatus: 'explicit')],
+        },
+        {'kind': 'todo', 'actions': List.generate(21, (_) => action('买电池'))},
+      ];
+      for (var i = 0; i < invalid.length; i++) {
+        f.modelResult = {'title': '核对原文', 'body': '不能应用无效结果。', ...invalid[i]};
+        final n = await w.captureText(title: '格式核对$i', text: '我需要买电池。');
+        final original = await File(n.notePath).readAsString();
+        final j = await w.organizeNow(n.id);
+        expect(j.status, TextProcessingStatus.failed);
+        expect(w.organizeStatus(n.id), OrganizeStatus.failed);
+        expect(w.notes.firstWhere((x) => x.id == n.id).actions, isEmpty);
+        expect(await File(n.notePath).readAsString(), original);
+      }
+      expect(f.modelRequests.length, invalid.length);
+    },
+  );
   test('clear action produces the todo template and retains the complete original across restart', () async {
-    final f = BudgetFixture()
+    final f = AiFixture()
       ..modelResult = {
         'kind': 'todo',
         'title': '购买电池',
@@ -240,7 +242,7 @@ void main() {
     const original = '遥控器没电了。我需要买两节电池。';
     final note = await w.captureText(title: '原始记录', text: original);
     final source = await File(note.sourcePath).readAsBytes();
-    await w.processTextNote(note.id);
+    await w.organizeNow(note.id);
     final result = w.notes.single;
     final markdown = await File(result.notePath).readAsString();
     expect(
@@ -262,7 +264,7 @@ void main() {
     expect(f.modelRequests.length, 1);
   });
   test('quoted, hypothetical, negated and unclear-owner actions wait for a local decision independently of time', () async {
-    final f = BudgetFixture();
+    final f = AiFixture();
     await f.start();
     addTearDown(f.close);
     for (final reason in [
@@ -284,7 +286,7 @@ void main() {
         title: '待核对$reason',
         text: '来源$reason：明天九点发出报告。',
       );
-      await w.processTextNote(note.id);
+      await w.organizeNow(note.id);
       final pending = w.notes.firstWhere((n) => n.id == note.id);
       expect(pending.actions.single.actionConfirmed, isFalse);
       expect(pending.actions.single.timeStatus, ActionTimeStatus.explicit);
@@ -319,53 +321,47 @@ void main() {
     );
     expect(f.modelRequests.length, 4);
   });
-  test('a legacy review can be corrected to ordinary locally without losing unknown fees or resending', () async {
-    final f = BudgetFixture()
-      ..omitCost = true
-      ..modelResult = {
-        'kind': 'review',
-        'title': '保留观察',
-        'body': '模型旧格式待确认内容。',
-      };
-    await f.start();
-    addTearDown(f.close);
-    final w = f.workspaces.first;
-    final note = await w.captureText(title: '雨后观察', text: '树叶变绿，空气有泥土的气味。');
-    final job = await w.processTextNote(note.id);
-    final held = w.budget.reservedCnyMicros;
-    expect(held, greaterThan(0));
-    await w.setMonthlyBudgetLimit(1);
-    expect(w.pendingActionNotes.single.id, note.id);
-    final result = await w.resolveNoteActions(
-      note.id,
-      kind: NoteKind.ordinary,
-      actions: [],
-    );
-    expect(result.kind, NoteKind.ordinary);
-    expect(result.text, note.text);
-    expect(result.actions, isEmpty);
-    expect(w.pendingActionNotes, isEmpty);
-    await f.reopen(0);
-    final restored = f.workspaces.first;
-    await restored.reconcileTextProcessing(job.id);
-    await restored.refreshBudget();
-    expect(restored.budget.reservedCnyMicros, held);
-    expect(restored.pendingActionNotes, isEmpty);
-    expect(f.modelRequests.length, 1);
-    // No cost lookup exists (issue #34, Q9): the unknown fee stays held.
-    await restored.reconcileTextProcessing(job.id);
-    expect(restored.budget.reservedCnyMicros, held);
-    final markdown = await File(restored.notes.single.notePath).readAsString();
-    expect(
-      RegExp(
-        r'^## (.+)$',
-        multiLine: true,
-      ).allMatches(markdown).map((m) => m[1]),
-      ['正文', '关联', '来源'],
-    );
-    expect(restored.notes.single.originalText, note.text);
-    expect(f.modelRequests.length, 1);
-  });
+  test(
+    'a legacy review can be corrected to ordinary locally without resending',
+    () async {
+      final f = AiFixture()
+        ..modelResult = {
+          'kind': 'review',
+          'title': '保留观察',
+          'body': '模型旧格式待确认内容。',
+        };
+      await f.start();
+      addTearDown(f.close);
+      final w = f.workspaces.first;
+      final note = await w.captureText(title: '雨后观察', text: '树叶变绿，空气有泥土的气味。');
+      await w.organizeNow(note.id);
+      expect(w.pendingActionNotes.single.id, note.id);
+      final result = await w.resolveNoteActions(
+        note.id,
+        kind: NoteKind.ordinary,
+        actions: [],
+      );
+      expect(result.kind, NoteKind.ordinary);
+      expect(result.text, note.text);
+      expect(result.actions, isEmpty);
+      expect(w.pendingActionNotes, isEmpty);
+      await f.reopen(0);
+      final restored = f.workspaces.first;
+      await restored.sendWaitingNow();
+      expect(restored.pendingActionNotes, isEmpty);
+      final markdown = await File(restored.notes.single.notePath)
+          .readAsString();
+      expect(
+        RegExp(
+          r'^## (.+)$',
+          multiLine: true,
+        ).allMatches(markdown).map((m) => m[1]),
+        ['正文', '关联', '来源'],
+      );
+      expect(restored.notes.single.originalText, note.text);
+      expect(f.modelRequests.length, 1);
+    },
+  );
 }
 
 class _FailActionStorage extends DirectoryVaultStorage {

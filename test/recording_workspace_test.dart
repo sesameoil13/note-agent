@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
+import 'audio_queue_test.dart' show wave;
+
 void main() {
   test(
     'paused offline recording keeps its original and plays after restart',
@@ -63,7 +65,7 @@ void main() {
       expect(reopened.playback.isPlaying, isTrue);
     },
   );
-  test('ten minute recording saves automatically without a visible recorder screen', () async {
+  test('five minute recording saves automatically without a visible recorder screen', () async {
     final temporary = await Directory.systemTemp.createTemp(
       'note-agent-t08-limit-',
     );
@@ -73,11 +75,11 @@ void main() {
       localDirectory: Directory('${temporary.path}/local'),
       vaultDirectory: await Directory('${temporary.path}/vault').create(),
       audioPlatform: microphone,
-      createId: () => 'ten-minute-audio',
+      createId: () => 'five-minute-audio',
     );
     addTearDown(workspace.close);
     await workspace.startRecording();
-    microphone.advance(const Duration(minutes: 10), 0.5);
+    microphone.advance(const Duration(minutes: 5), 0.5);
     for (var attempt = 0; attempt < 20; attempt++) {
       if (workspace.recordings.single.status == RecordingStatus.localSaved) {
         break;
@@ -85,8 +87,28 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
     expect(workspace.recordings.single.status, RecordingStatus.localSaved);
-    expect(workspace.recordings.single.duration, const Duration(minutes: 10));
+    expect(workspace.recordings.single.duration, const Duration(minutes: 5));
     expect(workspace.recording.isActive, isFalse);
+  });
+  test('a recording slightly past five minutes is not refused like an imported file', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'note-agent-t08-encoded-limit-',
+    );
+    addTearDown(() => temporary.delete(recursive: true));
+    final microphone = _LongWaveAudio();
+    final workspace = await NoteWorkspace.open(
+      localDirectory: Directory('${temporary.path}/local'),
+      vaultDirectory: await Directory('${temporary.path}/vault').create(),
+      audioPlatform: microphone,
+      createId: () => 'encoded-past-limit',
+    );
+    addTearDown(workspace.close);
+    await workspace.startRecording();
+    microphone.advance(const Duration(minutes: 5), 0.5);
+    await workspace.stopRecording();
+    final source = workspace.audioSources.single;
+    expect(source.metadata!.duration, const Duration(seconds: 301));
+    expect(source.processingStatus, AudioProcessingStatus.pending);
   });
   test('interrupted saving retains original bytes and honest playback attempt after restart', () async {
     final temporary = await Directory.systemTemp.createTemp(
@@ -455,6 +477,16 @@ class _OversizedAudio extends _ControlledAudio {
     } finally {
       await file.close();
     }
+  }
+}
+
+/// Writes a WAV one second past the recorder limit, as an encoder's padding
+/// might, so the saved original runs slightly longer than the recorder's cap.
+class _LongWaveAudio extends _ControlledAudio {
+  @override
+  Future<void> startRecording(String path) async {
+    await super.startRecording(path);
+    await File(path).writeAsBytes(wave(seconds: 301), flush: true);
   }
 }
 

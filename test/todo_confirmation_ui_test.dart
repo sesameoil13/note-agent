@@ -66,7 +66,7 @@ void main() {
       expect(w.notes.single.actions.single.text, '买两节电池');
       expect(w.notes.single.actions.single.actionConfirmed, isTrue);
       expect(w.notes.single.originalText, n.text);
-      expect(w.textJobs, isEmpty);
+      expect(w.organizeStatus(w.notes.single.id), OrganizeStatus.waiting);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },
@@ -145,7 +145,7 @@ void main() {
       expect(w.notes.single.kind, NoteKind.ordinary);
       expect(w.notes.single.actions, isEmpty);
       expect(w.notes.single.originalText, '他说可以考虑购买电池。');
-      expect(w.textJobs, isEmpty);
+      expect(w.organizeStatus(w.notes.single.id), OrganizeStatus.waiting);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },

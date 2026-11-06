@@ -10,7 +10,6 @@ import 'package:flutter/services.dart';
 
 import 'first_run.dart';
 part 'pairing.dart';
-part 'budget_connection.dart';
 part 'todo_connection.dart';
 part 'text_model.dart';
 part 'audio_model.dart';
@@ -177,6 +176,11 @@ class WorkspaceConnection {
   WorkspaceConnectionState _state = const WorkspaceConnectionState();
   WorkspaceConnectionState get state => _state;
 
+  /// How often a key was connected (and checked) since this started; a
+  /// rejected key's pause ends when this grows.
+  int get keyConnections => _keyConnections;
+  int _keyConnections = 0;
+
   /// The Bailian key, or null when none (or only an old OpenRouter key) is kept.
   String? get _aiKey =>
       _credentials['aiProvider'] == aiProvider &&
@@ -226,10 +230,11 @@ class WorkspaceConnection {
       await _keyCheck.verify(key);
       final next = {..._credentials, 'aiKey': key, 'aiProvider': aiProvider};
       await _commit(next);
+      _keyConnections++;
       _state = const WorkspaceConnectionState(
         hasKey: true,
         connectionVerified: true,
-        message: '阿里云百炼连接成功。Key 已存入系统安全存储；检测未调用收费模型。',
+        message: '阿里云百炼连接成功。Key 已存入系统安全存储。',
       );
     } on ConnectionFailure catch (error) {
       _state = WorkspaceConnectionState(

@@ -37,6 +37,7 @@ void main() {
       await tester.pumpWidget(NoteAgentApp(initialWorkspace: workspace));
       await tester.tap(find.text('录音'));
       await tester.pumpAndSettle();
+      expect(find.text('支持 15 秒至 5 分钟；达到 5 分钟自动结束保存。'), findsOneWidget);
       await _tapAndWait(
         tester,
         '开始录音',
@@ -62,7 +63,7 @@ void main() {
         '结束并保存',
         () => workspace.recordings.single.status == RecordingStatus.localSaved,
       );
-      expect(find.text('本机原音频已保存 · 尚未转写'), findsOneWidget);
+      expect(find.text('本机原音频已保存'), findsOneWidget);
       expect(workspace.notes, isEmpty);
       await tester.runAsync(() async {
         await tester.tap(find.byTooltip('回放原音频'));
@@ -228,7 +229,7 @@ void main() {
         () => workspace.recordings.single.status == RecordingStatus.localSaved,
       );
       expect(workspace.recordings, hasLength(1));
-      expect(find.text('本机原音频已保存 · 尚未转写'), findsOneWidget);
+      expect(find.text('本机原音频已保存'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     },
   );

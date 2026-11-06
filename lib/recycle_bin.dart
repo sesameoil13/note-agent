@@ -106,16 +106,10 @@ extension _WorkspaceRecycleBin on NoteWorkspace {
     if (_activeDocuments.containsKey(noteId) ||
         _retryingDocuments.contains(noteId) ||
         _processingText.containsKey(noteId) ||
-        _preparingText.containsKey(noteId) ||
         textJobs.any(
           (j) =>
               j.noteId == noteId &&
-              const [
-                TextProcessingStatus.queued,
-                TextProcessingStatus.prepared,
-                TextProcessingStatus.sending,
-                TextProcessingStatus.costPending,
-              ].contains(j.status),
+              j.status == TextProcessingStatus.sending,
         )) {
       throw StateError('笔记仍在处理中，请等待或取消处理后再删除。');
     }
@@ -605,7 +599,7 @@ extension _WorkspacePurge on NoteWorkspace {
         'UPDATE document_imports SET result=NULL, write_plan=NULL WHERE vault=? AND note_id=?',
         [vault, noteId],
       );
-      // Cost records stay for the budget; the text they carried does not.
+      // Job records stay; the text they carried does not.
       for (final row in _database.select(
         'SELECT id,payload FROM text_jobs WHERE vault=? AND note_id=?',
         [vault, noteId],

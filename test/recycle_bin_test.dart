@@ -3,8 +3,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart';
+import 'support/ai_fixture.dart';
 import 'support/pending_notification_fixture.dart';
+import 'support/organize_now.dart';
 
 void main() {
   late Directory root;
@@ -258,7 +259,7 @@ void main() {
   test(
     'deleted notes leave associations and topic suggestions until restored',
     () async {
-      final f = BudgetFixture();
+      final f = AiFixture();
       await f.start();
       addTearDown(f.close);
       final w = f.workspaces.first;
@@ -277,7 +278,7 @@ void main() {
           {'title': '引导流程', 'reason': '改进线索。'},
         ],
       };
-      await w.processTextNote(source.id);
+      await w.organizeNow(source.id);
       expect(w.pendingTopicSuggestions, hasLength(1));
 
       await w.deleteNote(research.id);

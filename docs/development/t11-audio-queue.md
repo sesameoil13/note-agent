@@ -76,6 +76,12 @@ acceptance remain deferred/unavailable in this session.
 
 ## Verification
 
+> T34 (#35) removed the pluggable audio processor, its retry/backoff state and
+> the crash harness (`tool/check_audio_crash_recovery.py`). Recordings and
+> imported audio are transcribed and organized by automatic 整理
+> (`lib/organize_queue.dart`); the queue keeps the original, its check and
+> its publication. The commands below that name the harness no longer apply.
+
 The agreed main test seam is NoteWorkspace with real temporary files, real WAV
 structure, real SQLite recovery, a loopback controlled processing service, and
 clock/system adapters. Tests do not query private SQL or test private helpers.

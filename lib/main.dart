@@ -17,7 +17,6 @@ import 'document_panel.dart';
 import 'setup_screen.dart';
 import 'first_run.dart';
 import 'first_run_flow.dart';
-import 'budget_panel.dart';
 import 'processing_recovery_screen.dart';
 import 'action_confirmation_screen.dart';
 import 'reminder_screen.dart';
@@ -115,6 +114,10 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   final _search = TextEditingController();
   final _editTitle = TextEditingController();
   String? _editingNoteId;
+
+  /// The note title [_editTitle] was last filled from, so a rename by 整理
+  /// replaces it only while the user hasn't typed a different title.
+  String? _editTitleSource;
   NoteWorkspace? _workspace;
   String? _selectedId;
   String? _error;
@@ -128,6 +131,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   bool _recordingPage = false;
   StreamSubscription<void>? _notificationInteractions;
   StreamSubscription<void>? _networkReturn;
+
+  /// Sends captures waiting for 整理 (ADR 0004) between other triggers.
+  Timer? _organizeTimer;
 
   /// macOS, Android and Windows re-check local reminders when the network
   /// comes back (Windows also after waking from sleep), as on resume, and send
@@ -147,6 +153,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             }, onError: (Object _) {})
             .whenComplete(_syncTodos),
       );
+      _sendWaiting();
     });
     return port;
   }
@@ -224,11 +231,38 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       });
     }
     _watchNotificationInteractions();
+    _sendWaiting();
+    _organizeTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _sendWaiting(),
+    );
+  }
+
+  /// Sends what is waiting for 整理, then shows the new statuses.
+  void _sendWaiting() => _send((w) => w.sendWaitingNow());
+
+  /// The next try after a top-up.
+  void _resumeSending() => _send((w) => w.resumeSending());
+
+  void _send(Future<void> Function(NoteWorkspace) send) {
+    final workspace = _workspace;
+    if (workspace == null) return;
+    unawaited(
+      send(workspace).then(
+        (_) {
+          if (mounted && workspace == _workspace) setState(() {});
+        },
+        onError: (Object _) {
+          /* Captures keep their status and are sent on a later call. */
+        },
+      ),
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _organizeTimer?.cancel();
     unawaited(_notificationInteractions?.cancel());
     unawaited(_networkReturn?.cancel());
     _title.dispose();
@@ -243,7 +277,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _resumeAudioQueue();
       unawaited(_takeNotificationNavigation());
       final workspace = _workspace;
       if (workspace == null) {
@@ -264,16 +297,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         );
       }
     }
-  }
-
-  void _resumeAudioQueue() {
-    final workspace = _workspace;
-    if (workspace == null) return;
-    unawaited(
-      workspace.resumePendingAudioProcessing().catchError((Object error) {
-        if (mounted) setState(() => _error = _errorMessage(error));
-      }),
-    );
   }
 
   Future<void> _restore() async {
@@ -403,6 +426,52 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     );
   }
 
+  /// All sending is paused for a rejected key or an empty balance (#39).
+  Widget? _sendingPauseBanner() {
+    final pause = _workspace?.sendingPause;
+    if (pause == null) return null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+      color: slate,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(pause.message, style: const TextStyle(color: oxide)),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: _saving || _loading
+                ? null
+                : switch (pause) {
+                    OrganizePause.key => _openConnection,
+                    OrganizePause.balance => _resumeSending,
+                  },
+            child: Text(pause.action),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 重试 of a capture that shows 失败: a new round of sends.
+  Future<void> _retryOrganize(String noteId) async {
+    final workspace = _workspace!;
+    final failure = workspace.processingFailures
+        .where(
+          (f) => f.source == ProcessingFailureSource.text && f.noteId == noteId,
+        )
+        .firstOrNull;
+    if (failure == null) return;
+    setState(() => _error = null);
+    try {
+      await workspace.recoverProcessingFailure(failure.id);
+    } catch (e) {
+      if (mounted) setState(() => _error = _errorMessage(e));
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> _showSetup() async {
     final action = await Navigator.of(context).push<SetupAction>(
       MaterialPageRoute(
@@ -453,7 +522,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     _composing = true;
     _recordingPage = workspace.recordingAvailable;
     if (old != widget.initialWorkspace) await old?.close();
-    _resumeAudioQueue();
+    _sendWaiting();
   }
 
   Future<void> _save() async {
@@ -470,6 +539,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
       final note = pending
           ? await _workspace!.retryNoteExport(_pendingCaptureId!)
           : await _workspace!.captureText(title: _title.text, text: _text.text);
+      _sendWaiting();
       if (!mounted) return;
       setState(() {
         _selectedId = note.id;
@@ -520,7 +590,9 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
         note.id,
         title: _editTitle.text,
       );
-      if (mounted) setState(() => _editTitle.text = renamed.title);
+      if (mounted) {
+        setState(() => _editTitle.text = _editTitleSource = renamed.title);
+      }
     } catch (error) {
       if (mounted) setState(() => _error = _errorMessage(error));
     } finally {
@@ -538,6 +610,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
 
   void _documentChanged(String? id) {
     if (!mounted) return;
+    if (id != null) _sendWaiting();
     setState(() {
       if (id != null) {
         _selectedId = id;
@@ -563,6 +636,7 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             children: [
               _header(wide),
               ?_firstRunBanner(),
+              ?_sendingPauseBanner(),
               if (_workspace != null)
                 Align(
                   alignment: Alignment.centerLeft,
@@ -614,6 +688,8 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                                     workspace: _workspace!,
                                     onStateChanged: () {
                                       if (mounted) setState(() {});
+                                      // E.g. a recording or import saved.
+                                      _sendWaiting();
                                     },
                                   )
                                 : _composing
@@ -631,20 +707,15 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     ),
   );
 
-  Future<void> _openBudget() async {
-    final workspace = _workspace;
-    if (workspace == null) return;
+  Future<void> _openConnection() async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute(builder: (_) => BudgetPanel(workspace: workspace)),
+      MaterialPageRoute(
+        builder: (_) => ConnectionScreen(connection: _connection),
+      ),
     );
-    if (mounted) setState(() => _editingNoteId = null);
+    // A key connected there ends a pause and sends what is waiting.
+    _sendWaiting();
   }
-
-  Future<void> _openConnection() => Navigator.of(context).push<void>(
-    MaterialPageRoute(
-      builder: (_) => ConnectionScreen(connection: _connection),
-    ),
-  );
 
   Widget _header(bool wide) => Container(
     padding: EdgeInsets.symmetric(horizontal: wide ? 24 : 16, vertical: 16),
@@ -674,12 +745,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
           const Text('笔记工作区', style: TextStyle(color: ash)),
         ],
         const Spacer(),
-        if (_workspace != null && wide)
-          AccessibleIconButton(
-            onPressed: _saving ? null : _openBudget,
-            label: 'AI 与共享预算',
-            icon: const Icon(Icons.account_balance_wallet_outlined),
-          ),
         if (_workspace != null && _workspace!.processingFailures.isNotEmpty)
           AccessibleIconButton(
             onPressed: _saving || _loading
@@ -744,8 +809,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
             enabled: !_saving && !_loading,
             onSelected: (action) async {
               switch (action) {
-                case 'budget':
-                  await _openBudget();
                 case 'setup':
                   await _showSetup();
                 case 'connection':
@@ -753,8 +816,6 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
               }
             },
             itemBuilder: (_) => [
-              if (_workspace != null)
-                const PopupMenuItem(value: 'budget', child: Text('AI 与共享预算')),
               const PopupMenuItem(value: 'setup', child: Text('设置')),
               const PopupMenuItem(value: 'connection', child: Text('连接与设备')),
             ],
@@ -1141,7 +1202,13 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                                 ),
                                 const SizedBox(height: 16),
                                 Text(
-                                  '${note.status == NoteStatus.localSaved ? '本机已保存' : '原文已保留 · 待写入'}${note.archived ? ' · 已归档' : ''}',
+                                  [
+                                    note.status == NoteStatus.localSaved
+                                        ? '本机已保存'
+                                        : '原文已保留 · 待写入',
+                                    ?_workspace!.organizeStatus(note.id)?.label,
+                                    if (note.archived) '已归档',
+                                  ].join(' · '),
                                   style: const TextStyle(
                                     fontSize: 12,
                                     color: ash,
@@ -1412,9 +1479,11 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
     final daily = _workspace!.dailyNotes;
     if (selected == null && daily.isEmpty) return _composer();
     final note = selected ?? daily.first;
-    if (_editingNoteId != note.id) {
+    if (_editingNoteId != note.id ||
+        (note.title != _editTitleSource &&
+            _editTitle.text == _editTitleSource)) {
       _editingNoteId = note.id;
-      _editTitle.text = note.title;
+      _editTitle.text = _editTitleSource = note.title;
     }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
@@ -1489,6 +1558,32 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                     ),
                 ],
               ),
+              if (_workspace!.organizeStatus(note.id) case final status?)
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        [
+                          '整理：${status.label}',
+                          if (_workspace!.organizeMessage(note.id) case final m
+                              when m.isNotEmpty)
+                            m,
+                        ].join(' · '),
+                        style: TextStyle(
+                          color: status == OrganizeStatus.failed ? oxide : ash,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    if (status == OrganizeStatus.failed)
+                      TextButton(
+                        onPressed: _saving
+                            ? null
+                            : () => _retryOrganize(note.id),
+                        child: const Text('重试'),
+                      ),
+                  ],
+                ),
               const SizedBox(height: 8),
               NoteSyncSummary(note: note, todoSync: _workspace!.todoSync),
               Align(
@@ -1510,25 +1605,28 @@ class _WorkspaceScreenState extends State<_WorkspaceScreen>
                   child: const Text('修正类型与行动'),
                 ),
               ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton(
-                  onPressed: _saving || note.status != NoteStatus.localSaved
-                      ? null
-                      : () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => ReorganizeScreen(
-                                workspace: _workspace!,
-                                noteId: note.id,
+              if (_workspace!.audioSources.any(
+                (s) => s.outputNoteId == note.id,
+              ))
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _saving || note.status != NoteStatus.localSaved
+                        ? null
+                        : () async {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => TranscriptCorrectionScreen(
+                                  workspace: _workspace!,
+                                  noteId: note.id,
+                                ),
                               ),
-                            ),
-                          );
-                          if (mounted) setState(() {});
-                        },
-                  child: const Text('更正转写与重新整理'),
+                            );
+                            if (mounted) setState(() {});
+                          },
+                    child: const Text('更正转写'),
+                  ),
                 ),
-              ),
               Wrap(
                 spacing: 8,
                 children: [

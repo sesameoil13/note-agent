@@ -8,7 +8,8 @@ import 'package:note_agent/first_run.dart';
 import 'package:note_agent/first_run_flow.dart';
 import 'package:note_agent/note_workspace.dart';
 
-import 'support/budget_fixture.dart' show BudgetMemoryStore;
+import 'support/ai_fixture.dart' show AiMemoryStore;
+import 'support/no_cost_wording.dart';
 import 'support/pending_notification_fixture.dart';
 
 /// Stands in for OpenRouter and the pairing service; the flow only sees the
@@ -140,7 +141,7 @@ void main() {
       workspace = await NoteWorkspace.open(
         localDirectory: Directory('${root.path}/local'),
         vaultDirectory: await Directory('${root.path}/vault').create(),
-        connection: WorkspaceConnection(secureStore: BudgetMemoryStore()),
+        connection: WorkspaceConnection(secureStore: AiMemoryStore()),
         notifications: port,
       );
       for (final check in reports) {
@@ -209,6 +210,7 @@ void main() {
     (tester) async {
       await pumpFlow(tester);
       expect(find.text('给想法一个落点。'), findsOneWidget);
+      expectNoCostWording(tester);
       // One modal at a time: the setup list is nowhere on screen.
       expect(find.text('设置进度'), findsNothing);
       await tapAndSettle(tester, find.text('开始'));
@@ -217,6 +219,7 @@ void main() {
       await tapAndSettle(tester, find.text('是，第一台'));
 
       expect(find.text('连接 AI'), findsOneWidget);
+      expectNoCostWording(tester);
       await tester.enterText(
         find.widgetWithText(TextField, '百炼 API Key'),
         'sk-or-v1-test-key-0000',
@@ -227,6 +230,7 @@ void main() {
       expect(connection.calls, ['key', 'activate:MacBook']);
 
       expect(find.text('选择笔记库'), findsOneWidget);
+      expectNoCostWording(tester);
       expect(find.textContaining('不要选旧库'), findsOneWidget);
       expect(find.text('稍后'), findsNothing);
       await tapAndSettle(tester, find.text('选择文件夹'));
@@ -246,6 +250,7 @@ void main() {
       expect(port.permissionRequests, 1);
 
       expect(find.text('设置完成'), findsOneWidget);
+      expectNoCostWording(tester);
       await tapAndSettle(tester, find.text('开始收集'));
       expect(find.text('设置完成'), findsNothing);
       expect(saved.last.finished, isTrue);

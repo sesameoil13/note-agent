@@ -80,11 +80,8 @@ void main() {
         AudioProcessingStatus.pending,
       );
       expect(workspace.notes, isEmpty);
-      expect(find.text('待处理'), findsOneWidget);
-      expect(
-        find.textContaining('处理服务未连接', findRichText: true),
-        findsOneWidget,
-      );
+      // Queued for automatic 整理; nothing is sent without a key.
+      expect(find.text('整理：等待发送'), findsOneWidget);
       expect(find.text('本机原音频已保存'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());

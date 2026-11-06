@@ -143,7 +143,7 @@ final class NativeAudio: NSObject, AVAudioRecorderDelegate {
     limitTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
       guard let self = self, self.phase == "recording" else { return }
       // AVAudioRecorder currentTime excludes paused time.
-      if (self.recorder?.currentTime ?? 0) >= 600 { self.finish() }
+      if (self.recorder?.currentTime ?? 0) >= 300 { self.finish() }
     }
   }
 
